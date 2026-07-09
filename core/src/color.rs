@@ -1,9 +1,12 @@
-//! Colour temperature to RGB gains (issue #4).
+//! Colour temperature to RGB gains, and gamma ramp construction (issues #4, #5).
 //!
 //! When the user asks for "2800 K", [`temperature_to_rgb`] decides how much
 //! green and blue to hold back while leaving red alone. It looks the answer up
 //! in a precomputed whitepoint table and interpolates between entries, rather
 //! than evaluating the Planck curve on every call.
+//!
+//! [`build_ramp`] then turns those three gains into a [`Ramp`] — the
+//! per-channel lookup table the graphics card actually consumes.
 
 // The `BLACKBODY` table below is ported verbatim from gammastep's
 // `src/colorramp.c` (inherited from redshift). The whitepoint values were
@@ -294,6 +297,53 @@ fn interpolate(a: f64, low: f64, high: f64) -> f64 {
     (1.0 - a) * low + a * high
 }
 
+/// A gamma ramp: one lookup table per colour channel. Its length matches the
+/// graphics card's ramp size, which differs between monitors (256, 1024,
+/// 2048, ...). Each entry is a 16-bit output value the card expects.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Ramp {
+    pub red: Vec<u16>,
+    pub green: Vec<u16>,
+    pub blue: Vec<u16>,
+}
+
+/// Largest value a 16-bit ramp entry can hold (`u16::MAX`).
+const RAMP_MAX: f64 = 65_535.0;
+
+/// Builds a gamma ramp of `size` entries per channel by scaling a linear
+/// (identity) ramp by each channel's gain.
+///
+/// `ramp[i] = (i / (size - 1)) * gain * 65535`, rounded to the nearest 16-bit
+/// value. Gains of `(1.0, 1.0, 1.0)` therefore produce the identity ramp, which
+/// leaves the screen untouched. `size` comes from the hardware at runtime, so a
+/// degenerate size of 0 or 1 is handled without dividing by zero.
+pub fn build_ramp(size: u16, gains: (f64, f64, f64)) -> Ramp {
+    let (red_gain, green_gain, blue_gain) = gains;
+    Ramp {
+        red: build_channel(size, red_gain),
+        green: build_channel(size, green_gain),
+        blue: build_channel(size, blue_gain),
+    }
+}
+
+/// Builds one channel's ramp: `size` entries rising linearly from 0, scaled by
+/// `gain`.
+fn build_channel(size: u16, gain: f64) -> Vec<u16> {
+    let last = size.saturating_sub(1);
+    (0..size)
+        .map(|i| {
+            // A single-entry ramp has no slope; guard the division so a `size`
+            // of 0 or 1 cannot produce NaN.
+            let position = if last == 0 {
+                0.0
+            } else {
+                f64::from(i) / f64::from(last)
+            };
+            (position * gain * RAMP_MAX).round() as u16
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -361,5 +411,47 @@ mod tests {
             }
             kelvin += 100;
         }
+    }
+
+    #[test]
+    fn identity_ramp_when_gains_are_one() {
+        let ramp = build_ramp(256, (1.0, 1.0, 1.0));
+        assert_eq!(ramp.red.len(), 256);
+        // A linear ramp runs from 0 to the 16-bit maximum.
+        assert_eq!(ramp.red[0], 0);
+        assert_eq!(ramp.red[255], u16::MAX);
+        // Same gain on every channel -> identical ramps.
+        assert_eq!(ramp.green, ramp.red);
+        assert_eq!(ramp.blue, ramp.red);
+        // Never decreasing.
+        assert!(ramp.red.windows(2).all(|w| w[0] <= w[1]));
+    }
+
+    #[test]
+    fn ramp_length_matches_size() {
+        // Ramp sizes differ per monitor; the output must match whatever the
+        // card reports.
+        for size in [256u16, 1024, 2048] {
+            let ramp = build_ramp(size, (1.0, 0.5, 0.0));
+            assert_eq!(ramp.red.len(), size as usize);
+            assert_eq!(ramp.green.len(), size as usize);
+            assert_eq!(ramp.blue.len(), size as usize);
+        }
+    }
+
+    #[test]
+    fn gain_scales_the_top_of_the_ramp() {
+        // The final entry is 1.0 * gain * 65535, so the gain sets the peak.
+        let ramp = build_ramp(1024, (1.0, 0.5, 0.0));
+        assert_eq!(ramp.red[1023], u16::MAX); // gain 1.0 -> full
+        assert_eq!(ramp.green[1023], 32768); // gain 0.5 -> half (rounded)
+        assert_eq!(ramp.blue[1023], 0); // gain 0.0 -> off
+    }
+
+    #[test]
+    fn degenerate_sizes_do_not_panic() {
+        // size 0 -> empty; size 1 -> a single entry. Neither divides by zero.
+        assert!(build_ramp(0, (1.0, 1.0, 1.0)).red.is_empty());
+        assert_eq!(build_ramp(1, (1.0, 1.0, 1.0)).red.len(), 1);
     }
 }
