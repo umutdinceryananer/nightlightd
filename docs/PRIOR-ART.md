@@ -9,8 +9,11 @@ Everything below was measured, not assumed. Commands and outputs are reproducibl
 | Distro | Linux Mint (Ubuntu 24.04 "noble" base) |
 | Desktop | Xfce |
 | Session | X11 |
-| gammastep | 2.0.9-1build2 (Ubuntu `noble/universe`) |
+| gammastep (packaged) | 2.0.9-1build2 (Ubuntu `noble/universe`) |
+| gammastep (upstream) | 2.0.11, built from source at `main` |
 | Date tested | 2026-07-09 |
+
+**All three defects were reproduced twice:** once against the distribution package (2.0.9), and again against upstream `main` (2.0.11) built from source. Two patch releases have shipped in between and none of them touch these behaviours.
 
 ---
 
@@ -99,7 +102,25 @@ Notice: Gamma (Day): 1.000, 1.000, 1.000
 Notice: Gamma (Night): 1.000, 1.000, 1.000
 ```
 
-It stops there. No `Location`, no `Period`, no `Color temperature`. **No error message.** It hangs at location acquisition and never applies anything.
+It stops there. No `Location`, no `Period`, no `Color temperature`. Nothing is applied.
+
+It does not time out. Under `timeout 180`, the process was still blocked after three minutes and had to be killed:
+
+```
+$ timeout 180 ./src/gammastep -m randr -v ; echo "exit=$?"
+Notice: Solar elevations: > 3.0 (Day), < -6.0 (Night)
+Notice: Temperatures: 6500K (Day), 4500K (Night)
+Notice: Brightness: 1.00:1.00
+Notice: Gamma (Day): 1.000, 1.000, 1.000
+Notice: Gamma (Night): 1.000, 1.000, 1.000
+poll: Interrupted system call
+Error: Unable to get location from provider.
+exit=124
+```
+
+**Read that error message carefully — it is misleading.** It is not the program diagnosing a failure. It is emitted only because `timeout` sent `SIGTERM`, `poll()` returned `EINTR`, and the caller interpreted the interrupted syscall as provider failure. Left alone, the process blocks in `poll()` forever and prints nothing further.
+
+An MR description that says "it emits no error" will be refuted by a maintainer who runs it and presses Ctrl+C. The accurate claim is: **it blocks indefinitely and applies nothing; the error surfaces only when the process is signalled.**
 
 Supply coordinates by hand and everything works:
 
@@ -146,6 +167,15 @@ $ pgrep -c gammastep
 
 Both instances live. Both write the ramp on their own schedule with conflicting targets. The screen oscillates between warm and neutral, indefinitely.
 
+Worse: on a machine where gammastep's own systemd user service was already running, the same experiment produced
+
+```
+$ pgrep -c gammastep
+3
+```
+
+Two manual invocations plus the daemon the tool itself installed. **Starting gammastep by hand while gammastep is running does not warn, does not refuse, and does not deduplicate.** Three processes fought over one gamma ramp.
+
 Nothing in the program prevents this. Nothing warns about it. The same defect as redshift, inherited unchanged.
 
 ### Defect 3 — does not subscribe to RandR events
@@ -170,6 +200,8 @@ $ nm -D /usr/bin/gammastep | grep -i randr
 ```
 
 **`xcb_randr_select_input` is absent.** That call is the only way to ask the X server to deliver `RRScreenChangeNotify` and `RRCrtcChangeNotify`. Gammastep never makes it. It is not subscribed to screen events and cannot be.
+
+The symbol list is byte-for-byte identical in upstream 2.0.11 built from source. This has not been fixed and is not being fixed.
 
 Consequences:
 
