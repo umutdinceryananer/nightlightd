@@ -257,6 +257,52 @@ Two readings of this:
 
 ---
 
+## Upstream attempt
+
+Before writing a line of `nightlightd`, defect 1 was fixed upstream and submitted.
+
+`chinstrap/gammastep!28`, opened 2026-07-10. Adds a `timezone` location provider: reads the `/etc/localtime` symlink, resolves the IANA zone name against `zone.tab`, falls back to `zone1970.tab`. Registered after `geoclue2` and before `manual`. 287 lines added, nothing removed, no new dependencies.
+
+It works:
+
+```
+$ ./src/gammastep -m randr -l timezone -v -o
+Notice: Location: 41.02 N, 28.97 E
+Notice: Period: Night
+exit=0
+```
+
+Verified against `Europe/Istanbul`, `America/New_York` (negative longitude) and `Pacific/Auckland` (negative latitude).
+
+### What the attempt revealed
+
+**The provider is never reached during automatic selection.** `redshift.c:571` calls `provider_get_location` with a timeout of `-1`, meaning "wait forever". Geoclue2 is first in the chain and never returns. The fallback chain therefore never advances, and a user still has to pass `-l timezone` explicitly.
+
+Fixing that is a behavioural change to the core loop, not an addition. It was deliberately left out of the merge request and offered as a follow-up.
+
+This matters for `nightlightd`'s design: **the correct fix is to not have a blocking network-dependent provider in the chain at all.** Reading the timezone is instantaneous and cannot fail slowly. There is nothing to time out.
+
+### Upstream responsiveness
+
+| | |
+|---|---|
+| Last commit to `master` | 2025-03-29, a version bump for 2.0.11 |
+| Open merge requests | 12 |
+| Oldest open merge request | `!5`, November 2020, pipeline green, still unmerged |
+| Merge requests opened in the last year | at least 4, all still open |
+
+The project is not dead — releases have shipped, the code compiles, a maintainer exists. But it has not merged an outside contribution in a long time, and passing CI plainly does not move the queue.
+
+Separately, merge request pipelines are broken for anyone opening one today: `.gitlab-ci.yml` defines no `rules` or `workflow` entries for `merge_request_event`, so GitLab constructs a merge request pipeline with zero jobs and marks it `yaml invalid`. Branch pipelines on the same commit pass. This affects every new contributor and has not been noticed.
+
+### Conclusion
+
+The upstream path was tried in good faith, first, before writing competing code. It remains open. Nothing about `nightlightd` depends on its outcome.
+
+X11 screen colour temperature is an unowned space: redshift archived, gammastep dormant, no desktop-native implementation in Xfce or MATE after seven years of the feature request being open.
+
+---
+
 ## What this establishes
 
 The three differentiators, restated as measured claims rather than intentions:
