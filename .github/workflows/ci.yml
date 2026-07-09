@@ -1,0 +1,33 @@
+name: CI
+
+# Every push and every pull request. The build must compile, tests must pass,
+# and both clippy and rustfmt must be clean before anything merges.
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # ubuntu-latest ships rustup with a recent stable toolchain. Make sure
+      # the two components we lint with are present (idempotent if they are).
+      - name: Install clippy and rustfmt
+        run: rustup component add clippy rustfmt
+
+      # Cheapest check first, so a formatting slip fails fast.
+      - name: Format check
+        run: cargo fmt --all --check
+
+      # `-D warnings` turns every clippy lint into a hard error, so CI stays
+      # as strict as the "clippy must be clean" rule in CLAUDE.md.
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Build
+        run: cargo build --workspace --all-targets
+
+      - name: Test
+        run: cargo test --workspace
