@@ -1,0 +1,15 @@
+# The binary. Owns X11, D-Bus, and the event loop; leans on `core` for all
+# pure logic.
+#
+# The package is named `nightlightd` so the produced binary is `nightlightd`
+# (the name the daemon, the Debian package, and the Flatpak all share).
+[package]
+name = "nightlightd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+# Wired up now so the workspace link is real and compiles. Nothing imports it
+# yet — that starts once M1 gives `core` something to expose.
+nightlightd-core = { path = "../core" }

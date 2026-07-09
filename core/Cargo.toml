@@ -1,0 +1,13 @@
+# Pure logic: colour temperature, solar elevation, timezone lookup.
+# Depends on nothing and never touches the screen — so it stays testable
+# without a display.
+#
+# The package is `nightlightd-core` (not bare `core`) to avoid colliding with
+# the `core` crate in Rust's standard library. The directory is still `core`.
+[package]
+name = "nightlightd-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]

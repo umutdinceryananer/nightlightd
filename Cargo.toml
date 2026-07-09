@@ -1,0 +1,16 @@
+# Workspace root. Holds no code of its own — it only ties the two crates
+# together and shares metadata between them.
+#
+# Two crates, by design (see CLAUDE.md): `core` is pure logic and depends on
+# nothing; `cli` is the binary and owns X11 and D-Bus. Keeping them apart is
+# what lets `core` be tested without a display.
+[workspace]
+resolver = "2"
+members = ["core", "cli"]
+
+# Fields shared by every crate in the workspace. Each crate opts in with
+# `<field>.workspace = true`, so the version and edition live in one place.
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
