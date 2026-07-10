@@ -9,5 +9,6 @@
 
 pub mod color;
 pub mod location;
+pub mod mode;
 pub mod solar;
 pub mod transition;
