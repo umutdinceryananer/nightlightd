@@ -15,3 +15,6 @@ nightlightd-core = { path = "../core" }
 # X11 / XRandR access. Pure-Rust bindings — no C libxcb build dependency. The
 # `randr` feature adds the CRTC and gamma-ramp APIs this backend needs.
 x11rb = { version = "0.13", features = ["randr"] }
+# Catch SIGINT/SIGTERM so a clean exit can restore the screen (#12). Small,
+# focused, and handles the async-signal-safety details for us.
+signal-hook = "0.3"

@@ -3,12 +3,21 @@
 //! One binary, two modes: `--daemon` runs the daemon, a bare invocation such
 //! as `--temp 2800` acts as a client and messages the daemon over D-Bus.
 //!
-//! Neither the daemon nor D-Bus exists yet. For now the binary applies a
-//! colour temperature directly (issue #11): `--temp 2800` warms every screen,
-//! `--temp 6500` restores it. With no arguments it just reports the CRTCs it
-//! found (issue #10). Full argument handling arrives with the CLI in #20.
+//! Neither the daemon nor D-Bus exists yet. For now the binary applies a colour
+//! temperature directly: `--temp 2800` warms every screen and holds it until
+//! Ctrl+C, which restores the screen (#12); `--no-reset` applies it and exits,
+//! leaving the ramp in place. With no arguments it reports the CRTCs it found
+//! (#10). Full argument handling arrives with the CLI in #20.
 
 mod x11;
+
+use std::error::Error;
+
+use signal_hook::consts::{SIGINT, SIGTERM};
+use signal_hook::iterator::Signals;
+
+/// The neutral temperature: its ramp is the identity, which restores a screen.
+const NEUTRAL_KELVIN: u32 = 6500;
 
 /// What the user asked the binary to do.
 #[derive(Debug, PartialEq)]
@@ -16,17 +25,25 @@ enum Command {
     /// Print the discovered CRTCs (no arguments).
     Discover,
     /// Apply a colour temperature in kelvin to every screen.
-    SetTemp(u32),
+    SetTemp {
+        kelvin: u32,
+        /// Restore the screen on a clean exit (the default); `--no-reset`
+        /// turns this off so the ramp persists.
+        reset_on_exit: bool,
+    },
 }
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match parse_args(&args) {
         Ok(Command::Discover) => run_discover(),
-        Ok(Command::SetTemp(kelvin)) => run_set_temp(kelvin),
+        Ok(Command::SetTemp {
+            kelvin,
+            reset_on_exit,
+        }) => run_set_temp(kelvin, reset_on_exit),
         Err(message) => {
             eprintln!("nightlightd: {message}");
-            eprintln!("usage: nightlightd [--temp <kelvin>]");
+            eprintln!("usage: nightlightd [--temp <kelvin>] [--no-reset]");
             std::process::exit(2);
         }
     }
@@ -35,25 +52,70 @@ fn main() {
 /// Parses the command-line arguments into a [`Command`]. Deliberately tiny —
 /// `clap` and the full CLI land in #20.
 fn parse_args(args: &[String]) -> Result<Command, String> {
-    match args {
-        [] => Ok(Command::Discover),
-        [flag, value] if flag == "--temp" => value
-            .parse::<u32>()
-            .map(Command::SetTemp)
-            .map_err(|_| format!("invalid temperature: {value}")),
-        _ => Err("unrecognised arguments".to_owned()),
+    if args.is_empty() {
+        return Ok(Command::Discover);
+    }
+
+    let mut kelvin: Option<u32> = None;
+    let mut reset_on_exit = true;
+
+    let mut rest = args.iter();
+    while let Some(arg) = rest.next() {
+        match arg.as_str() {
+            "--temp" => {
+                let value = rest.next().ok_or("--temp needs a value")?;
+                let parsed = value
+                    .parse::<u32>()
+                    .map_err(|_| format!("invalid temperature: {value}"))?;
+                kelvin = Some(parsed);
+            }
+            "--no-reset" => reset_on_exit = false,
+            other => return Err(format!("unrecognised argument: {other}")),
+        }
+    }
+
+    match kelvin {
+        Some(kelvin) => Ok(Command::SetTemp {
+            kelvin,
+            reset_on_exit,
+        }),
+        None => Err("nothing to do (try --temp <kelvin>)".to_owned()),
     }
 }
 
-/// Applies `kelvin` to every active CRTC.
-fn run_set_temp(kelvin: u32) {
-    match x11::apply_temperature(kelvin) {
-        Ok(count) => println!("applied {kelvin} K to {count} CRTC(s)"),
+/// Applies `kelvin` to every screen. When `reset_on_exit` is set, holds the
+/// ramp until a termination signal, then restores the screen.
+fn run_set_temp(kelvin: u32, reset_on_exit: bool) {
+    if let Err(error) = x11::apply_temperature(kelvin) {
+        eprintln!("nightlightd: cannot set temperature: {error}");
+        std::process::exit(1);
+    }
+    println!("applied {kelvin} K");
+
+    if !reset_on_exit {
+        return;
+    }
+
+    println!("holding — press Ctrl+C to restore the screen");
+    if let Err(error) = wait_for_termination() {
+        eprintln!("nightlightd: signal handling failed: {error}");
+        std::process::exit(1);
+    }
+
+    match x11::apply_temperature(NEUTRAL_KELVIN) {
+        Ok(_) => println!("restored"),
         Err(error) => {
-            eprintln!("nightlightd: cannot set temperature: {error}");
+            eprintln!("nightlightd: cannot restore the screen: {error}");
             std::process::exit(1);
         }
     }
+}
+
+/// Blocks until the process receives SIGINT (Ctrl+C) or SIGTERM.
+fn wait_for_termination() -> Result<(), Box<dyn Error>> {
+    let mut signals = Signals::new([SIGINT, SIGTERM])?;
+    signals.forever().next();
+    Ok(())
 }
 
 /// Prints the discovered CRTCs and their gamma-ramp sizes.
@@ -86,22 +148,42 @@ mod tests {
     }
 
     #[test]
-    fn temp_flag_parses_the_kelvin_value() {
+    fn temp_flag_resets_by_default() {
         assert_eq!(
             parse_args(&args(&["--temp", "2800"])),
-            Ok(Command::SetTemp(2800))
+            Ok(Command::SetTemp {
+                kelvin: 2800,
+                reset_on_exit: true,
+            })
         );
     }
 
     #[test]
-    fn non_numeric_temperature_is_rejected() {
-        assert!(parse_args(&args(&["--temp", "warm"])).is_err());
+    fn no_reset_flag_is_honoured_in_any_order() {
+        let expected = Command::SetTemp {
+            kelvin: 2800,
+            reset_on_exit: false,
+        };
+        assert_eq!(
+            parse_args(&args(&["--temp", "2800", "--no-reset"])),
+            Ok(expected)
+        );
+
+        let expected = Command::SetTemp {
+            kelvin: 2800,
+            reset_on_exit: false,
+        };
+        assert_eq!(
+            parse_args(&args(&["--no-reset", "--temp", "2800"])),
+            Ok(expected)
+        );
     }
 
     #[test]
-    fn unknown_arguments_are_rejected() {
-        assert!(parse_args(&args(&["--temp"])).is_err());
-        assert!(parse_args(&args(&["--bogus"])).is_err());
-        assert!(parse_args(&args(&["--temp", "2800", "extra"])).is_err());
+    fn malformed_arguments_are_rejected() {
+        assert!(parse_args(&args(&["--temp", "warm"])).is_err()); // not a number
+        assert!(parse_args(&args(&["--temp"])).is_err()); // missing value
+        assert!(parse_args(&args(&["--bogus"])).is_err()); // unknown flag
+        assert!(parse_args(&args(&["--no-reset"])).is_err()); // nothing to apply
     }
 }
