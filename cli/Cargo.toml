@@ -31,3 +31,7 @@ toml = "0.8"
 zbus = "5"
 # Command-line parsing for the one binary's two modes (#20).
 clap = { version = "4", features = ["derive"] }
+# Structured logging for the daemon (#22): RUST_LOG=debug is verbose, the
+# default is quiet (state changes only). Already in the tree via zbus.
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

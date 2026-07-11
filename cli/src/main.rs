@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex};
 
 use clap::{ArgGroup, Parser};
 use signal_hook::consts::{SIGINT, SIGTERM};
+use tracing_subscriber::EnvFilter;
 
 /// Screen colour temperature daemon for X11.
 #[derive(Parser)]
@@ -93,6 +94,7 @@ fn run_client(request: client::Request) {
 /// Runs the daemon: serve D-Bus and follow the config until Ctrl+C. Restores
 /// the screen on exit unless `no_reset` is set.
 fn run_daemon(no_reset: bool) {
+    init_logging();
     let config = config::load();
 
     let waker = match waker::waker() {
@@ -113,16 +115,17 @@ fn run_daemon(no_reset: bool) {
     let _connection = match dbus::serve(Arc::clone(&shared), waker.clone()) {
         Ok(Some(connection)) => connection,
         Ok(None) => {
-            println!("nightlightd: already running");
+            tracing::info!("already running");
             return;
         }
         Err(error) => fail("cannot serve D-Bus", Box::new(error)),
     };
 
     let terminate = install_termination();
-    println!(
-        "nightlightd: daemon started (day {} K / night {} K)",
-        config.day_temp, config.night_temp
+    tracing::info!(
+        "daemon started (day {} K / night {} K)",
+        config.day_temp,
+        config.night_temp
     );
     if let Err(error) = x11::daemon_loop(&shared, &waker, &terminate) {
         fail("daemon failed", error);
@@ -135,9 +138,16 @@ fn run_daemon(no_reset: bool) {
 /// Writes the neutral ramp back to every screen on a clean exit.
 fn restore() {
     match x11::apply_temperature(x11::NEUTRAL_KELVIN) {
-        Ok(_) => println!("restored"),
+        Ok(_) => tracing::info!("restored"),
         Err(error) => fail("cannot restore the screen", error),
     }
+}
+
+/// Sets up daemon logging: quiet by default (state changes only), verbose under
+/// `RUST_LOG=debug` (every tick and every per-CRTC write).
+fn init_logging() {
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    tracing_subscriber::fmt().with_env_filter(filter).init();
 }
 
 /// Creates the termination flag and wires SIGINT/SIGTERM to it, exiting on

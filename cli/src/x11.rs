@@ -61,7 +61,7 @@ pub fn apply_temperature(kelvin: u32) -> Result<usize, Box<dyn Error>> {
     let root = conn.setup().roots[screen_num].root;
     let resources = conn.randr_get_screen_resources(root)?.reply()?;
     let crtcs = active_crtcs(&conn, &resources)?;
-    write_ramps(&conn, &crtcs, kelvin)?;
+    write_ramps(&conn, &crtcs, kelvin, true)?;
     conn.flush()?;
     Ok(crtcs.len())
 }
@@ -138,8 +138,11 @@ fn drain_screen_changes<C: Connection>(conn: &C) -> Result<bool, Box<dyn Error>>
 /// Applies the temperature the current state calls for, and records it as the
 /// current temperature (without holding the lock across the X writes).
 fn apply_desired<C: Connection>(conn: &C, root: u32, state: &Shared) -> Result<(), Box<dyn Error>> {
-    let target = desired_temp(&lock(state));
-    reapply(conn, root, target)?;
+    let (target, previous) = {
+        let state = lock(state);
+        (desired_temp(&state), state.current_temp)
+    };
+    reapply(conn, root, target, target != previous)?;
     lock(state).current_temp = target;
     Ok(())
 }
@@ -166,10 +169,15 @@ fn unix_now() -> f64 {
 
 /// Re-reads the current CRTCs and writes the `kelvin` ramp to each. Re-reading
 /// means a newly-attached monitor is covered too (issue #14).
-fn reapply<C: Connection>(conn: &C, root: u32, kelvin: u32) -> Result<(), Box<dyn Error>> {
+fn reapply<C: Connection>(
+    conn: &C,
+    root: u32,
+    kelvin: u32,
+    changed: bool,
+) -> Result<(), Box<dyn Error>> {
     let resources = conn.randr_get_screen_resources(root)?.reply()?;
     let crtcs = active_crtcs(conn, &resources)?;
-    write_ramps(conn, &crtcs, kelvin)?;
+    write_ramps(conn, &crtcs, kelvin, changed)?;
     conn.flush()?;
     Ok(())
 }
@@ -202,12 +210,20 @@ fn write_ramps<C: Connection>(
     conn: &C,
     crtcs: &[CrtcInfo],
     kelvin: u32,
+    changed: bool,
 ) -> Result<(), Box<dyn Error>> {
     let gains = temperature_to_rgb(kelvin);
     for c in crtcs {
         let ramp = build_ramp(c.gamma_size, gains);
         conn.randr_set_crtc_gamma(c.crtc, &ramp.red, &ramp.green, &ramp.blue)?
             .check()?;
+        // A change (sun moved, a client request) is logged by default; an
+        // unchanged periodic tick is only logged at debug.
+        if changed {
+            tracing::info!("applied {kelvin} K to CRTC {}", c.crtc);
+        } else {
+            tracing::debug!("applied {kelvin} K to CRTC {}", c.crtc);
+        }
     }
     Ok(())
 }

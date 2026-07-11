@@ -58,7 +58,7 @@ pub fn load() -> Config {
     match toml::from_str(&text) {
         Ok(config) => config,
         Err(error) => {
-            eprintln!("nightlightd: {}: {error}; using defaults", path.display());
+            tracing::warn!("{}: {error}; using defaults", path.display());
             Config::default()
         }
     }
