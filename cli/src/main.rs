@@ -1,14 +1,10 @@
 //! `nightlightd` — a screen colour temperature daemon for X11.
 //!
-//! Modes:
-//! * `--daemon` — follow the sun continuously, updating each minute and
-//!   surviving screen changes (#15).
-//! * `--temp <kelvin>` — apply a fixed temperature and hold it until Ctrl+C,
-//!   which restores the screen; `--no-reset` applies it and exits (#11, #12).
-//! * no arguments — report the CRTCs found (#10).
-//!
-//! A separate thin client that talks to the daemon over D-Bus arrives in M4.
+//! One binary, two modes: `--daemon` runs the daemon (follow the sun); any
+//! other invocation acts as a client and messages the running daemon over
+//! D-Bus. With no arguments it reports the CRTCs it found (a diagnostic).
 
+mod client;
 mod config;
 mod dbus;
 mod state;
@@ -19,106 +15,84 @@ use std::error::Error;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
+use clap::{ArgGroup, Parser};
 use signal_hook::consts::{SIGINT, SIGTERM};
 
-/// What the user asked the binary to do.
-#[derive(Debug, PartialEq)]
-enum Command {
-    /// Print the discovered CRTCs (no arguments).
-    Discover,
-    /// Apply a fixed colour temperature in kelvin to every screen.
-    SetTemp {
-        kelvin: u32,
-        /// Restore the screen on a clean exit (the default); `--no-reset`
-        /// turns this off so the ramp persists.
-        reset_on_exit: bool,
-    },
+/// Screen colour temperature daemon for X11.
+#[derive(Parser)]
+#[command(name = "nightlightd", version, about)]
+#[command(group(ArgGroup::new("action").args(["temp", "toggle", "on", "off", "auto", "status"])))]
+struct Cli {
     /// Run the daemon: follow the sun continuously.
-    Daemon,
+    #[arg(long, conflicts_with = "action")]
+    daemon: bool,
+    /// (daemon) Leave the ramp in place on exit instead of restoring the screen.
+    #[arg(long, requires = "daemon")]
+    no_reset: bool,
+    /// Set a fixed temperature in kelvin (client).
+    #[arg(long, value_name = "KELVIN")]
+    temp: Option<u32>,
+    /// Toggle the filter on or off (client).
+    #[arg(long)]
+    toggle: bool,
+    /// Turn the filter on (client).
+    #[arg(long)]
+    on: bool,
+    /// Turn the filter off (client).
+    #[arg(long)]
+    off: bool,
+    /// Return to following the sun (client).
+    #[arg(long)]
+    auto: bool,
+    /// Print the daemon's status (client).
+    #[arg(long)]
+    status: bool,
 }
 
 fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    match parse_args(&args) {
-        Ok(Command::Discover) => run_discover(),
-        Ok(Command::SetTemp {
-            kelvin,
-            reset_on_exit,
-        }) => run_set_temp(kelvin, reset_on_exit),
-        Ok(Command::Daemon) => run_daemon(),
-        Err(message) => {
-            eprintln!("nightlightd: {message}");
-            eprintln!("usage: nightlightd [--daemon | --temp <kelvin> [--no-reset]]");
-            std::process::exit(2);
-        }
+    let cli = Cli::parse();
+    if cli.daemon {
+        run_daemon(cli.no_reset);
+    } else if let Some(request) = client_request(&cli) {
+        run_client(request);
+    } else {
+        run_discover();
     }
 }
 
-/// Parses the command-line arguments into a [`Command`]. Deliberately tiny —
-/// `clap` and the full CLI land in #20.
-fn parse_args(args: &[String]) -> Result<Command, String> {
-    if args.is_empty() {
-        return Ok(Command::Discover);
-    }
-
-    // `--daemon` is exclusive: it takes no other arguments.
-    if args.iter().any(|arg| arg == "--daemon") {
-        return if args.len() == 1 {
-            Ok(Command::Daemon)
-        } else {
-            Err("--daemon takes no other arguments".to_owned())
-        };
-    }
-
-    let mut kelvin: Option<u32> = None;
-    let mut reset_on_exit = true;
-
-    let mut rest = args.iter();
-    while let Some(arg) = rest.next() {
-        match arg.as_str() {
-            "--temp" => {
-                let value = rest.next().ok_or("--temp needs a value")?;
-                let parsed = value
-                    .parse::<u32>()
-                    .map_err(|_| format!("invalid temperature: {value}"))?;
-                kelvin = Some(parsed);
-            }
-            "--no-reset" => reset_on_exit = false,
-            other => return Err(format!("unrecognised argument: {other}")),
-        }
-    }
-
-    match kelvin {
-        Some(kelvin) => Ok(Command::SetTemp {
-            kelvin,
-            reset_on_exit,
-        }),
-        None => Err("nothing to do (try --temp <kelvin> or --daemon)".to_owned()),
+/// Maps the parsed flags to a client request, or `None` when none was given.
+/// clap's `action` group guarantees at most one is set.
+fn client_request(cli: &Cli) -> Option<client::Request> {
+    if let Some(kelvin) = cli.temp {
+        Some(client::Request::SetTemperature(kelvin))
+    } else if cli.toggle {
+        Some(client::Request::Toggle)
+    } else if cli.on {
+        Some(client::Request::SetEnabled(true))
+    } else if cli.off {
+        Some(client::Request::SetEnabled(false))
+    } else if cli.auto {
+        Some(client::Request::Auto)
+    } else if cli.status {
+        Some(client::Request::Status)
+    } else {
+        None
     }
 }
 
-/// Applies a fixed `kelvin`. With `--no-reset` it applies once and exits;
-/// otherwise it holds the ramp until Ctrl+C, then restores the screen.
-fn run_set_temp(kelvin: u32, reset_on_exit: bool) {
-    if !reset_on_exit {
-        match x11::apply_temperature(kelvin) {
-            Ok(count) => println!("applied {kelvin} K to {count} CRTC(s)"),
-            Err(error) => fail("cannot set temperature", error),
-        }
-        return;
+/// Sends a request to the daemon, with a clear error when it is not running.
+fn run_client(request: client::Request) {
+    if let Err(error) = client::send(request) {
+        eprintln!(
+            "nightlightd: cannot reach the daemon (is it running? start it with --daemon): {error}"
+        );
+        std::process::exit(1);
     }
-
-    let terminate = install_termination();
-    println!("holding {kelvin} K — press Ctrl+C to restore (re-applies on screen changes)");
-    if let Err(error) = x11::hold_and_watch(kelvin, &terminate) {
-        fail("watch loop failed", error);
-    }
-    restore();
 }
 
-/// Runs the daemon: serve D-Bus and follow the config until Ctrl+C, then
-/// restore the screen.
-fn run_daemon() {
+/// Runs the daemon: serve D-Bus and follow the config until Ctrl+C. Restores
+/// the screen on exit unless `no_reset` is set.
+fn run_daemon(no_reset: bool) {
     let config = config::load();
 
     let waker = match waker::waker() {
@@ -153,7 +127,9 @@ fn run_daemon() {
     if let Err(error) = x11::daemon_loop(&shared, &waker, &terminate) {
         fail("daemon failed", error);
     }
-    restore();
+    if !no_reset {
+        restore();
+    }
 }
 
 /// Writes the neutral ramp back to every screen on a clean exit.
@@ -174,7 +150,7 @@ fn install_termination() -> Arc<AtomicBool> {
     terminate
 }
 
-/// Registers SIGINT (Ctrl+C) and SIGTERM to set `flag`, so the loops can notice
+/// Registers SIGINT (Ctrl+C) and SIGTERM to set `flag`, so the loop can notice
 /// a termination request and exit cleanly.
 fn register_termination(flag: &Arc<AtomicBool>) -> Result<(), Box<dyn Error>> {
     signal_hook::flag::register(SIGINT, Arc::clone(flag))?;
@@ -188,7 +164,7 @@ fn fail(context: &str, error: Box<dyn Error>) -> ! {
     std::process::exit(1);
 }
 
-/// Prints the discovered CRTCs and their gamma-ramp sizes.
+/// Prints the discovered CRTCs and their gamma-ramp sizes (a diagnostic).
 fn run_discover() {
     match x11::discover() {
         Ok(crtcs) => {
@@ -205,62 +181,26 @@ fn run_discover() {
 mod tests {
     use super::*;
 
-    fn args(list: &[&str]) -> Vec<String> {
-        list.iter().map(|s| (*s).to_owned()).collect()
+    #[test]
+    fn temp_flag_parses() {
+        let cli = Cli::try_parse_from(["nightlightd", "--temp", "2800"]).unwrap();
+        assert_eq!(cli.temp, Some(2800));
+        assert!(!cli.daemon);
     }
 
     #[test]
-    fn no_arguments_means_discover() {
-        assert_eq!(parse_args(&args(&[])), Ok(Command::Discover));
+    fn daemon_conflicts_with_client_actions() {
+        assert!(Cli::try_parse_from(["nightlightd", "--daemon", "--temp", "2800"]).is_err());
     }
 
     #[test]
-    fn daemon_flag_is_recognised() {
-        assert_eq!(parse_args(&args(&["--daemon"])), Ok(Command::Daemon));
+    fn client_actions_are_mutually_exclusive() {
+        assert!(Cli::try_parse_from(["nightlightd", "--toggle", "--status"]).is_err());
     }
 
     #[test]
-    fn daemon_is_exclusive() {
-        assert!(parse_args(&args(&["--daemon", "--temp", "2800"])).is_err());
-    }
-
-    #[test]
-    fn temp_flag_resets_by_default() {
-        assert_eq!(
-            parse_args(&args(&["--temp", "2800"])),
-            Ok(Command::SetTemp {
-                kelvin: 2800,
-                reset_on_exit: true,
-            })
-        );
-    }
-
-    #[test]
-    fn no_reset_flag_is_honoured_in_any_order() {
-        let expected = Command::SetTemp {
-            kelvin: 2800,
-            reset_on_exit: false,
-        };
-        assert_eq!(
-            parse_args(&args(&["--temp", "2800", "--no-reset"])),
-            Ok(expected)
-        );
-
-        let expected = Command::SetTemp {
-            kelvin: 2800,
-            reset_on_exit: false,
-        };
-        assert_eq!(
-            parse_args(&args(&["--no-reset", "--temp", "2800"])),
-            Ok(expected)
-        );
-    }
-
-    #[test]
-    fn malformed_arguments_are_rejected() {
-        assert!(parse_args(&args(&["--temp", "warm"])).is_err()); // not a number
-        assert!(parse_args(&args(&["--temp"])).is_err()); // missing value
-        assert!(parse_args(&args(&["--bogus"])).is_err()); // unknown flag
-        assert!(parse_args(&args(&["--no-reset"])).is_err()); // nothing to apply
+    fn no_reset_requires_daemon() {
+        assert!(Cli::try_parse_from(["nightlightd", "--no-reset"]).is_err());
+        assert!(Cli::try_parse_from(["nightlightd", "--daemon", "--no-reset"]).is_ok());
     }
 }

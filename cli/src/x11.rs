@@ -66,37 +66,6 @@ pub fn apply_temperature(kelvin: u32) -> Result<usize, Box<dyn Error>> {
     Ok(crtcs.len())
 }
 
-/// Holds a fixed `kelvin` until `terminate` is set: RandR changes trigger an
-/// immediate re-apply, and a periodic tick reads the gamma back and rewrites it
-/// if a silent wipe drifted it.
-pub fn hold_and_watch(kelvin: u32, terminate: &AtomicBool) -> Result<(), Box<dyn Error>> {
-    let (conn, screen_num) = x11rb::connect(None)?;
-    let root = conn.setup().roots[screen_num].root;
-
-    conn.randr_select_input(root, NotifyMask::SCREEN_CHANGE | NotifyMask::CRTC_CHANGE)?
-        .check()?;
-    reapply(&conn, root, kelvin)?;
-
-    let mut last_verify = Instant::now();
-    while !terminate.load(Ordering::Relaxed) {
-        if !wait_for_change(
-            &[conn.stream().as_fd()],
-            TICK_INTERVAL.saturating_sub(last_verify.elapsed()),
-        )? {
-            continue;
-        }
-
-        if drain_screen_changes(&conn)? {
-            reapply(&conn, root, kelvin)?;
-        }
-        if last_verify.elapsed() >= TICK_INTERVAL {
-            verify(&conn, root, kelvin)?;
-            last_verify = Instant::now();
-        }
-    }
-    Ok(())
-}
-
 /// Runs the daemon: applies whatever the shared state calls for and keeps it
 /// applied. Wakes on a D-Bus request (the waker eventfd), a RandR screen change,
 /// or the minute tick, then re-derives the target and applies it. Runs until
@@ -202,26 +171,6 @@ fn reapply<C: Connection>(conn: &C, root: u32, kelvin: u32) -> Result<(), Box<dy
     let crtcs = active_crtcs(conn, &resources)?;
     write_ramps(conn, &crtcs, kelvin)?;
     conn.flush()?;
-    Ok(())
-}
-
-/// Reads each CRTC's current gamma and rewrites only those that have drifted
-/// from the expected ramp — the cheap safety net for silent wipes.
-fn verify<C: Connection>(conn: &C, root: u32, kelvin: u32) -> Result<(), Box<dyn Error>> {
-    let resources = conn.randr_get_screen_resources(root)?.reply()?;
-    let crtcs = active_crtcs(conn, &resources)?;
-    let gains = temperature_to_rgb(kelvin);
-    for c in &crtcs {
-        let expected = build_ramp(c.gamma_size, gains);
-        let current = conn.randr_get_crtc_gamma(c.crtc)?.reply()?;
-        if current.red != expected.red
-            || current.green != expected.green
-            || current.blue != expected.blue
-        {
-            conn.randr_set_crtc_gamma(c.crtc, &expected.red, &expected.green, &expected.blue)?
-                .check()?;
-        }
-    }
     Ok(())
 }
 

@@ -29,3 +29,5 @@ toml = "0.8"
 # The blocking API keeps its reactor on its own thread so our synchronous poll
 # loop is untouched.
 zbus = "5"
+# Command-line parsing for the one binary's two modes (#20).
+clap = { version = "4", features = ["derive"] }
