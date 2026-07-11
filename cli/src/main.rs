@@ -8,6 +8,7 @@ mod client;
 mod config;
 mod dbus;
 mod state;
+mod suspend;
 mod waker;
 mod x11;
 
@@ -122,6 +123,16 @@ fn run_daemon(no_reset: bool) {
     };
 
     let terminate = install_termination();
+
+    // Watch for resume from suspend on the system bus; wake the loop so the ramp
+    // is re-applied at once instead of on the next tick (#16).
+    let sleep_waker = waker.clone();
+    std::thread::spawn(move || {
+        if let Err(error) = suspend::watch(sleep_waker) {
+            tracing::warn!("suspend watcher unavailable: {error}");
+        }
+    });
+
     tracing::info!(
         "daemon started (day {} K / night {} K)",
         config.day_temp,
