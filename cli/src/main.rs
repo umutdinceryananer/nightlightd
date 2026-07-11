@@ -1,13 +1,13 @@
 //! `nightlightd` — a screen colour temperature daemon for X11.
 //!
-//! One binary, two modes: `--daemon` runs the daemon, a bare invocation such
-//! as `--temp 2800` acts as a client and messages the daemon over D-Bus.
+//! Modes:
+//! * `--daemon` — follow the sun continuously, updating each minute and
+//!   surviving screen changes (#15).
+//! * `--temp <kelvin>` — apply a fixed temperature and hold it until Ctrl+C,
+//!   which restores the screen; `--no-reset` applies it and exits (#11, #12).
+//! * no arguments — report the CRTCs found (#10).
 //!
-//! Neither the daemon nor D-Bus exists yet. For now the binary applies a colour
-//! temperature directly: `--temp 2800` warms every screen and holds it until
-//! Ctrl+C, which restores the screen (#12); `--no-reset` applies it and exits,
-//! leaving the ramp in place. With no arguments it reports the CRTCs it found
-//! (#10). Full argument handling arrives with the CLI in #20.
+//! A separate thin client that talks to the daemon over D-Bus arrives in M4.
 
 mod x11;
 
@@ -19,19 +19,26 @@ use signal_hook::consts::{SIGINT, SIGTERM};
 
 /// The neutral temperature: its ramp is the identity, which restores a screen.
 const NEUTRAL_KELVIN: u32 = 6500;
+/// Default daytime temperature (neutral white) until the config file (#17).
+const DEFAULT_DAY_KELVIN: u32 = 6500;
+/// Default night temperature. 4500 K matches redshift/gammastep — a gentle
+/// warmth for a first run; a stronger value belongs in the user's config (#17).
+const DEFAULT_NIGHT_KELVIN: u32 = 4500;
 
 /// What the user asked the binary to do.
 #[derive(Debug, PartialEq)]
 enum Command {
     /// Print the discovered CRTCs (no arguments).
     Discover,
-    /// Apply a colour temperature in kelvin to every screen.
+    /// Apply a fixed colour temperature in kelvin to every screen.
     SetTemp {
         kelvin: u32,
         /// Restore the screen on a clean exit (the default); `--no-reset`
         /// turns this off so the ramp persists.
         reset_on_exit: bool,
     },
+    /// Run the daemon: follow the sun continuously.
+    Daemon,
 }
 
 fn main() {
@@ -42,9 +49,10 @@ fn main() {
             kelvin,
             reset_on_exit,
         }) => run_set_temp(kelvin, reset_on_exit),
+        Ok(Command::Daemon) => run_daemon(),
         Err(message) => {
             eprintln!("nightlightd: {message}");
-            eprintln!("usage: nightlightd [--temp <kelvin>] [--no-reset]");
+            eprintln!("usage: nightlightd [--daemon | --temp <kelvin> [--no-reset]]");
             std::process::exit(2);
         }
     }
@@ -55,6 +63,15 @@ fn main() {
 fn parse_args(args: &[String]) -> Result<Command, String> {
     if args.is_empty() {
         return Ok(Command::Discover);
+    }
+
+    // `--daemon` is exclusive: it takes no other arguments.
+    if args.iter().any(|arg| arg == "--daemon") {
+        return if args.len() == 1 {
+            Ok(Command::Daemon)
+        } else {
+            Err("--daemon takes no other arguments".to_owned())
+        };
     }
 
     let mut kelvin: Option<u32> = None;
@@ -80,52 +97,71 @@ fn parse_args(args: &[String]) -> Result<Command, String> {
             kelvin,
             reset_on_exit,
         }),
-        None => Err("nothing to do (try --temp <kelvin>)".to_owned()),
+        None => Err("nothing to do (try --temp <kelvin> or --daemon)".to_owned()),
     }
 }
 
-/// Applies `kelvin` to every screen. With `--no-reset` it applies once and
-/// exits; otherwise it holds the ramp — re-applying whenever the screen
-/// configuration changes — until Ctrl+C, then restores the screen.
+/// Applies a fixed `kelvin`. With `--no-reset` it applies once and exits;
+/// otherwise it holds the ramp until Ctrl+C, then restores the screen.
 fn run_set_temp(kelvin: u32, reset_on_exit: bool) {
     if !reset_on_exit {
         match x11::apply_temperature(kelvin) {
             Ok(count) => println!("applied {kelvin} K to {count} CRTC(s)"),
-            Err(error) => {
-                eprintln!("nightlightd: cannot set temperature: {error}");
-                std::process::exit(1);
-            }
+            Err(error) => fail("cannot set temperature", error),
         }
         return;
     }
 
-    let terminate = Arc::new(AtomicBool::new(false));
-    if let Err(error) = register_termination(&terminate) {
-        eprintln!("nightlightd: cannot install signal handlers: {error}");
-        std::process::exit(1);
-    }
-
+    let terminate = install_termination();
     println!("holding {kelvin} K — press Ctrl+C to restore (re-applies on screen changes)");
     if let Err(error) = x11::hold_and_watch(kelvin, &terminate) {
-        eprintln!("nightlightd: {error}");
-        std::process::exit(1);
+        fail("watch loop failed", error);
     }
+    restore();
+}
 
+/// Runs the daemon: follow the sun until Ctrl+C, then restore the screen.
+fn run_daemon() {
+    let terminate = install_termination();
+    println!(
+        "nightlightd: daemon started (day {DEFAULT_DAY_KELVIN} K / night {DEFAULT_NIGHT_KELVIN} K)"
+    );
+    if let Err(error) = x11::daemon_loop(DEFAULT_DAY_KELVIN, DEFAULT_NIGHT_KELVIN, &terminate) {
+        fail("daemon failed", error);
+    }
+    restore();
+}
+
+/// Writes the neutral ramp back to every screen on a clean exit.
+fn restore() {
     match x11::apply_temperature(NEUTRAL_KELVIN) {
         Ok(_) => println!("restored"),
-        Err(error) => {
-            eprintln!("nightlightd: cannot restore the screen: {error}");
-            std::process::exit(1);
-        }
+        Err(error) => fail("cannot restore the screen", error),
     }
 }
 
-/// Registers SIGINT (Ctrl+C) and SIGTERM to set `flag`, so the watch loop can
-/// notice a termination request and exit cleanly.
+/// Creates the termination flag and wires SIGINT/SIGTERM to it, exiting on
+/// failure to install the handlers.
+fn install_termination() -> Arc<AtomicBool> {
+    let terminate = Arc::new(AtomicBool::new(false));
+    if let Err(error) = register_termination(&terminate) {
+        fail("cannot install signal handlers", error);
+    }
+    terminate
+}
+
+/// Registers SIGINT (Ctrl+C) and SIGTERM to set `flag`, so the loops can notice
+/// a termination request and exit cleanly.
 fn register_termination(flag: &Arc<AtomicBool>) -> Result<(), Box<dyn Error>> {
     signal_hook::flag::register(SIGINT, Arc::clone(flag))?;
     signal_hook::flag::register(SIGTERM, Arc::clone(flag))?;
     Ok(())
+}
+
+/// Prints an error to stderr and exits non-zero.
+fn fail(context: &str, error: Box<dyn Error>) -> ! {
+    eprintln!("nightlightd: {context}: {error}");
+    std::process::exit(1);
 }
 
 /// Prints the discovered CRTCs and their gamma-ramp sizes.
@@ -137,10 +173,7 @@ fn run_discover() {
                 println!("  CRTC {}: ramp size {}", c.crtc, c.gamma_size);
             }
         }
-        Err(error) => {
-            eprintln!("nightlightd: cannot query the X server: {error}");
-            std::process::exit(1);
-        }
+        Err(error) => fail("cannot query the X server", error),
     }
 }
 
@@ -155,6 +188,16 @@ mod tests {
     #[test]
     fn no_arguments_means_discover() {
         assert_eq!(parse_args(&args(&[])), Ok(Command::Discover));
+    }
+
+    #[test]
+    fn daemon_flag_is_recognised() {
+        assert_eq!(parse_args(&args(&["--daemon"])), Ok(Command::Daemon));
+    }
+
+    #[test]
+    fn daemon_is_exclusive() {
+        assert!(parse_args(&args(&["--daemon", "--temp", "2800"])).is_err());
     }
 
     #[test]

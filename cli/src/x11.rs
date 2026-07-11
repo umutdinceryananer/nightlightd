@@ -6,24 +6,26 @@
 //! ramps to them, and keeps the ramp applied:
 //!
 //! * RandR events (hotplug, mode/resolution change) are corrected immediately.
-//! * Silent wipes that emit no event (a bare gamma write, some fullscreen
-//!   games, DPMS wakeups) are caught by reading the gamma back on a periodic
-//!   verification tick and rewriting it if it drifted.
+//! * A periodic tick re-applies the ramp, which both follows the sun (in the
+//!   daemon) and overwrites silent wipes that emit no event (a bare gamma
+//!   write, some fullscreen games, DPMS wakeups).
 
 use std::error::Error;
+use std::os::fd::{AsFd, BorrowedFd};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use nightlightd_core::color::{build_ramp, temperature_to_rgb};
+use nightlightd_core::mode::{Mode, resolve_temperature};
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use x11rb::connection::Connection;
 use x11rb::protocol::Event;
 use x11rb::protocol::randr::{ConnectionExt as _, GetScreenResourcesReply, NotifyMask};
 
-/// How often the watch loop reads the gamma back and re-applies it if a silent
-/// wipe drifted it. When the daemon's minute timer lands (#15) this rides on
-/// that same tick; here it is a standalone timer.
-const VERIFY_INTERVAL: Duration = Duration::from_secs(60);
+/// How often the watch loops wake to re-apply: the daemon recomputes the sun on
+/// this tick, and it doubles as the safety net that heals silent wipes. When
+/// the config lands (#17) this stays a minute; for now it is fixed.
+const TICK_INTERVAL: Duration = Duration::from_secs(60);
 
 /// One active CRTC (a "screen" in XRandR terms) and the size of its gamma ramp.
 #[derive(Debug, Clone, Copy)]
@@ -58,52 +60,118 @@ pub fn apply_temperature(kelvin: u32) -> Result<usize, Box<dyn Error>> {
     Ok(crtcs.len())
 }
 
-/// Applies `kelvin`, then keeps it applied until `terminate` is set: RandR
-/// screen/CRTC changes trigger an immediate re-apply, and a periodic tick reads
-/// the gamma back and rewrites it if a silent wipe drifted it.
+/// Holds a fixed `kelvin` until `terminate` is set: RandR changes trigger an
+/// immediate re-apply, and a periodic tick reads the gamma back and rewrites it
+/// if a silent wipe drifted it.
 pub fn hold_and_watch(kelvin: u32, terminate: &AtomicBool) -> Result<(), Box<dyn Error>> {
     let (conn, screen_num) = x11rb::connect(None)?;
     let root = conn.setup().roots[screen_num].root;
 
-    // Subscribe before the first apply so no change slips through the gap.
     conn.randr_select_input(root, NotifyMask::SCREEN_CHANGE | NotifyMask::CRTC_CHANGE)?
         .check()?;
     reapply(&conn, root, kelvin)?;
 
     let mut last_verify = Instant::now();
     while !terminate.load(Ordering::Relaxed) {
-        // Block until a RandR event, the next verification tick, or a signal.
-        // `poll`/`ppoll` return EINTR on a signal even under SA_RESTART, so
-        // Ctrl+C wakes us at once; idle CPU is ~0%.
-        let timeout = duration_to_timespec(VERIFY_INTERVAL.saturating_sub(last_verify.elapsed()));
-        let mut fds = [PollFd::new(conn.stream(), PollFlags::IN)];
-        match poll(&mut fds, Some(&timeout)) {
-            Ok(_) => {}
-            Err(error) if error == rustix::io::Errno::INTR => continue,
-            Err(error) => return Err(Box::new(error)),
+        if !wait_for_change(
+            conn.stream().as_fd(),
+            TICK_INTERVAL.saturating_sub(last_verify.elapsed()),
+        )? {
+            continue;
         }
 
-        // Event-driven path: correct immediately on any screen/CRTC change.
-        let mut changed = false;
-        while let Some(event) = conn.poll_for_event()? {
-            if matches!(
-                event,
-                Event::RandrScreenChangeNotify(_) | Event::RandrNotify(_)
-            ) {
-                changed = true;
-            }
-        }
-        if changed {
+        if drain_screen_changes(&conn)? {
             reapply(&conn, root, kelvin)?;
         }
-
-        // Verification path: catch wipes that emitted no event.
-        if last_verify.elapsed() >= VERIFY_INTERVAL {
+        if last_verify.elapsed() >= TICK_INTERVAL {
             verify(&conn, root, kelvin)?;
             last_verify = Instant::now();
         }
     }
     Ok(())
+}
+
+/// Runs the daemon: follows the sun. On each tick it recomputes the target from
+/// the timezone location and the current time, then applies it — which also
+/// overwrites any silent wipe. RandR changes re-apply the current target at
+/// once. Runs until `terminate` is set.
+pub fn daemon_loop(
+    day_temp: u32,
+    night_temp: u32,
+    terminate: &AtomicBool,
+) -> Result<(), Box<dyn Error>> {
+    let (conn, screen_num) = x11rb::connect(None)?;
+    let root = conn.setup().roots[screen_num].root;
+
+    conn.randr_select_input(root, NotifyMask::SCREEN_CHANGE | NotifyMask::CRTC_CHANGE)?
+        .check()?;
+
+    let mut target = sun_target(day_temp, night_temp);
+    reapply(&conn, root, target)?;
+    println!("nightlightd: target {target} K");
+
+    let mut last_tick = Instant::now();
+    while !terminate.load(Ordering::Relaxed) {
+        if !wait_for_change(
+            conn.stream().as_fd(),
+            TICK_INTERVAL.saturating_sub(last_tick.elapsed()),
+        )? {
+            continue;
+        }
+
+        if drain_screen_changes(&conn)? {
+            reapply(&conn, root, target)?;
+        }
+        if last_tick.elapsed() >= TICK_INTERVAL {
+            target = sun_target(day_temp, night_temp);
+            reapply(&conn, root, target)?;
+            println!("nightlightd: target {target} K");
+            last_tick = Instant::now();
+        }
+    }
+    Ok(())
+}
+
+/// Blocks on the X fd until an event, `timeout`, or a signal. Returns `false`
+/// if a signal interrupted the wait (the caller should re-check `terminate`);
+/// `poll`/`ppoll` return EINTR on a signal even under SA_RESTART, so Ctrl+C
+/// wakes us at once and idle CPU stays ~0%.
+fn wait_for_change(fd: BorrowedFd<'_>, timeout: Duration) -> Result<bool, Box<dyn Error>> {
+    let timeout = duration_to_timespec(timeout);
+    let mut fds = [PollFd::new(&fd, PollFlags::IN)];
+    match poll(&mut fds, Some(&timeout)) {
+        Ok(_) => Ok(true),
+        Err(error) if error == rustix::io::Errno::INTR => Ok(false),
+        Err(error) => Err(Box::new(error)),
+    }
+}
+
+/// Drains all pending X events and reports whether any was a RandR screen or
+/// CRTC change worth re-applying for.
+fn drain_screen_changes<C: Connection>(conn: &C) -> Result<bool, Box<dyn Error>> {
+    let mut changed = false;
+    while let Some(event) = conn.poll_for_event()? {
+        if matches!(
+            event,
+            Event::RandrScreenChangeNotify(_) | Event::RandrNotify(_)
+        ) {
+            changed = true;
+        }
+    }
+    Ok(changed)
+}
+
+/// The sun-based target temperature for right now, from the timezone location.
+fn sun_target(day_temp: u32, night_temp: u32) -> u32 {
+    resolve_temperature(Mode::Automatic, unix_now(), day_temp, night_temp)
+}
+
+/// Seconds since the Unix epoch, as an `f64` for the solar maths. Degrades to
+/// `0.0` rather than panicking if the clock is somehow before the epoch.
+fn unix_now() -> f64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0.0, |elapsed| elapsed.as_secs_f64())
 }
 
 /// Re-reads the current CRTCs and writes the `kelvin` ramp to each. Re-reading
