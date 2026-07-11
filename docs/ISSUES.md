@@ -167,6 +167,7 @@ This is where you touch a real system resource for the first time. Rust's owners
 - **Verified:** `nm -D /usr/bin/gammastep | grep randr` shows no `xcb_randr_select_input`. It cannot be subscribed to screen events. It also calls `get_screen_resources_current` rather than `get_screen_resources`, so a monitor attached after startup is very likely never seen. See `PRIOR-ART.md`, defect 3.
 - **Honest scope:** the suspend half of this is worth a few seconds of neutral screen, not a permanent failure. The monitor hotplug half is the serious one. Don't oversell it in the README.
 - **Done when:** Unplugging and replugging a monitor restores the filter without user action, and clearing the ramp by hand with `xrandr --gamma 1:1:1` is corrected in under 100ms rather than on the next tick.
+- **Correction latency (measured):** X11 emits no RandR event for a bare gamma write, so it cannot be caught by events alone. The watcher therefore combines both: event-emitting wipes (hotplug, mode change) are corrected immediately; silent wipes (bare gamma writes) are corrected on the next verification tick, worst case 60s. Verified with `xrandr --output DisplayPort-0 --gamma 1:1:1` on one output.
 - **Difficulty:** Hard
 - **Depends on:** #10
 

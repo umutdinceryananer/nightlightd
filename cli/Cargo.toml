@@ -18,3 +18,6 @@ x11rb = { version = "0.13", features = ["randr"] }
 # Catch SIGINT/SIGTERM so a clean exit can restore the screen (#12). Small,
 # focused, and handles the async-signal-safety details for us.
 signal-hook = "0.3"
+# Safe `poll` (and, later, timerfd) for the event loop that watches the X11 fd
+# and re-applies the ramp on RandR events (#13). Already in the tree via x11rb.
+rustix = { version = "1", features = ["event"] }

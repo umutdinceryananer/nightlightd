@@ -45,6 +45,7 @@ name = "nightlightd"
 version = "0.1.0"
 dependencies = [
  "nightlightd-core",
+ "rustix",
  "signal-hook",
  "x11rb",
 ]

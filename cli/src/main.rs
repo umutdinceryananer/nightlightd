@@ -12,9 +12,10 @@
 mod x11;
 
 use std::error::Error;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use signal_hook::consts::{SIGINT, SIGTERM};
-use signal_hook::iterator::Signals;
 
 /// The neutral temperature: its ramp is the identity, which restores a screen.
 const NEUTRAL_KELVIN: u32 = 6500;
@@ -83,22 +84,30 @@ fn parse_args(args: &[String]) -> Result<Command, String> {
     }
 }
 
-/// Applies `kelvin` to every screen. When `reset_on_exit` is set, holds the
-/// ramp until a termination signal, then restores the screen.
+/// Applies `kelvin` to every screen. With `--no-reset` it applies once and
+/// exits; otherwise it holds the ramp — re-applying whenever the screen
+/// configuration changes — until Ctrl+C, then restores the screen.
 fn run_set_temp(kelvin: u32, reset_on_exit: bool) {
-    if let Err(error) = x11::apply_temperature(kelvin) {
-        eprintln!("nightlightd: cannot set temperature: {error}");
-        std::process::exit(1);
-    }
-    println!("applied {kelvin} K");
-
     if !reset_on_exit {
+        match x11::apply_temperature(kelvin) {
+            Ok(count) => println!("applied {kelvin} K to {count} CRTC(s)"),
+            Err(error) => {
+                eprintln!("nightlightd: cannot set temperature: {error}");
+                std::process::exit(1);
+            }
+        }
         return;
     }
 
-    println!("holding — press Ctrl+C to restore the screen");
-    if let Err(error) = wait_for_termination() {
-        eprintln!("nightlightd: signal handling failed: {error}");
+    let terminate = Arc::new(AtomicBool::new(false));
+    if let Err(error) = register_termination(&terminate) {
+        eprintln!("nightlightd: cannot install signal handlers: {error}");
+        std::process::exit(1);
+    }
+
+    println!("holding {kelvin} K — press Ctrl+C to restore (re-applies on screen changes)");
+    if let Err(error) = x11::hold_and_watch(kelvin, &terminate) {
+        eprintln!("nightlightd: {error}");
         std::process::exit(1);
     }
 
@@ -111,10 +120,11 @@ fn run_set_temp(kelvin: u32, reset_on_exit: bool) {
     }
 }
 
-/// Blocks until the process receives SIGINT (Ctrl+C) or SIGTERM.
-fn wait_for_termination() -> Result<(), Box<dyn Error>> {
-    let mut signals = Signals::new([SIGINT, SIGTERM])?;
-    signals.forever().next();
+/// Registers SIGINT (Ctrl+C) and SIGTERM to set `flag`, so the watch loop can
+/// notice a termination request and exit cleanly.
+fn register_termination(flag: &Arc<AtomicBool>) -> Result<(), Box<dyn Error>> {
+    signal_hook::flag::register(SIGINT, Arc::clone(flag))?;
+    signal_hook::flag::register(SIGTERM, Arc::clone(flag))?;
     Ok(())
 }
 
