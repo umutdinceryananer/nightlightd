@@ -9,6 +9,7 @@
 //!
 //! A separate thin client that talks to the daemon over D-Bus arrives in M4.
 
+mod config;
 mod x11;
 
 use std::error::Error;
@@ -18,12 +19,8 @@ use std::sync::atomic::AtomicBool;
 use signal_hook::consts::{SIGINT, SIGTERM};
 
 /// The neutral temperature: its ramp is the identity, which restores a screen.
+/// The day/night defaults now live in [`config::Config`].
 const NEUTRAL_KELVIN: u32 = 6500;
-/// Default daytime temperature (neutral white) until the config file (#17).
-const DEFAULT_DAY_KELVIN: u32 = 6500;
-/// Default night temperature. 4500 K matches redshift/gammastep — a gentle
-/// warmth for a first run; a stronger value belongs in the user's config (#17).
-const DEFAULT_NIGHT_KELVIN: u32 = 4500;
 
 /// What the user asked the binary to do.
 #[derive(Debug, PartialEq)]
@@ -120,13 +117,20 @@ fn run_set_temp(kelvin: u32, reset_on_exit: bool) {
     restore();
 }
 
-/// Runs the daemon: follow the sun until Ctrl+C, then restore the screen.
+/// Runs the daemon: follow the sun (per the config) until Ctrl+C, then restore.
 fn run_daemon() {
+    let config = config::load();
     let terminate = install_termination();
     println!(
-        "nightlightd: daemon started (day {DEFAULT_DAY_KELVIN} K / night {DEFAULT_NIGHT_KELVIN} K)"
+        "nightlightd: daemon started (day {} K / night {} K)",
+        config.day_temp, config.night_temp
     );
-    if let Err(error) = x11::daemon_loop(DEFAULT_DAY_KELVIN, DEFAULT_NIGHT_KELVIN, &terminate) {
+    if let Err(error) = x11::daemon_loop(
+        config.mode(),
+        config.day_temp,
+        config.night_temp,
+        &terminate,
+    ) {
         fail("daemon failed", error);
     }
     restore();

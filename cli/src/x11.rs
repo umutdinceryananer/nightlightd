@@ -96,6 +96,7 @@ pub fn hold_and_watch(kelvin: u32, terminate: &AtomicBool) -> Result<(), Box<dyn
 /// overwrites any silent wipe. RandR changes re-apply the current target at
 /// once. Runs until `terminate` is set.
 pub fn daemon_loop(
+    mode: Mode,
     day_temp: u32,
     night_temp: u32,
     terminate: &AtomicBool,
@@ -106,7 +107,7 @@ pub fn daemon_loop(
     conn.randr_select_input(root, NotifyMask::SCREEN_CHANGE | NotifyMask::CRTC_CHANGE)?
         .check()?;
 
-    let mut target = sun_target(day_temp, night_temp);
+    let mut target = sun_target(mode, day_temp, night_temp);
     reapply(&conn, root, target)?;
     println!("nightlightd: target {target} K");
 
@@ -123,7 +124,7 @@ pub fn daemon_loop(
             reapply(&conn, root, target)?;
         }
         if last_tick.elapsed() >= TICK_INTERVAL {
-            target = sun_target(day_temp, night_temp);
+            target = sun_target(mode, day_temp, night_temp);
             reapply(&conn, root, target)?;
             println!("nightlightd: target {target} K");
             last_tick = Instant::now();
@@ -161,9 +162,10 @@ fn drain_screen_changes<C: Connection>(conn: &C) -> Result<bool, Box<dyn Error>>
     Ok(changed)
 }
 
-/// The sun-based target temperature for right now, from the timezone location.
-fn sun_target(day_temp: u32, night_temp: u32) -> u32 {
-    resolve_temperature(Mode::Automatic, unix_now(), day_temp, night_temp)
+/// The target temperature for right now, given the mode (automatic or a manual
+/// location) and the day/night bounds.
+fn sun_target(mode: Mode, day_temp: u32, night_temp: u32) -> u32 {
+    resolve_temperature(mode, unix_now(), day_temp, night_temp)
 }
 
 /// Seconds since the Unix epoch, as an `f64` for the solar maths. Degrades to

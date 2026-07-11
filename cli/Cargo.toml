@@ -21,3 +21,7 @@ signal-hook = "0.3"
 # Safe `poll` (and, later, timerfd) for the event loop that watches the X11 fd
 # and re-applies the ramp on RandR events (#13). Already in the tree via x11rb.
 rustix = { version = "1", features = ["event"] }
+# Config file parsing (#17): TOML via serde. Lives here, not in `core`, so
+# `core` stays dependency-free.
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
