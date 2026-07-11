@@ -1,0 +1,28 @@
+# nightlightd systemd user service (#21).
+#
+# Enable in USER scope, never global: a globally enabled unit cannot be
+# disabled by the user with `systemctl --user disable`, which is hostile.
+#
+# Install:
+#   cargo install --path cli                       # -> ~/.cargo/bin/nightlightd
+#   mkdir -p ~/.config/systemd/user
+#   cp dist/nightlightd.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now nightlightd
+#
+# Inspect:
+#   systemctl --user status nightlightd
+#   journalctl --user -u nightlightd
+#
+# When packaged (#26) the binary lives at /usr/bin/nightlightd; adjust ExecStart.
+
+[Unit]
+Description=Screen colour temperature (nightlightd)
+PartOf=graphical-session.target
+
+[Service]
+ExecStart=%h/.cargo/bin/nightlightd --daemon
+Restart=on-failure
+
+[Install]
+WantedBy=graphical-session.target
