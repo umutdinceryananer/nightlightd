@@ -120,7 +120,6 @@ fn run_set_temp(kelvin: u32, reset_on_exit: bool) {
 /// restore the screen.
 fn run_daemon() {
     let config = config::load();
-    let terminate = install_termination();
 
     let waker = match waker::waker() {
         Ok(waker) => waker,
@@ -135,13 +134,18 @@ fn run_daemon() {
         current_temp: x11::NEUTRAL_KELVIN,
     }));
 
-    // Keep the connection alive for the daemon's lifetime; dropping it stops
-    // serving. If the name is taken, this errors (made graceful in #19).
+    // Claim the D-Bus name — this is the single-instance lock (#19). Keep the
+    // connection alive for the daemon's lifetime; dropping it stops serving.
     let _connection = match dbus::serve(Arc::clone(&shared), waker.clone()) {
-        Ok(connection) => connection,
+        Ok(Some(connection)) => connection,
+        Ok(None) => {
+            println!("nightlightd: already running");
+            return;
+        }
         Err(error) => fail("cannot serve D-Bus", Box::new(error)),
     };
 
+    let terminate = install_termination();
     println!(
         "nightlightd: daemon started (day {} K / night {} K)",
         config.day_temp, config.night_temp

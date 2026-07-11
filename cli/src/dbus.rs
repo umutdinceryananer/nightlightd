@@ -7,6 +7,7 @@
 
 use zbus::blocking::Connection;
 use zbus::blocking::connection::Builder;
+use zbus::fdo::{RequestNameFlags, RequestNameReply};
 use zbus::interface;
 
 use nightlightd_core::mode::Mode;
@@ -69,11 +70,22 @@ impl Daemon {
     }
 }
 
-/// Serves the interface at the well-known name. The returned connection must be
-/// kept alive for the daemon's lifetime; dropping it stops serving.
-pub fn serve(state: Shared, waker: Waker) -> zbus::Result<Connection> {
-    Builder::session()?
+/// Serves the interface and claims the well-known name as the single-instance
+/// lock (#19). Returns `Ok(Some(conn))` when this process owns the name — the
+/// connection must be kept alive for the daemon's lifetime — or `Ok(None)` when
+/// another instance already owns it, so the caller can exit cleanly.
+///
+/// `DoNotQueue` makes a second instance fail at once instead of waiting in the
+/// bus's queue, and the name is never replaced, so the first daemon keeps it.
+pub fn serve(state: Shared, waker: Waker) -> zbus::Result<Option<Connection>> {
+    let connection = Builder::session()?
         .serve_at(OBJECT_PATH, Daemon { state, waker })?
-        .name(WELL_KNOWN_NAME)?
-        .build()
+        .build()?;
+    match connection.request_name_with_flags(WELL_KNOWN_NAME, RequestNameFlags::DoNotQueue.into()) {
+        Ok(RequestNameReply::PrimaryOwner) => Ok(Some(connection)),
+        // Another instance already owns the name. With DoNotQueue, zbus reports
+        // this either as a non-primary reply or as the NameTaken error.
+        Ok(_) | Err(zbus::Error::NameTaken) => Ok(None),
+        Err(other) => Err(other),
+    }
 }
