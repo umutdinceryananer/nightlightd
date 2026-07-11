@@ -25,3 +25,7 @@ rustix = { version = "1", features = ["event"] }
 # `core` stays dependency-free.
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
+# D-Bus: the daemon serves org.nightlightd.Daemon and clients call it (#18-#20).
+# The blocking API keeps its reactor on its own thread so our synchronous poll
+# loop is untouched.
+zbus = "5"

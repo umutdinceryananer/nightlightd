@@ -10,17 +10,16 @@
 //! A separate thin client that talks to the daemon over D-Bus arrives in M4.
 
 mod config;
+mod dbus;
+mod state;
+mod waker;
 mod x11;
 
 use std::error::Error;
-use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex};
 
 use signal_hook::consts::{SIGINT, SIGTERM};
-
-/// The neutral temperature: its ramp is the identity, which restores a screen.
-/// The day/night defaults now live in [`config::Config`].
-const NEUTRAL_KELVIN: u32 = 6500;
 
 /// What the user asked the binary to do.
 #[derive(Debug, PartialEq)]
@@ -117,20 +116,37 @@ fn run_set_temp(kelvin: u32, reset_on_exit: bool) {
     restore();
 }
 
-/// Runs the daemon: follow the sun (per the config) until Ctrl+C, then restore.
+/// Runs the daemon: serve D-Bus and follow the config until Ctrl+C, then
+/// restore the screen.
 fn run_daemon() {
     let config = config::load();
     let terminate = install_termination();
+
+    let waker = match waker::waker() {
+        Ok(waker) => waker,
+        Err(error) => fail("cannot create the wakeup channel", Box::new(error)),
+    };
+    let shared: state::Shared = Arc::new(Mutex::new(state::State {
+        enabled: true,
+        override_temp: None,
+        mode: config.mode(),
+        day_temp: config.day_temp,
+        night_temp: config.night_temp,
+        current_temp: x11::NEUTRAL_KELVIN,
+    }));
+
+    // Keep the connection alive for the daemon's lifetime; dropping it stops
+    // serving. If the name is taken, this errors (made graceful in #19).
+    let _connection = match dbus::serve(Arc::clone(&shared), waker.clone()) {
+        Ok(connection) => connection,
+        Err(error) => fail("cannot serve D-Bus", Box::new(error)),
+    };
+
     println!(
         "nightlightd: daemon started (day {} K / night {} K)",
         config.day_temp, config.night_temp
     );
-    if let Err(error) = x11::daemon_loop(
-        config.mode(),
-        config.day_temp,
-        config.night_temp,
-        &terminate,
-    ) {
+    if let Err(error) = x11::daemon_loop(&shared, &waker, &terminate) {
         fail("daemon failed", error);
     }
     restore();
@@ -138,7 +154,7 @@ fn run_daemon() {
 
 /// Writes the neutral ramp back to every screen on a clean exit.
 fn restore() {
-    match x11::apply_temperature(NEUTRAL_KELVIN) {
+    match x11::apply_temperature(x11::NEUTRAL_KELVIN) {
         Ok(_) => println!("restored"),
         Err(error) => fail("cannot restore the screen", error),
     }

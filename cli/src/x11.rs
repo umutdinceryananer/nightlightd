@@ -16,16 +16,22 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use nightlightd_core::color::{build_ramp, temperature_to_rgb};
-use nightlightd_core::mode::{Mode, resolve_temperature};
+use nightlightd_core::mode::resolve_temperature;
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use x11rb::connection::Connection;
 use x11rb::protocol::Event;
 use x11rb::protocol::randr::{ConnectionExt as _, GetScreenResourcesReply, NotifyMask};
 
+use crate::state::{Shared, State, lock};
+use crate::waker::Waker;
+
 /// How often the watch loops wake to re-apply: the daemon recomputes the sun on
 /// this tick, and it doubles as the safety net that heals silent wipes. When
 /// the config lands (#17) this stays a minute; for now it is fixed.
 const TICK_INTERVAL: Duration = Duration::from_secs(60);
+
+/// The neutral temperature whose ramp is the identity — a normal screen.
+pub const NEUTRAL_KELVIN: u32 = 6500;
 
 /// One active CRTC (a "screen" in XRandR terms) and the size of its gamma ramp.
 #[derive(Debug, Clone, Copy)]
@@ -74,7 +80,7 @@ pub fn hold_and_watch(kelvin: u32, terminate: &AtomicBool) -> Result<(), Box<dyn
     let mut last_verify = Instant::now();
     while !terminate.load(Ordering::Relaxed) {
         if !wait_for_change(
-            conn.stream().as_fd(),
+            &[conn.stream().as_fd()],
             TICK_INTERVAL.saturating_sub(last_verify.elapsed()),
         )? {
             continue;
@@ -91,14 +97,13 @@ pub fn hold_and_watch(kelvin: u32, terminate: &AtomicBool) -> Result<(), Box<dyn
     Ok(())
 }
 
-/// Runs the daemon: follows the sun. On each tick it recomputes the target from
-/// the timezone location and the current time, then applies it — which also
-/// overwrites any silent wipe. RandR changes re-apply the current target at
-/// once. Runs until `terminate` is set.
+/// Runs the daemon: applies whatever the shared state calls for and keeps it
+/// applied. Wakes on a D-Bus request (the waker eventfd), a RandR screen change,
+/// or the minute tick, then re-derives the target and applies it. Runs until
+/// `terminate` is set.
 pub fn daemon_loop(
-    mode: Mode,
-    day_temp: u32,
-    night_temp: u32,
+    state: &Shared,
+    waker: &Waker,
     terminate: &AtomicBool,
 ) -> Result<(), Box<dyn Error>> {
     let (conn, screen_num) = x11rb::connect(None)?;
@@ -106,27 +111,23 @@ pub fn daemon_loop(
 
     conn.randr_select_input(root, NotifyMask::SCREEN_CHANGE | NotifyMask::CRTC_CHANGE)?
         .check()?;
-
-    let mut target = sun_target(mode, day_temp, night_temp);
-    reapply(&conn, root, target)?;
-    println!("nightlightd: target {target} K");
+    apply_desired(&conn, root, state)?;
 
     let mut last_tick = Instant::now();
     while !terminate.load(Ordering::Relaxed) {
         if !wait_for_change(
-            conn.stream().as_fd(),
+            &[conn.stream().as_fd(), waker.as_fd()],
             TICK_INTERVAL.saturating_sub(last_tick.elapsed()),
         )? {
             continue;
         }
 
-        if drain_screen_changes(&conn)? {
-            reapply(&conn, root, target)?;
-        }
+        // A D-Bus request, a screen change, or the tick all mean the same
+        // thing: drain both wake sources and re-apply what the state now wants.
+        waker.drain();
+        drain_screen_changes(&conn)?;
+        apply_desired(&conn, root, state)?;
         if last_tick.elapsed() >= TICK_INTERVAL {
-            target = sun_target(mode, day_temp, night_temp);
-            reapply(&conn, root, target)?;
-            println!("nightlightd: target {target} K");
             last_tick = Instant::now();
         }
     }
@@ -137,10 +138,13 @@ pub fn daemon_loop(
 /// if a signal interrupted the wait (the caller should re-check `terminate`);
 /// `poll`/`ppoll` return EINTR on a signal even under SA_RESTART, so Ctrl+C
 /// wakes us at once and idle CPU stays ~0%.
-fn wait_for_change(fd: BorrowedFd<'_>, timeout: Duration) -> Result<bool, Box<dyn Error>> {
+fn wait_for_change(fds: &[BorrowedFd<'_>], timeout: Duration) -> Result<bool, Box<dyn Error>> {
     let timeout = duration_to_timespec(timeout);
-    let mut fds = [PollFd::new(&fd, PollFlags::IN)];
-    match poll(&mut fds, Some(&timeout)) {
+    let mut poll_fds: Vec<PollFd<'_>> = fds
+        .iter()
+        .map(|fd| PollFd::new(fd, PollFlags::IN))
+        .collect();
+    match poll(&mut poll_fds, Some(&timeout)) {
         Ok(_) => Ok(true),
         Err(error) if error == rustix::io::Errno::INTR => Ok(false),
         Err(error) => Err(Box::new(error)),
@@ -162,10 +166,25 @@ fn drain_screen_changes<C: Connection>(conn: &C) -> Result<bool, Box<dyn Error>>
     Ok(changed)
 }
 
-/// The target temperature for right now, given the mode (automatic or a manual
-/// location) and the day/night bounds.
-fn sun_target(mode: Mode, day_temp: u32, night_temp: u32) -> u32 {
-    resolve_temperature(mode, unix_now(), day_temp, night_temp)
+/// Applies the temperature the current state calls for, and records it as the
+/// current temperature (without holding the lock across the X writes).
+fn apply_desired<C: Connection>(conn: &C, root: u32, state: &Shared) -> Result<(), Box<dyn Error>> {
+    let target = desired_temp(&lock(state));
+    reapply(conn, root, target)?;
+    lock(state).current_temp = target;
+    Ok(())
+}
+
+/// The temperature the state calls for: neutral when disabled, the manual
+/// override when set, otherwise the sun-based target for right now.
+fn desired_temp(state: &State) -> u32 {
+    if !state.enabled {
+        NEUTRAL_KELVIN
+    } else if let Some(kelvin) = state.override_temp {
+        kelvin
+    } else {
+        resolve_temperature(state.mode, unix_now(), state.day_temp, state.night_temp)
+    }
 }
 
 /// Seconds since the Unix epoch, as an `f64` for the solar maths. Degrades to
