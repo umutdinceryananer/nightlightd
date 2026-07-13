@@ -31,6 +31,8 @@ build. Real friction beats guessed features.
 - 2026-07-__ — installed, enabled, running. day one.
 - 2026-07-13 — laptop battery died, rebooted, night light just gone. service was `enabled` but sitting there `inactive (dead)` — `graphical-session.target` never starts on this desktop, so nothing pulled the unit in. needed `journalctl` to even see it was dead. fixed the unit: `WantedBy=default.target`.
 - 2026-07-13 19.43 - şu an sarı filtre gözükmüyor.
+- 2026-07-13 21:01 — the 19.43 "no filter" scare was a false alarm. `--status` at 19.43 would have said `on, 6500 K` — correctly neutral, because it was still daytime. by 21:01 (past sunset) it was `on, 3250 K` and visibly warm. the real gap: **no ambient feedback**, so "correctly neutral because it's day" and "dead" look identical to me. enriched `--status` to show the *source* (auto/manual/off), the current *sun elevation*, and the *resolved location* — now one glance tells the two apart, and confirms the daemon's clock/timezone agree with reality.
+- 2026-07-13 21:01 — decision, not yet built: a **system-tray icon** (click the bottom-right corner, see on/off + K, toggle from a menu) is the leading M5 candidate. architecturally it's a *separate* thin D-Bus client — new dependency (SNI via `ksni`, or GTK/appindicator) and its own event loop, so it lives outside the daemon's single-threaded poll loop, never inside it. deferring to the end-of-week readout rather than derailing the dogfooding week to build it.
 
 
 ---
