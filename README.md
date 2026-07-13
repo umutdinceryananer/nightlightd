@@ -1,6 +1,14 @@
-# nightlightd
+```
+          _       __    __  ___       __    __      __
+   ____  (_)___ _/ /_  / /_/ (_)___ _/ /_  / /_____/ /
+  / __ \/ / __ `/ __ \/ __/ / / __ `/ __ \/ __/ __  /
+ / / / / / /_/ / / / / /_/ / / /_/ / / / / /_/ /_/ /
+/_/ /_/_/\__, /_/ /_/\__/_/_/\__, /_/ /_/\__/\__,_/
+        /____/              /____/
 
-**Zero-config screen colour temperature daemon for X11. Reads your timezone, refuses to run twice, survives suspend.**
+  zero-config screen colour temperature for X11
+  reads your timezone · refuses to run twice · survives suspend
+```
 
 > **Status: pre-alpha.** Nothing is implemented yet. There are no releases, and nothing here works. If you need a working night light today, install [gammastep](https://gitlab.com/chinstrap/gammastep) — it is the maintained successor to redshift and it is already in your distribution's repositories.
 
