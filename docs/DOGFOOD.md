@@ -29,7 +29,8 @@ build. Real friction beats guessed features.
 <!-- date — what happened. newest at the bottom. -->
 
 - 2026-07-__ — installed, enabled, running. day one.
-
+- 2026-07-13 — laptop battery died, rebooted, night light just gone. service was `enabled` but sitting there `inactive (dead)` — `graphical-session.target` never starts on this desktop, so nothing pulled the unit in. needed `journalctl` to even see it was dead. fixed the unit: `WantedBy=default.target`.
+- 2026-07-13 19.43 - şu an sarı filtre gözükmüyor.
 
 
 ---
