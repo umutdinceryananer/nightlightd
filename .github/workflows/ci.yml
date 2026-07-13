@@ -6,11 +6,26 @@ on:
   push:
   pull_request:
 
+# Least privilege: the workflow only reads the checked-out code.
+permissions:
+  contents: read
+
+# A newer push to the same ref supersedes the older, still-running check
+# instead of letting both burn CI minutes to completion.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      # Cache the cargo registry, git index, and target dir (keyed by
+      # Cargo.lock) so most runs reuse compiled dependencies instead of
+      # rebuilding the whole tree from scratch.
+      - uses: Swatinem/rust-cache@v2
 
       # ubuntu-latest ships rustup with a recent stable toolchain. Make sure
       # the two components we lint with are present (idempotent if they are).
