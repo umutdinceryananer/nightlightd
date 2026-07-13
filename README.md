@@ -10,7 +10,10 @@
   reads your timezone · refuses to run twice · survives suspend
 ```
 
-> **Status: pre-alpha.** Nothing is implemented yet. There are no releases, and nothing here works. If you need a working night light today, install [gammastep](https://gitlab.com/chinstrap/gammastep) — it is the maintained successor to redshift and it is already in your distribution's repositories.
+[![CI](https://github.com/umutdinceryananer/nightlightd/actions/workflows/ci.yml/badge.svg)](https://github.com/umutdinceryananer/nightlightd/actions/workflows/ci.yml)
+[![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
+
+> **Status: v0.1-alpha.** The daemon works — timezone-based location, a single-instance D-Bus lock, gamma ramps over XRandR, re-apply on resume from suspend, and a `--status` readout. Milestones M0–M4 are done; it is now in a week of dogfooding. There are no packaged releases yet, so if you need a night light you can lean on today, install [gammastep](https://gitlab.com/chinstrap/gammastep) — this is not that yet.
 
 ---
 
@@ -72,11 +75,11 @@ Tracked in [`docs/ISSUES.md`](docs/ISSUES.md).
 | | | |
 |---|---|---|
 | M-1 | Upstream fix to gammastep first | not started |
-| M0 | Skeleton | not started |
-| M1 | Core library — colour, sun, timezone | not started |
-| M2 | X11 backend | not started |
-| M3 | Daemon and event loop | not started |
-| M4 | DBus, CLI, systemd | not started |
+| M0 | Skeleton | ✅ done |
+| M1 | Core library — colour, sun, timezone | ✅ done |
+| M2 | X11 backend | ✅ done |
+| M3 | Daemon and event loop | ✅ done |
+| M4 | DBus, CLI, systemd, suspend | ✅ done |
 | M5 | Tray icon and settings | not started |
 | M6 | Packaging and release | not started |
 
