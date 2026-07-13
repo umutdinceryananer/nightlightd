@@ -4,6 +4,8 @@
 use zbus::blocking::Connection;
 use zbus::proxy;
 
+use crate::status::Status;
+
 /// A blocking proxy for the daemon's interface. The `proxy` macro generates
 /// `DaemonProxyBlocking` from these method signatures.
 #[proxy(
@@ -16,7 +18,7 @@ trait Daemon {
     fn set_enabled(&self, enabled: bool) -> zbus::Result<()>;
     fn toggle(&self) -> zbus::Result<()>;
     fn set_mode(&self, mode: &str) -> zbus::Result<()>;
-    fn get_status(&self) -> zbus::Result<(bool, u32)>;
+    fn get_status(&self) -> zbus::Result<Status>;
 }
 
 /// What the client was asked to do.
@@ -43,10 +45,53 @@ pub fn send(request: Request) -> zbus::Result<()> {
         Request::SetEnabled(enabled) => proxy.set_enabled(enabled),
         Request::Auto => proxy.set_mode("auto"),
         Request::Status => {
-            let (enabled, temperature) = proxy.get_status()?;
-            let state = if enabled { "on" } else { "off" };
-            println!("nightlightd: {state}, {temperature} K");
+            print_status(&proxy.get_status()?);
             Ok(())
         }
+    }
+}
+
+/// Prints the daemon snapshot: the headline on the first line, then the details
+/// worth eyeballing indented under it.
+fn print_status(status: &Status) {
+    let onoff = if status.enabled { "on" } else { "off" };
+    println!("nightlightd: {onoff}, {} K", status.temperature);
+    println!("  source: {}", status.source);
+    if status.has_location {
+        println!(
+            "  sun:    {:+.1}° ({})",
+            status.elevation,
+            sun_phase(status.elevation)
+        );
+        println!(
+            "  place:  {:.2}, {:.2} (resolved)",
+            status.latitude, status.longitude
+        );
+    }
+}
+
+/// Names the part of the day for a solar elevation, matching the transition
+/// curve's thresholds (full day at +3°, full night at -6°).
+fn sun_phase(elevation: f64) -> &'static str {
+    if elevation >= 3.0 {
+        "day"
+    } else if elevation <= -6.0 {
+        "night"
+    } else {
+        "transition"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sun_phase_names_each_band() {
+        assert_eq!(sun_phase(45.0), "day");
+        assert_eq!(sun_phase(3.0), "day"); // exact endpoint
+        assert_eq!(sun_phase(0.0), "transition");
+        assert_eq!(sun_phase(-6.0), "night"); // exact endpoint
+        assert_eq!(sun_phase(-20.0), "night");
     }
 }

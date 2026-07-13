@@ -10,10 +10,14 @@ use zbus::blocking::connection::Builder;
 use zbus::fdo::{RequestNameFlags, RequestNameReply};
 use zbus::interface;
 
+use nightlightd_core::location::location_from_timezone;
 use nightlightd_core::mode::Mode;
+use nightlightd_core::solar::solar_elevation;
 
-use crate::state::{Shared, lock};
+use crate::state::{Shared, State, lock};
+use crate::status::Status;
 use crate::waker::Waker;
+use crate::x11::unix_now;
 
 const OBJECT_PATH: &str = "/org/nightlightd/Daemon";
 const WELL_KNOWN_NAME: &str = "org.nightlightd.Daemon";
@@ -63,10 +67,59 @@ impl Daemon {
         self.waker.wake();
     }
 
-    /// Report `(enabled, current_temperature)`.
-    fn get_status(&self) -> (bool, u32) {
+    /// Report a full snapshot: on/off, the applied temperature, what is driving
+    /// it, and where the sun is now (a check that the clock and timezone agree
+    /// with reality).
+    fn get_status(&self) -> Status {
         let state = lock(&self.state);
-        (state.enabled, state.current_temp)
+        let source = describe_source(&state);
+        match location_of(state.mode) {
+            Some((latitude, longitude)) => Status {
+                enabled: state.enabled,
+                temperature: state.current_temp,
+                source,
+                elevation: solar_elevation(latitude, longitude, unix_now()),
+                has_location: true,
+                latitude,
+                longitude,
+            },
+            None => Status {
+                enabled: state.enabled,
+                temperature: state.current_temp,
+                source,
+                elevation: 0.0,
+                has_location: false,
+                latitude: 0.0,
+                longitude: 0.0,
+            },
+        }
+    }
+}
+
+/// Describes what is currently driving the temperature, for the status readout:
+/// off wins over a manual override, which wins over the sun-following mode.
+fn describe_source(state: &State) -> String {
+    if !state.enabled {
+        "off (screen left neutral)".to_string()
+    } else if let Some(kelvin) = state.override_temp {
+        format!("manual override ({kelvin} K)")
+    } else {
+        match state.mode {
+            Mode::Automatic => "auto (following the sun)".to_string(),
+            Mode::ManualLocation { .. } => "auto (manual location)".to_string(),
+            Mode::Fixed(kelvin) => format!("fixed ({kelvin} K)"),
+        }
+    }
+}
+
+/// The location the daemon would use for the sun, if any: the given coordinates
+/// in manual mode, the timezone's coordinate in automatic mode, and nothing in
+/// fixed mode (where the sun is not consulted).
+fn location_of(mode: Mode) -> Option<(f64, f64)> {
+    match mode {
+        Mode::Fixed(_) => None,
+        Mode::ManualLocation { lat, lon } => Some((lat, lon)),
+        Mode::Automatic => location_from_timezone(),
     }
 }
 
@@ -87,5 +140,57 @@ pub fn serve(state: Shared, waker: Waker) -> zbus::Result<Option<Connection>> {
         // this either as a non-primary reply or as the NameTaken error.
         Ok(_) | Err(zbus::Error::NameTaken) => Ok(None),
         Err(other) => Err(other),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn state(enabled: bool, override_temp: Option<u32>, mode: Mode) -> State {
+        State {
+            enabled,
+            override_temp,
+            mode,
+            day_temp: 6500,
+            night_temp: 3500,
+            current_temp: 6500,
+        }
+    }
+
+    #[test]
+    fn source_off_wins_over_everything() {
+        let s = state(false, Some(2800), Mode::Automatic);
+        assert_eq!(describe_source(&s), "off (screen left neutral)");
+    }
+
+    #[test]
+    fn source_override_wins_over_mode() {
+        let s = state(true, Some(2800), Mode::Automatic);
+        assert_eq!(describe_source(&s), "manual override (2800 K)");
+    }
+
+    #[test]
+    fn source_describes_each_mode() {
+        assert_eq!(
+            describe_source(&state(true, None, Mode::Automatic)),
+            "auto (following the sun)"
+        );
+        assert_eq!(
+            describe_source(&state(true, None, Mode::Fixed(2800))),
+            "fixed (2800 K)"
+        );
+    }
+
+    #[test]
+    fn location_is_none_for_fixed_mode() {
+        assert_eq!(location_of(Mode::Fixed(2800)), None);
+        assert_eq!(
+            location_of(Mode::ManualLocation {
+                lat: 39.93,
+                lon: 32.85
+            }),
+            Some((39.93, 32.85))
+        );
     }
 }

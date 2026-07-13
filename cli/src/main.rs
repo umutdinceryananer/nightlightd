@@ -8,6 +8,7 @@ mod client;
 mod config;
 mod dbus;
 mod state;
+mod status;
 mod suspend;
 mod waker;
 mod x11;

@@ -161,7 +161,7 @@ fn desired_temp(state: &State) -> u32 {
 
 /// Seconds since the Unix epoch, as an `f64` for the solar maths. Degrades to
 /// `0.0` rather than panicking if the clock is somehow before the epoch.
-fn unix_now() -> f64 {
+pub(crate) fn unix_now() -> f64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0.0, |elapsed| elapsed.as_secs_f64())
