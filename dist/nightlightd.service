@@ -24,5 +24,8 @@ PartOf=graphical-session.target
 ExecStart=%h/.cargo/bin/nightlightd --daemon
 Restart=on-failure
 
+# graphical-session.target is not started by every desktop (notably XFCE/Mint,
+# our audience), so an enabled unit would never autostart. default.target is
+# always reached on login; Restart=on-failure retries until the X server is up.
 [Install]
-WantedBy=graphical-session.target
+WantedBy=default.target
