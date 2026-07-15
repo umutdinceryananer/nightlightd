@@ -1,0 +1,12 @@
+# The tray icon (#23): a thin client, a separate crate on purpose.
+#
+# It lives outside `cli` so the daemon never links the GUI stack: if the tray
+# dies, the filter lives. It holds no state — it asks the daemon over D-Bus.
+[package]
+name = "nightlight-tray"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ksni = { version = "0.3.6", features = ["blocking"] }

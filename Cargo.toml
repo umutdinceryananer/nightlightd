@@ -6,7 +6,7 @@
 # what lets `core` be tested without a display.
 [workspace]
 resolver = "2"
-members = ["core", "cli"]
+members = ["core", "cli", "tray"]
 
 # Fields shared by every crate in the workspace. Each crate opts in with
 # `<field>.workspace = true`, so the version and edition live in one place.
