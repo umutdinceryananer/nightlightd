@@ -129,6 +129,12 @@ impl ksni::Tray for NightLight {
                 ..Default::default()
             }
             .into(),
+            StandardItem {
+                label: "Settings…".into(),
+                activate: Box::new(|_| open_panel()),
+                ..Default::default()
+            }
+            .into(),
             MenuItem::Separator,
             StandardItem {
                 label: "Quit".into(),
@@ -139,6 +145,18 @@ impl ksni::Tray for NightLight {
             .into(),
         ]
     }
+}
+
+/// Launches the settings panel. Looks for `nightlight-panel` next to this
+/// binary first (they install together, so this survives an autostart PATH that
+/// lacks `~/.cargo/bin`), then falls back to a plain PATH lookup. Errors are
+/// swallowed — a failed launch must not take the tray down.
+fn open_panel() {
+    let beside_us = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join("nightlight-panel")));
+    let panel = beside_us.unwrap_or_else(|| std::path::PathBuf::from("nightlight-panel"));
+    let _ = std::process::Command::new(panel).spawn();
 }
 
 fn main() {
