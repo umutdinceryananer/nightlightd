@@ -14,7 +14,7 @@ mod daemon;
 use std::time::Duration;
 
 use ksni::blocking::TrayMethods;
-use ksni::menu::StandardItem;
+use ksni::menu::{CheckmarkItem, StandardItem};
 use ksni::{MenuItem, ToolTip};
 
 use crate::daemon::{Client, Status};
@@ -47,6 +47,25 @@ impl NightLight {
     fn follow_the_sun(&mut self) {
         self.client.follow_the_sun();
         self.refresh();
+    }
+
+    /// Freezes the screen at the temperature it shows now, leaving the sun.
+    /// Does nothing when the daemon is unreachable (no temperature to hold).
+    fn hold(&mut self) {
+        if let Some(kelvin) = self.status.as_ref().map(|status| status.temperature) {
+            self.client.hold(kelvin);
+            self.refresh();
+        }
+    }
+
+    /// Flips sun-tracking for the "Automatic" checkbox: if it is currently
+    /// following, freeze where it is; otherwise resume following the sun.
+    fn toggle_follow(&mut self) {
+        if self.status.as_ref().is_some_and(|status| status.following) {
+            self.hold();
+        } else {
+            self.follow_the_sun();
+        }
     }
 }
 
@@ -103,9 +122,10 @@ impl ksni::Tray for NightLight {
                 ..Default::default()
             }
             .into(),
-            StandardItem {
-                label: "Follow the sun".into(),
-                activate: Box::new(|this: &mut Self| this.follow_the_sun()),
+            CheckmarkItem {
+                label: "Automatic".into(),
+                checked: self.status.as_ref().is_some_and(|status| status.following),
+                activate: Box::new(|this: &mut Self| this.toggle_follow()),
                 ..Default::default()
             }
             .into(),

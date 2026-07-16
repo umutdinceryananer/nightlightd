@@ -22,6 +22,7 @@ pub struct Status {
     pub has_location: bool,
     pub latitude: f64,
     pub longitude: f64,
+    pub following: bool,
 }
 
 impl Status {
@@ -67,6 +68,7 @@ trait Daemon {
     fn get_status(&self) -> zbus::Result<Status>;
     fn toggle(&self) -> zbus::Result<()>;
     fn set_enabled(&self, enabled: bool) -> zbus::Result<()>;
+    fn set_temperature(&self, kelvin: u32) -> zbus::Result<()>;
     fn set_mode(&self, mode: &str) -> zbus::Result<()>;
 }
 
@@ -103,5 +105,11 @@ impl Client {
     pub fn follow_the_sun(&self) {
         let _ = self.proxy.set_enabled(true);
         let _ = self.proxy.set_mode("auto");
+    }
+
+    /// Pins `kelvin`, freezing the screen there and leaving the sun — what
+    /// unticking "Automatic" does. Errors are swallowed like the rest.
+    pub fn hold(&self, kelvin: u32) {
+        let _ = self.proxy.set_temperature(kelvin);
     }
 }
