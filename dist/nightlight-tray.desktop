@@ -1,0 +1,32 @@
+# nightlightd tray icon — XDG autostart entry (#23).
+#
+# The tray is a GUI client, so it starts with the desktop session (which gives
+# it DISPLAY and the session bus), not with systemd. XDG autostart is the
+# desktop-native mechanism and runs where graphical-session.target does not
+# (notably XFCE/Mint, where the daemon's own unit had to fall back to
+# default.target).
+#
+# .desktop Exec has no field code for the home directory, so the install step
+# below writes the absolute path in.
+#
+# Install:
+#   cargo install --path tray        # -> ~/.cargo/bin/nightlight-tray
+#   mkdir -p ~/.config/autostart
+#   sed "s|Exec=nightlight-tray|Exec=$HOME/.cargo/bin/nightlight-tray|" \
+#       dist/nightlight-tray.desktop > ~/.config/autostart/nightlight-tray.desktop
+#
+# It appears on the next login. To start it now without logging out:
+#   ~/.cargo/bin/nightlight-tray &
+#
+# The tray needs the daemon for anything to happen, but it starts fine without
+# it: the icon reads "daemon not running" until the daemon appears.
+
+[Desktop Entry]
+Type=Application
+Name=nightlightd tray
+Comment=Tray icon for the nightlightd screen colour temperature daemon
+Exec=nightlight-tray
+Icon=night-light-symbolic
+Terminal=false
+Categories=Utility;
+X-GNOME-Autostart-enabled=true
