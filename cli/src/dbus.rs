@@ -73,6 +73,9 @@ impl Daemon {
     fn get_status(&self) -> Status {
         let state = lock(&self.state);
         let source = describe_source(&state);
+        // Actively tracking the sun: on, no manual override, not a fixed temp.
+        let following =
+            state.enabled && state.override_temp.is_none() && !matches!(state.mode, Mode::Fixed(_));
         match location_of(state.mode) {
             Some((latitude, longitude)) => Status {
                 enabled: state.enabled,
@@ -82,6 +85,7 @@ impl Daemon {
                 has_location: true,
                 latitude,
                 longitude,
+                following,
             },
             None => Status {
                 enabled: state.enabled,
@@ -91,6 +95,7 @@ impl Daemon {
                 has_location: false,
                 latitude: 0.0,
                 longitude: 0.0,
+                following,
             },
         }
     }

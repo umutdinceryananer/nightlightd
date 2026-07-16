@@ -30,4 +30,8 @@ pub struct Status {
     pub latitude: f64,
     /// Resolved longitude in degrees (valid only when `has_location`).
     pub longitude: f64,
+    /// Whether the filter is actively tracking the sun right now: on, no manual
+    /// override, and not a fixed temperature. This is what the tray's
+    /// "Automatic" checkbox reflects.
+    pub following: bool,
 }
