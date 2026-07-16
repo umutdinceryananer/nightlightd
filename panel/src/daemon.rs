@@ -25,6 +25,8 @@ pub struct Status {
     pub latitude: f64,
     pub longitude: f64,
     pub following: bool,
+    pub day_temp: u32,
+    pub night_temp: u32,
 }
 
 /// The slice of the daemon interface the panel uses. `zbus::proxy` generates
@@ -39,6 +41,8 @@ trait Daemon {
     fn set_temperature(&self, kelvin: u32) -> zbus::Result<()>;
     fn set_enabled(&self, enabled: bool) -> zbus::Result<()>;
     fn set_mode(&self, mode: &str) -> zbus::Result<()>;
+    fn set_day_temp(&self, kelvin: u32) -> zbus::Result<()>;
+    fn set_night_temp(&self, kelvin: u32) -> zbus::Result<()>;
 }
 
 /// A live handle to the daemon: the session-bus connection plus a proxy.
@@ -71,5 +75,17 @@ impl Client {
     pub fn follow_the_sun(&self) {
         let _ = self.proxy.set_enabled(true);
         let _ = self.proxy.set_mode("auto");
+    }
+
+    /// Sets the daytime target temperature (the top of the curve); persisted by
+    /// the daemon. Errors swallowed.
+    pub fn set_day_temp(&self, kelvin: u32) {
+        let _ = self.proxy.set_day_temp(kelvin);
+    }
+
+    /// Sets the night target temperature (the bottom of the curve); persisted by
+    /// the daemon. Errors swallowed.
+    pub fn set_night_temp(&self, kelvin: u32) {
+        let _ = self.proxy.set_night_temp(kelvin);
     }
 }

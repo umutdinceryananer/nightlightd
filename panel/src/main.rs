@@ -5,6 +5,8 @@
 //! hands control to the sun again. Drawn with egui (pure Rust), whose canvas
 //! will host the day/night curve in a later step.
 
+mod autostart;
+mod curve;
 mod daemon;
 
 use eframe::egui;
@@ -19,10 +21,22 @@ const NEUTRAL: u32 = 6500;
 /// Where the slider starts before the user has touched it.
 const START_KELVIN: u32 = 2800;
 
-/// The panel's whole state: the daemon connection and the slider's value.
+/// The figlet "slant" wordmark, the same one the README uses, embedded at
+/// compile time so there is nothing to escape.
+const WORDMARK: &str = include_str!("wordmark.txt");
+
+/// The panel's whole state: the daemon connection, the manual-warm slider, the
+/// day/night curve anchors, the start-at-login flag, and the local UTC offset.
 struct Panel {
     client: Client,
     kelvin: u32,
+    day_temp: u32,
+    night_temp: u32,
+    /// Whether the anchors have been seeded from the daemon yet (once, at the
+    /// first status we receive).
+    anchors_synced: bool,
+    start_at_login: bool,
+    offset_secs: i32,
 }
 
 impl eframe::App for Panel {
@@ -43,7 +57,53 @@ impl eframe::App for Panel {
             self.kelvin = status.temperature.clamp(WARMEST, NEUTRAL);
         }
 
-        ui.heading("nightlightd");
+        // Seed the day/night sliders from the daemon once; after that they are
+        // the source of truth (each change is sent and persisted).
+        if !self.anchors_synced
+            && let Some(status) = &status
+        {
+            self.day_temp = status.day_temp;
+            self.night_temp = status.night_temp;
+            self.anchors_synced = true;
+        }
+
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new(WORDMARK.trim_end_matches('\n'))
+                    .monospace()
+                    .size(10.0)
+                    .color(egui::Color32::from_rgb(255, 170, 90)),
+            )
+            .wrap_mode(egui::TextWrapMode::Extend),
+        );
+        ui.add_space(8.0);
+        curve::show(ui, status.as_ref(), self.offset_secs);
+        ui.add_space(10.0);
+
+        // The two anchors that shape the curve; the daemon persists each change.
+        if ui
+            .add(
+                egui::Slider::new(&mut self.day_temp, 4000..=6500)
+                    .suffix(" K")
+                    .text("Daytime"),
+            )
+            .changed()
+        {
+            self.client.set_day_temp(self.day_temp);
+        }
+        if ui
+            .add(
+                egui::Slider::new(&mut self.night_temp, 1500..=4500)
+                    .suffix(" K")
+                    .text("Nighttime"),
+            )
+            .changed()
+        {
+            self.client.set_night_temp(self.night_temp);
+        }
+
+        ui.add_space(10.0);
+        ui.separator();
         ui.add_space(8.0);
         ui.label("Warm the screen by hand — drag left for warmer:");
         ui.add_space(4.0);
@@ -60,11 +120,42 @@ impl eframe::App for Panel {
             self.client.follow_the_sun();
         }
 
+        ui.add_space(8.0);
+        ui.separator();
+        ui.add_space(4.0);
+        // Enables/disables the daemon's systemd user service. The state was read
+        // once at startup; a change writes it through immediately.
+        if ui
+            .checkbox(&mut self.start_at_login, "Start at login")
+            .changed()
+        {
+            autostart::set(self.start_at_login);
+        }
+
         // egui is reactive, so ask for a repaint each second to keep the slider
         // tracking the sun even when the window sits idle.
         ui.ctx()
             .request_repaint_after(std::time::Duration::from_secs(1));
     }
+}
+
+/// The local clock's offset from UTC in seconds, read once from `date +%z`
+/// (e.g. `+0300` → 10800). Zero on any failure — the curve then reads in UTC,
+/// which is wrong by the offset but never crashes.
+fn local_offset_seconds() -> i32 {
+    let output = std::process::Command::new("date").arg("+%z").output();
+    let text = output
+        .ok()
+        .and_then(|out| String::from_utf8(out.stdout).ok())
+        .unwrap_or_default();
+    let text = text.trim();
+    if text.len() < 5 {
+        return 0;
+    }
+    let sign = if text.starts_with('-') { -1 } else { 1 };
+    let hours: i32 = text[1..3].parse().unwrap_or(0);
+    let minutes: i32 = text[3..5].parse().unwrap_or(0);
+    sign * (hours * 3600 + minutes * 60)
 }
 
 fn main() -> eframe::Result<()> {
@@ -78,7 +169,7 @@ fn main() -> eframe::Result<()> {
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([380.0, 190.0])
+            .with_inner_size([460.0, 520.0])
             .with_resizable(false),
         ..Default::default()
     };
@@ -89,6 +180,11 @@ fn main() -> eframe::Result<()> {
             Ok(Box::new(Panel {
                 client,
                 kelvin: START_KELVIN,
+                day_temp: 6500,
+                night_temp: 4500,
+                anchors_synced: false,
+                start_at_login: autostart::enabled(),
+                offset_secs: local_offset_seconds(),
             }))
         }),
     )

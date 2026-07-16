@@ -12,5 +12,6 @@ license.workspace = true
 
 [dependencies]
 eframe = "0.35.0"
+nightlightd-core = { version = "0.1.0", path = "../core" }
 serde = { version = "1.0.228", features = ["derive"] }
 zbus = "5"
