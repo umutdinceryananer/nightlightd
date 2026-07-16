@@ -10,3 +10,5 @@ license.workspace = true
 
 [dependencies]
 ksni = { version = "0.3.6", features = ["blocking"] }
+serde = { version = "1.0.228", features = ["derive"] }
+zbus = "5.17.0"

@@ -576,6 +576,8 @@ name = "nightlight-tray"
 version = "0.1.0"
 dependencies = [
  "ksni",
+ "serde",
+ "zbus",
 ]
 
 [[package]]
