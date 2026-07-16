@@ -134,7 +134,15 @@ fn main() {
     };
 
     let status = client.status();
-    let handle = match (NightLight { client, status }).spawn() {
+    // `assume_sni_available(true)`: at login the tray autostarts before the
+    // panel's StatusNotifierWatcher exists, so a plain spawn() fails on the
+    // missing watcher and the icon never appears (confirmed in
+    // ~/.xsession-errors). With this, ksni treats the absent watcher as a soft
+    // error and registers the icon once the panel's tray comes online.
+    let handle = match (NightLight { client, status })
+        .assume_sni_available(true)
+        .spawn()
+    {
         Ok(handle) => handle,
         Err(error) => {
             eprintln!("nightlight-tray: cannot show the tray icon: {error}");
