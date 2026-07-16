@@ -1,10 +1,10 @@
 //! The tray icon (#23): an icon next to the clock, for people who will not
 //! open a terminal.
 //!
-//! It is a *thin client* and holds no state of its own — the daemon owns
-//! everything; this only asks and displays. It is a separate binary in a
-//! separate crate on purpose: the daemon must never link the GUI stack, so if
-//! the tray dies, the filter lives.
+//! It is a *thin client* and holds no state of its own beyond the last status
+//! it read — the daemon owns everything; this asks, displays, and forwards
+//! clicks. It is a separate binary in a separate crate on purpose: the daemon
+//! must never link the GUI stack, so if the tray dies, the filter lives.
 //!
 //! Speaks StatusNotifierItem (SNI) over D-Bus via `ksni`, which XFCE's own
 //! systray already hosts — no panel plugin for the user to install.
@@ -14,18 +14,40 @@ mod daemon;
 use std::time::Duration;
 
 use ksni::blocking::TrayMethods;
+use ksni::menu::StandardItem;
+use ksni::{MenuItem, ToolTip};
 
-use crate::daemon::Status;
+use crate::daemon::{Client, Status};
 
-/// How often to re-read the daemon's status for the hover text. The temperature
-/// only moves once a minute, so a few seconds keeps the tooltip fresh without
-/// busy-polling.
+/// How often to re-read the daemon's status. The temperature only moves once a
+/// minute, so a few seconds keeps the display fresh without busy-polling.
 const REFRESH: Duration = Duration::from_secs(5);
 
-/// The tray icon. Holds only the last status it read — the daemon is the source
-/// of truth; `None` means it could not be reached.
+/// The tray icon. Owns the daemon connection and the last status it read; all
+/// daemon access happens through here, on ksni's own thread.
 struct NightLight {
+    client: Client,
     status: Option<Status>,
+}
+
+impl NightLight {
+    /// Re-reads the daemon and stores the result (`None` when unreachable).
+    fn refresh(&mut self) {
+        self.status = self.client.status();
+    }
+
+    /// Toggles the filter, then refreshes so the icon and tooltip update at
+    /// once instead of on the next poll.
+    fn toggle(&mut self) {
+        self.client.toggle();
+        self.refresh();
+    }
+
+    /// Returns the daemon to following the sun, then refreshes.
+    fn follow_the_sun(&mut self) {
+        self.client.follow_the_sun();
+        self.refresh();
+    }
 }
 
 impl ksni::Tray for NightLight {
@@ -38,26 +60,64 @@ impl ksni::Tray for NightLight {
     }
 
     /// A themed icon name rather than a bundled image, so the panel draws it in
-    /// its own style. `night-light-symbolic` is Adwaita's, and the mainstream
-    /// themes inherit from Adwaita. If some theme lacks it the icon goes blank,
-    /// in which case we ship our own pixmap instead.
+    /// its own style. Shows the disabled variant when the filter is off (or the
+    /// daemon is unreachable), so a left click visibly changes the icon. Both
+    /// names are Adwaita's, which the mainstream themes inherit from.
     fn icon_name(&self) -> String {
-        "night-light-symbolic".into()
+        let on = self.status.as_ref().is_some_and(|status| status.enabled);
+        if on {
+            "night-light-symbolic".into()
+        } else {
+            "night-light-disabled-symbolic".into()
+        }
     }
 
-    /// The hover text: on/off and the applied temperature, then what is driving
-    /// it. Says so plainly when the daemon is not running.
-    fn tool_tip(&self) -> ksni::ToolTip {
+    /// Left click toggles the filter — the one action people want most.
+    fn activate(&mut self, _x: i32, _y: i32) {
+        self.toggle();
+    }
+
+    /// The hover text: the tray's version of `--status`.
+    fn tool_tip(&self) -> ToolTip {
         let description = match &self.status {
             Some(status) => status.describe(),
             None => "daemon not running".into(),
         };
-        ksni::ToolTip {
+        ToolTip {
             title: "nightlightd".into(),
             description,
             icon_name: String::new(),
             icon_pixmap: Vec::new(),
         }
+    }
+
+    /// Right click: toggle, return to the sun, and quit. The toggle label
+    /// reflects the current state so it reads as an action, not a question.
+    fn menu(&self) -> Vec<MenuItem<Self>> {
+        let on = self.status.as_ref().is_some_and(|status| status.enabled);
+        let toggle_label = if on { "Turn off" } else { "Turn on" };
+        vec![
+            StandardItem {
+                label: toggle_label.into(),
+                activate: Box::new(|this: &mut Self| this.toggle()),
+                ..Default::default()
+            }
+            .into(),
+            StandardItem {
+                label: "Follow the sun".into(),
+                activate: Box::new(|this: &mut Self| this.follow_the_sun()),
+                ..Default::default()
+            }
+            .into(),
+            MenuItem::Separator,
+            StandardItem {
+                label: "Quit".into(),
+                icon_name: "application-exit".into(),
+                activate: Box::new(|_| std::process::exit(0)),
+                ..Default::default()
+            }
+            .into(),
+        ]
     }
 }
 
@@ -65,7 +125,7 @@ fn main() {
     // The bus connection is what must exist; the daemon may come and go, and
     // each read reports that. If even the session bus is absent there is no
     // desktop to draw into, so there is nothing useful to do.
-    let client = match daemon::Client::connect() {
+    let client = match Client::connect() {
         Ok(client) => client,
         Err(error) => {
             eprintln!("nightlight-tray: cannot reach the session bus: {error}");
@@ -73,11 +133,8 @@ fn main() {
         }
     };
 
-    let handle = match (NightLight {
-        status: client.status(),
-    })
-    .spawn()
-    {
+    let status = client.status();
+    let handle = match (NightLight { client, status }).spawn() {
         Ok(handle) => handle,
         Err(error) => {
             eprintln!("nightlight-tray: cannot show the tray icon: {error}");
@@ -85,11 +142,11 @@ fn main() {
         }
     };
 
-    // Re-read the daemon and push the fresh status into the icon. ksni serves
-    // the icon from its own thread; this one just keeps it current.
+    // Keep the displayed status fresh. ksni serves the icon from its own
+    // thread; the read happens inside `update`, on that thread, so the daemon
+    // connection has a single owner.
     loop {
         std::thread::sleep(REFRESH);
-        let status = client.status();
-        handle.update(|tray: &mut NightLight| tray.status = status.clone());
+        handle.update(NightLight::refresh);
     }
 }

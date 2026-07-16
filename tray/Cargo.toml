@@ -9,6 +9,11 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-ksni = { version = "0.3.6", features = ["blocking"] }
+# The blocking API, driven by async-io — NOT tokio. ksni's default `tokio`
+# feature drives its blocking `spawn` with a nested tokio runtime, which panics
+# with "Cannot start a runtime from within a runtime". The two backends are
+# mutually exclusive; async-io is the one that works with the blocking API and
+# keeps tokio out of the tree entirely.
+ksni = { version = "0.3.6", default-features = false, features = ["blocking", "async-io"] }
 serde = { version = "1.0.228", features = ["derive"] }
 zbus = "5.17.0"

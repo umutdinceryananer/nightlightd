@@ -65,6 +65,9 @@ fn sun_phase(elevation: f64) -> &'static str {
 )]
 trait Daemon {
     fn get_status(&self) -> zbus::Result<Status>;
+    fn toggle(&self) -> zbus::Result<()>;
+    fn set_enabled(&self, enabled: bool) -> zbus::Result<()>;
+    fn set_mode(&self, mode: &str) -> zbus::Result<()>;
 }
 
 /// A live handle to the daemon: the session-bus connection plus a proxy.
@@ -85,5 +88,20 @@ impl Client {
     /// The current status, or `None` when the daemon cannot be reached.
     pub fn status(&self) -> Option<Status> {
         self.proxy.get_status().ok()
+    }
+
+    /// Flips the filter on or off. Errors (a stopped daemon) are swallowed —
+    /// the click must never crash the tray; the next status read shows the
+    /// real state.
+    pub fn toggle(&self) {
+        let _ = self.proxy.toggle();
+    }
+
+    /// Returns to following the sun: turns the filter on and clears any manual
+    /// override. Enabling matters when the filter was off — "follow the sun"
+    /// with nothing on screen would be a no-op that looks broken.
+    pub fn follow_the_sun(&self) {
+        let _ = self.proxy.set_enabled(true);
+        let _ = self.proxy.set_mode("auto");
     }
 }
