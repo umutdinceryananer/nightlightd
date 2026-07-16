@@ -1,0 +1,16 @@
+# The control panel (#24, reimagined): an f.lux-style slider to warm the screen
+# by hand — a separate crate and process, like the tray. The daemon owns the
+# screen; this only sends set_temperature over D-Bus as you drag.
+#
+# Uses egui/eframe: pure Rust (no libgtk to install), and its immediate-mode
+# canvas is what makes the day/night curve easy to draw later.
+[package]
+name = "nightlight-panel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+eframe = "0.35.0"
+serde = { version = "1.0.228", features = ["derive"] }
+zbus = "5"
