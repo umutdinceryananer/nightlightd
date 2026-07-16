@@ -8,10 +8,10 @@
 use std::path::PathBuf;
 
 use nightlightd_core::mode::Mode;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// User settings, all optional. Missing fields take the defaults below.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Config {
     /// Daytime temperature (kelvin).
@@ -19,8 +19,11 @@ pub struct Config {
     /// Night temperature (kelvin).
     pub night_temp: u32,
     /// Manual latitude in degrees; pins the location instead of the timezone.
+    /// Omitted from the written file when absent (TOML has no null).
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub latitude: Option<f64>,
     /// Manual longitude in degrees; used together with `latitude`.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub longitude: Option<f64>,
 }
 
@@ -62,6 +65,20 @@ pub fn load() -> Config {
             Config::default()
         }
     }
+}
+
+/// Writes `config` to the config file, creating the directory if needed. Used
+/// when the settings panel changes a value so it survives a restart. Degrades
+/// to an error the caller can log rather than panicking.
+pub fn save(config: &Config) -> std::io::Result<()> {
+    let Some(path) = config_path() else {
+        return Ok(());
+    };
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let text = toml::to_string(config).map_err(std::io::Error::other)?;
+    std::fs::write(path, text)
 }
 
 /// `$XDG_CONFIG_HOME/nightlightd/config.toml`, or `~/.config/...` as a fallback.

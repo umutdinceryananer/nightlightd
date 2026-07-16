@@ -14,6 +14,7 @@ use nightlightd_core::location::location_from_timezone;
 use nightlightd_core::mode::Mode;
 use nightlightd_core::solar::solar_elevation;
 
+use crate::config::{self, Config};
 use crate::state::{Shared, State, lock};
 use crate::status::Status;
 use crate::waker::Waker;
@@ -67,6 +68,22 @@ impl Daemon {
         self.waker.wake();
     }
 
+    /// Set the daytime target temperature (kelvin) — the top of the automatic
+    /// curve — then persist it and re-apply.
+    fn set_day_temp(&self, kelvin: u32) {
+        lock(&self.state).day_temp = kelvin;
+        persist(&self.state);
+        self.waker.wake();
+    }
+
+    /// Set the night target temperature (kelvin) — the bottom of the automatic
+    /// curve — then persist it and re-apply.
+    fn set_night_temp(&self, kelvin: u32) {
+        lock(&self.state).night_temp = kelvin;
+        persist(&self.state);
+        self.waker.wake();
+    }
+
     /// Report a full snapshot: on/off, the applied temperature, what is driving
     /// it, and where the sun is now (a check that the clock and timezone agree
     /// with reality).
@@ -86,6 +103,8 @@ impl Daemon {
                 latitude,
                 longitude,
                 following,
+                day_temp: state.day_temp,
+                night_temp: state.night_temp,
             },
             None => Status {
                 enabled: state.enabled,
@@ -96,8 +115,32 @@ impl Daemon {
                 latitude: 0.0,
                 longitude: 0.0,
                 following,
+                day_temp: state.day_temp,
+                night_temp: state.night_temp,
             },
         }
+    }
+}
+
+/// Writes the current day/night temperatures (and any manual location) back to
+/// the config file so a settings change survives a restart. A write failure is
+/// logged, not fatal.
+fn persist(state: &Shared) {
+    let config = {
+        let state = lock(state);
+        let (latitude, longitude) = match state.mode {
+            Mode::ManualLocation { lat, lon } => (Some(lat), Some(lon)),
+            _ => (None, None),
+        };
+        Config {
+            day_temp: state.day_temp,
+            night_temp: state.night_temp,
+            latitude,
+            longitude,
+        }
+    };
+    if let Err(error) = config::save(&config) {
+        tracing::warn!("could not save config: {error}");
     }
 }
 

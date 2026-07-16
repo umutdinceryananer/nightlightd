@@ -12,7 +12,9 @@ use zbus::zvariant::Type;
 
 /// A snapshot from the daemon. Field order must match `GetStatus`'s return on
 /// the wire (`cli`'s `status::Status`); the names here are ours. Every field is
-/// part of that layout, so all of them must stay even if unused here.
+/// part of that layout, so all must stay even though the tray reads only some —
+/// hence `allow(dead_code)`.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize, Type)]
 pub struct Status {
     pub enabled: bool,
@@ -23,6 +25,8 @@ pub struct Status {
     pub latitude: f64,
     pub longitude: f64,
     pub following: bool,
+    pub day_temp: u32,
+    pub night_temp: u32,
 }
 
 impl Status {

@@ -34,4 +34,10 @@ pub struct Status {
     /// override, and not a fixed temperature. This is what the tray's
     /// "Automatic" checkbox reflects.
     pub following: bool,
+    /// The configured daytime temperature bound (kelvin) — the top of the
+    /// automatic curve. The panel needs it to draw the day/night curve.
+    pub day_temp: u32,
+    /// The configured night temperature bound (kelvin) — the bottom of the
+    /// automatic curve.
+    pub night_temp: u32,
 }
