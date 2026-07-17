@@ -8,6 +8,10 @@
 mod autostart;
 mod curve;
 mod daemon;
+mod single;
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use eframe::egui;
 
@@ -37,12 +41,20 @@ struct Panel {
     anchors_synced: bool,
     start_at_login: bool,
     offset_secs: i32,
+    /// Set by the single-instance `Present` call; the loop clears it and raises
+    /// the window.
+    focus: Arc<AtomicBool>,
 }
 
 impl eframe::App for Panel {
     // eframe 0.35 wraps this in a CentralPanel itself, so we draw straight into
     // the provided `ui` instead of opening our own panel.
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // A second launch asked us to come forward.
+        if self.focus.swap(false, Ordering::Relaxed) {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
+        }
+
         let status = self.client.status();
 
         // In automatic mode the slider mirrors the live sun-based temperature,
@@ -159,6 +171,14 @@ fn local_offset_seconds() -> i32 {
 }
 
 fn main() -> eframe::Result<()> {
+    // Single instance: if a panel is already open, ask it to come forward and
+    // exit instead of opening a second window.
+    let focus = Arc::new(AtomicBool::new(false));
+    let _lock = match single::acquire(Arc::clone(&focus)) {
+        Some(connection) => connection,
+        None => return Ok(()),
+    };
+
     let client = match Client::connect() {
         Ok(client) => client,
         Err(error) => {
@@ -185,6 +205,7 @@ fn main() -> eframe::Result<()> {
                 anchors_synced: false,
                 start_at_login: autostart::enabled(),
                 offset_secs: local_offset_seconds(),
+                focus: Arc::clone(&focus),
             }))
         }),
     )
