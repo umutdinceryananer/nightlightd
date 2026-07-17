@@ -29,6 +29,10 @@ const START_KELVIN: u32 = 2800;
 /// compile time so there is nothing to escape.
 const WORDMARK: &str = include_str!("wordmark.txt");
 
+/// Project links for the footer.
+const REPO_URL: &str = "https://github.com/umutdinceryananer/nightlightd";
+const ISSUES_URL: &str = "https://github.com/umutdinceryananer/nightlightd/issues";
+
 /// The panel's whole state: the daemon connection, the manual-warm slider, the
 /// day/night curve anchors, the start-at-login flag, and the local UTC offset.
 struct Panel {
@@ -39,6 +43,9 @@ struct Panel {
     /// Whether the anchors have been seeded from the daemon yet (once, at the
     /// first status we receive).
     anchors_synced: bool,
+    /// The day/night values when the panel opened, for "Revert changes".
+    orig_day: u32,
+    orig_night: u32,
     start_at_login: bool,
     offset_secs: i32,
     /// Set by the single-instance `Present` call; the loop clears it and raises
@@ -76,6 +83,8 @@ impl eframe::App for Panel {
         {
             self.day_temp = status.day_temp;
             self.night_temp = status.night_temp;
+            self.orig_day = status.day_temp;
+            self.orig_night = status.night_temp;
             self.anchors_synced = true;
         }
 
@@ -114,6 +123,16 @@ impl eframe::App for Panel {
             self.client.set_night_temp(self.night_temp);
         }
 
+        ui.add_space(4.0);
+        // Back to the values the panel opened with, undoing this session's
+        // slider fiddling.
+        if ui.button("Revert changes").clicked() {
+            self.day_temp = self.orig_day;
+            self.night_temp = self.orig_night;
+            self.client.set_day_temp(self.day_temp);
+            self.client.set_night_temp(self.night_temp);
+        }
+
         ui.add_space(10.0);
         ui.separator();
         ui.add_space(8.0);
@@ -143,6 +162,17 @@ impl eframe::App for Panel {
         {
             autostart::set(self.start_at_login);
         }
+
+        ui.add_space(10.0);
+        ui.separator();
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            ui.weak(concat!("v", env!("CARGO_PKG_VERSION")));
+            ui.separator();
+            ui.hyperlink_to("View on GitHub", REPO_URL);
+            ui.separator();
+            ui.hyperlink_to("Give feedback", ISSUES_URL);
+        });
 
         // egui is reactive, so ask for a repaint each second to keep the slider
         // tracking the sun even when the window sits idle.
@@ -189,7 +219,7 @@ fn main() -> eframe::Result<()> {
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([460.0, 520.0])
+            .with_inner_size([460.0, 600.0])
             .with_resizable(false),
         ..Default::default()
     };
@@ -203,6 +233,8 @@ fn main() -> eframe::Result<()> {
                 day_temp: 6500,
                 night_temp: 4500,
                 anchors_synced: false,
+                orig_day: 6500,
+                orig_night: 4500,
                 start_at_login: autostart::enabled(),
                 offset_secs: local_offset_seconds(),
                 focus: Arc::clone(&focus),
