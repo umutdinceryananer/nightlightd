@@ -1,0 +1,20 @@
+# nightlightd systemd user service — packaged variant (#26).
+#
+# Shipped by the .deb to /usr/lib/systemd/user/. Same as dist/nightlightd.service
+# but the binary is at /usr/bin (a system install), not ~/.cargo/bin. It is not
+# auto-enabled: a user unit is enabled per user, which the settings panel's
+# "Start at login" box does, or `systemctl --user enable --now nightlightd`.
+
+[Unit]
+Description=Screen colour temperature (nightlightd)
+PartOf=graphical-session.target
+
+[Service]
+ExecStart=/usr/bin/nightlightd --daemon
+Restart=on-failure
+
+# graphical-session.target is not started by every desktop (notably XFCE/Mint),
+# so an enabled unit would never autostart. default.target is always reached on
+# login; Restart=on-failure retries until the X server is up.
+[Install]
+WantedBy=default.target

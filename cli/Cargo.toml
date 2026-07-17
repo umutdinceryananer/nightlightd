@@ -8,6 +8,7 @@ name = "nightlightd"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Zero-config screen colour temperature daemon for X11"
 
 [dependencies]
 # Pure logic (colour, sun, timezone). Used from #11 onward.
@@ -35,3 +36,34 @@ clap = { version = "4", features = ["derive"] }
 # default is quiet (state changes only). Already in the tree via zbus.
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# The .deb (#26). Bundles all three binaries plus the systemd user unit and the
+# tray's autostart entry. Build the whole workspace first, then package without
+# rebuilding:
+#   cargo build --release --workspace
+#   cargo deb -p nightlightd --no-build
+# `$auto` reads the binaries' shared-library needs (the panel pulls in GL and
+# X11 libraries via eframe) so apt installs them.
+[package.metadata.deb]
+maintainer = "Umut Dincer Yananer <umutdncr@gmail.com>"
+copyright = "2026 Umut Dincer Yananer"
+license-file = ["../LICENSE", "0"]
+section = "x11"
+priority = "optional"
+# $auto covers what the linker records (libc). The panel's GL and X11 libraries
+# are dlopen'd by eframe/winit at runtime, so ldd can't see them and they must
+# be listed by hand or the panel won't start on a minimal install.
+depends = "$auto, libgl1, libegl1, libxkbcommon0, libx11-6, libxcursor1, libxrandr2, libxi6"
+extended-description = """\
+Zero-config screen colour temperature daemon for X11. Reads your timezone to \
+find your location, warms the screen after sunset, refuses to run twice, and \
+survives suspend. Ships a system-tray icon and a settings panel with an \
+f.lux-style day/night curve."""
+assets = [
+    ["target/release/nightlightd", "usr/bin/", "755"],
+    ["target/release/nightlight-tray", "usr/bin/", "755"],
+    ["target/release/nightlight-panel", "usr/bin/", "755"],
+    ["../dist/deb/nightlightd.service", "usr/lib/systemd/user/nightlightd.service", "644"],
+    ["../dist/nightlight-tray.desktop", "etc/xdg/autostart/nightlight-tray.desktop", "644"],
+    ["../README.md", "usr/share/doc/nightlightd/README.md", "644"],
+]
