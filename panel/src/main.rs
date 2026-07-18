@@ -85,6 +85,10 @@ impl eframe::App for Panel {
             self.night_temp = status.night_temp;
             self.orig_day = status.day_temp;
             self.orig_night = status.night_temp;
+            // Seed the warm slider from what is actually applied, so a panel
+            // opened during a manual override shows the truth instead of the
+            // compile-time default (the following-mode mirror only covers auto).
+            self.kelvin = status.temperature.clamp(WARMEST, NEUTRAL);
             self.anchors_synced = true;
         }
 
