@@ -32,6 +32,11 @@ pub struct State {
     pub night_temp: u32,
     /// The last temperature actually applied — reported by `GetStatus`.
     pub current_temp: u32,
+    /// The last successfully resolved location (automatic mode). The poll loop
+    /// keeps it warm; `GetStatus` reads it instead of re-parsing zone.tab on
+    /// every call, and a transient lookup failure reuses it instead of
+    /// blanking the screen.
+    pub location: Option<(f64, f64)>,
 }
 
 /// State shared between the poll loop and the D-Bus reactor thread.

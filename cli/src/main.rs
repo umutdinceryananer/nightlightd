@@ -113,6 +113,7 @@ fn run_daemon(no_reset: bool) {
         day_temp: config.day_temp,
         night_temp: config.night_temp,
         current_temp: x11::NEUTRAL_KELVIN,
+        location: None,
     }));
 
     // Claim the D-Bus name — this is the single-instance lock (#19). Keep the

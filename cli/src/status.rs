@@ -41,3 +41,19 @@ pub struct Status {
     /// automatic curve.
     pub night_temp: u32,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The tray and the panel re-declare this struct by hand; all copies must
+    /// serialize to exactly this D-Bus signature or clients half-break (reads
+    /// fail, writes still work). Drift shipped once — commit c177090 — and this
+    /// pin is what turns the next drift into a red test instead of a silent
+    /// "daemon not running". The same literal is pinned in tray/src/daemon.rs
+    /// and panel/src/daemon.rs; change all three together.
+    #[test]
+    fn wire_signature_is_pinned() {
+        assert_eq!(Status::SIGNATURE.to_string(), "(busdbddbuu)");
+    }
+}

@@ -73,17 +73,24 @@ impl Daemon {
     }
 
     /// Set the daytime target temperature (kelvin) — the top of the automatic
-    /// curve — then persist it and re-apply.
+    /// curve — then persist it and re-apply. Never drops below the night
+    /// target, so the band stays ordered whatever a client sends.
     fn set_day_temp(&self, kelvin: u32) {
-        lock(&self.state).day_temp = kelvin;
+        {
+            let mut state = lock(&self.state);
+            state.day_temp = kelvin.max(state.night_temp);
+        }
         persist(&self.state);
         self.waker.wake();
     }
 
     /// Set the night target temperature (kelvin) — the bottom of the automatic
-    /// curve — then persist it and re-apply.
+    /// curve — then persist it and re-apply. Never rises above the day target.
     fn set_night_temp(&self, kelvin: u32) {
-        lock(&self.state).night_temp = kelvin;
+        {
+            let mut state = lock(&self.state);
+            state.night_temp = kelvin.min(state.day_temp);
+        }
         persist(&self.state);
         self.waker.wake();
     }
@@ -92,12 +99,22 @@ impl Daemon {
     /// it, and where the sun is now (a check that the clock and timezone agree
     /// with reality).
     fn get_status(&self) -> Status {
-        let state = lock(&self.state);
+        let mut state = lock(&self.state);
         let source = describe_source(&state);
         // Actively tracking the sun: on, no manual override, not a fixed temp.
         let following =
             state.enabled && state.override_temp.is_none() && !matches!(state.mode, Mode::Fixed(_));
-        match location_of(state.mode) {
+        // The poll loop keeps the automatic-mode cache warm; the fresh lookup
+        // only covers a status call arriving before the first apply.
+        let location = match state.mode {
+            Mode::Fixed(_) => None,
+            Mode::ManualLocation { lat, lon } => Some((lat, lon)),
+            Mode::Automatic => state.location.or_else(location_from_timezone),
+        };
+        if matches!(state.mode, Mode::Automatic) {
+            state.location = location;
+        }
+        match location {
             Some((latitude, longitude)) => Status {
                 enabled: state.enabled,
                 temperature: state.current_temp,
@@ -173,17 +190,6 @@ fn describe_source(state: &State) -> String {
     }
 }
 
-/// The location the daemon would use for the sun, if any: the given coordinates
-/// in manual mode, the timezone's coordinate in automatic mode, and nothing in
-/// fixed mode (where the sun is not consulted).
-fn location_of(mode: Mode) -> Option<(f64, f64)> {
-    match mode {
-        Mode::Fixed(_) => None,
-        Mode::ManualLocation { lat, lon } => Some((lat, lon)),
-        Mode::Automatic => location_from_timezone(),
-    }
-}
-
 /// Serves the interface and claims the well-known name as the single-instance
 /// lock (#19). Returns `Ok(Some(conn))` when this process owns the name — the
 /// connection must be kept alive for the daemon's lifetime — or `Ok(None)` when
@@ -218,6 +224,15 @@ mod tests {
             day_temp: 6500,
             night_temp: 3500,
             current_temp: 6500,
+            location: None,
+        }
+    }
+
+    fn daemon(state: State) -> Daemon {
+        use std::sync::{Arc, Mutex};
+        Daemon {
+            state: Arc::new(Mutex::new(state)),
+            waker: crate::waker::waker().expect("eventfd"),
         }
     }
 
@@ -269,14 +284,32 @@ mod tests {
     }
 
     #[test]
-    fn location_is_none_for_fixed_mode() {
-        assert_eq!(location_of(Mode::Fixed(2800)), None);
-        assert_eq!(
-            location_of(Mode::ManualLocation {
-                lat: 39.93,
-                lon: 32.85
-            }),
-            Some((39.93, 32.85))
-        );
+    fn status_reads_the_cached_location_in_automatic_mode() {
+        let mut s = state(true, None, Mode::Automatic);
+        s.location = Some((10.0, 20.0));
+        let status = daemon(s).get_status();
+        assert!(status.has_location);
+        assert_eq!((status.latitude, status.longitude), (10.0, 20.0));
+    }
+
+    #[test]
+    fn status_has_no_location_in_fixed_mode() {
+        let status = daemon(state(true, None, Mode::Fixed(2800))).get_status();
+        assert!(!status.has_location);
+    }
+
+    #[test]
+    fn day_and_night_bounds_stay_ordered() {
+        // Try to invert the band from both ends; the daemon must refuse.
+        // config_damaged keeps persist() away from the real config file.
+        let mut s = state(true, None, Mode::Automatic);
+        s.config_damaged = true;
+        let d = daemon(s);
+        d.set_night_temp(7000); // above day (6500) -> clamped to 6500
+        d.set_day_temp(2000); // below night -> clamped to night
+        let s = lock(&d.state);
+        assert!(s.day_temp >= s.night_temp);
+        assert_eq!(s.night_temp, 6500);
+        assert_eq!(s.day_temp, 6500);
     }
 }

@@ -82,11 +82,7 @@ pub fn daemon_loop(
     conn.randr_select_input(root, NotifyMask::SCREEN_CHANGE | NotifyMask::CRTC_CHANGE)?
         .check()?;
 
-    // Last successfully resolved location. Kept across applies so a transient
-    // timezone-lookup failure (seen under boot I/O load) reuses it instead of
-    // blanking the screen back to neutral.
-    let mut location: Option<(f64, f64)> = None;
-    try_apply(&conn, root, state, &mut location)?;
+    try_apply(&conn, root, state)?;
 
     let mut last_tick = Instant::now();
     while !terminate.load(Ordering::Relaxed) {
@@ -101,7 +97,7 @@ pub fn daemon_loop(
         // thing: drain both wake sources and re-apply what the state now wants.
         waker.drain();
         drain_screen_changes(&conn)?;
-        try_apply(&conn, root, state, &mut location)?;
+        try_apply(&conn, root, state)?;
         if last_tick.elapsed() >= TICK_INTERVAL {
             last_tick = Instant::now();
         }
@@ -115,13 +111,8 @@ pub fn daemon_loop(
 /// daemon — the next tick retries against fresh resources. Only the loss of
 /// the X connection itself is fatal, since nothing can be applied or restored
 /// without it.
-fn try_apply<C: Connection>(
-    conn: &C,
-    root: u32,
-    state: &Shared,
-    location: &mut Option<(f64, f64)>,
-) -> Result<(), Box<dyn Error>> {
-    match apply_desired(conn, root, state, location) {
+fn try_apply<C: Connection>(conn: &C, root: u32, state: &Shared) -> Result<(), Box<dyn Error>> {
+    match apply_desired(conn, root, state) {
         Ok(()) => Ok(()),
         Err(error) if is_connection_error(error.as_ref()) => Err(error),
         Err(error) => {
@@ -180,16 +171,11 @@ fn drain_screen_changes<C: Connection>(conn: &C) -> Result<bool, Box<dyn Error>>
 
 /// Applies the temperature the current state calls for, and records it as the
 /// current temperature (without holding the lock across the X writes).
-/// `location` caches the last resolved coordinate across calls.
-fn apply_desired<C: Connection>(
-    conn: &C,
-    root: u32,
-    state: &Shared,
-    location: &mut Option<(f64, f64)>,
-) -> Result<(), Box<dyn Error>> {
+fn apply_desired<C: Connection>(conn: &C, root: u32, state: &Shared) -> Result<(), Box<dyn Error>> {
     let (target, previous) = {
-        let state = lock(state);
-        (desired_temp(&state, location), state.current_temp)
+        let mut state = lock(state);
+        let target = desired_temp(&mut state);
+        (target, state.current_temp)
     };
     reapply(conn, root, target, target != previous)?;
     lock(state).current_temp = target;
@@ -199,11 +185,12 @@ fn apply_desired<C: Connection>(
 /// The temperature the state calls for: neutral when disabled, the manual
 /// override when set, otherwise the sun-based target for right now.
 ///
-/// In automatic mode the timezone lookup is refreshed into `location` when it
-/// succeeds and reused from there when it transiently fails, so a momentary
-/// failure never resets the screen to neutral (`day_temp`). Only a location
-/// that has never resolved falls back to `day_temp`.
-fn desired_temp(state: &State, location: &mut Option<(f64, f64)>) -> u32 {
+/// In automatic mode the timezone lookup is refreshed into the state's
+/// location cache when it succeeds and reused from there when it transiently
+/// fails, so a momentary failure never resets the screen to neutral
+/// (`day_temp`). Only a location that has never resolved falls back to
+/// `day_temp`. `GetStatus` reads the same cache.
+fn desired_temp(state: &mut State) -> u32 {
     if !state.enabled {
         return NEUTRAL_KELVIN;
     }
@@ -214,9 +201,9 @@ fn desired_temp(state: &State, location: &mut Option<(f64, f64)>) -> u32 {
         return resolve_temperature(state.mode, unix_now(), state.day_temp, state.night_temp);
     }
     if let Some(resolved) = location_from_timezone() {
-        *location = Some(resolved);
+        state.location = Some(resolved);
     }
-    match *location {
+    match state.location {
         Some((lat, lon)) => resolve_temperature(
             Mode::ManualLocation { lat, lon },
             unix_now(),
