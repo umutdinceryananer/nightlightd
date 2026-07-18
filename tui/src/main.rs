@@ -11,6 +11,7 @@
 
 mod daemon;
 mod theme;
+mod today;
 
 use std::io;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -23,7 +24,9 @@ use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::symbols::Marker;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Axis, Block, BorderType, Chart, Dataset, GraphType, LineGauge, Paragraph};
+use ratatui::widgets::{
+    Axis, Block, BorderType, Chart, Dataset, GraphType, LineGauge, Paragraph, Row, Table, Tabs,
+};
 use ratatui::{DefaultTerminal, Frame};
 use tui_big_text::{BigText, PixelSize};
 
@@ -37,12 +40,16 @@ const NIGHT_STEP: u32 = 100;
 /// The figlet "slant" wordmark, the same one the README and the panel use.
 const WORDMARK: &str = include_str!("wordmark.txt");
 
+/// The tab bar, in order. Each holds real content or it does not exist.
+const TABS: &[&str] = &["now", "today"];
+
 struct App {
     client: Client,
     status: Option<Status>,
     last_poll: Option<Instant>,
     offset_secs: i32,
     theme_index: usize,
+    tab: usize,
 }
 
 fn main() -> io::Result<()> {
@@ -66,6 +73,7 @@ fn main() -> io::Result<()> {
         last_poll: None,
         offset_secs: local_offset_seconds(),
         theme_index,
+        tab: 0,
     };
 
     let mut terminal = ratatui::init();
@@ -139,6 +147,15 @@ impl App {
             KeyCode::Char('T') => {
                 self.theme_index = (self.theme_index + 1) % THEMES.len();
             }
+            KeyCode::Tab => {
+                self.tab = (self.tab + 1) % TABS.len();
+            }
+            KeyCode::Char(digit @ '1'..='9') => {
+                let index = (digit as usize) - ('1' as usize);
+                if index < TABS.len() {
+                    self.tab = index;
+                }
+            }
             KeyCode::Up | KeyCode::Down => {
                 if let Some(status) = &self.status {
                     let night = if code == KeyCode::Up {
@@ -174,10 +191,10 @@ impl App {
             return;
         }
 
-        let [wordmark, strip, cards, curve, footer] = Layout::vertical([
+        let [wordmark, strip, tabs, content, footer] = Layout::vertical([
             Constraint::Length(6),
             Constraint::Length(2),
-            Constraint::Length(8),
+            Constraint::Length(2),
             Constraint::Min(9),
             Constraint::Length(1),
         ])
@@ -188,13 +205,119 @@ impl App {
             wordmark,
         );
         self.draw_strip(frame, strip, &pal);
+        self.draw_tabs(frame, tabs, &pal);
+        match self.tab {
+            1 => self.draw_today_tab(frame, content, &pal),
+            _ => self.draw_now_tab(frame, content, &pal),
+        }
+        frame.render_widget(footer_line(&pal), footer);
+    }
 
+    /// The tab bar: numbered titles, the active one on an accent chip.
+    fn draw_tabs(&self, frame: &mut Frame<'_>, area: Rect, pal: &Palette) {
+        let titles: Vec<Line<'_>> = TABS
+            .iter()
+            .enumerate()
+            .map(|(i, name)| Line::from(format!(" {} {name} ", i + 1)))
+            .collect();
+        frame.render_widget(
+            Tabs::new(titles)
+                .select(self.tab)
+                .style(Style::default().fg(pal.muted))
+                .highlight_style(Style::default().fg(pal.bg).bg(pal.accent).bold())
+                .divider(Span::styled("·", Style::default().fg(pal.faint))),
+            area,
+        );
+    }
+
+    /// Tab 1: the dashboard — state cards on top, the curve below.
+    fn draw_now_tab(&self, frame: &mut Frame<'_>, area: Rect, pal: &Palette) {
+        let [cards, curve] =
+            Layout::vertical([Constraint::Length(8), Constraint::Min(5)]).areas(area);
         let [now_card, sun_card] =
             Layout::horizontal([Constraint::Length(32), Constraint::Min(32)]).areas(cards);
-        self.draw_now_card(frame, now_card, &pal);
-        self.draw_sun_card(frame, sun_card, &pal);
-        self.draw_curve_card(frame, curve, &pal);
-        frame.render_widget(footer_line(&pal), footer);
+        self.draw_now_card(frame, now_card, pal);
+        self.draw_sun_card(frame, sun_card, pal);
+        self.draw_curve_card(frame, curve, pal);
+    }
+
+    /// Tab 2: the day's solar milestones, derived from the real curve, with
+    /// the next event highlighted — then the curve for context.
+    fn draw_today_tab(&self, frame: &mut Frame<'_>, area: Rect, pal: &Palette) {
+        let block = card(" today ", pal);
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let Some(status) = self.status.as_ref().filter(|s| s.has_location) else {
+            frame.render_widget(
+                Paragraph::new(" no location — the schedule needs one")
+                    .style(Style::default().fg(pal.muted)),
+                inner,
+            );
+            return;
+        };
+
+        let (midnight, now_hour) = self.day_context();
+        let events = today::milestones(
+            status.latitude,
+            status.longitude,
+            midnight,
+            status.day_temp,
+            status.night_temp,
+        );
+        let next = events.iter().position(|e| e.hour > now_hour);
+
+        let table_height = (events.len() + 1) as u16;
+        let [table_area, chart_area] =
+            Layout::vertical([Constraint::Length(table_height), Constraint::Min(0)]).areas(inner);
+
+        let rows: Vec<Row<'_>> = events
+            .iter()
+            .enumerate()
+            .map(|(i, event)| {
+                let row = Row::new(vec![
+                    format!(" {}", event.name),
+                    event.hhmm(),
+                    format!("{} K", event.kelvin),
+                    relative(event.hour - now_hour),
+                ]);
+                if Some(i) == next {
+                    row.style(Style::default().fg(pal.bg).bg(pal.accent).bold())
+                } else if event.hour < now_hour {
+                    row.style(Style::default().fg(pal.muted))
+                } else {
+                    row
+                }
+            })
+            .collect();
+        let table = Table::new(
+            rows,
+            [
+                Constraint::Length(14),
+                Constraint::Length(7),
+                Constraint::Length(8),
+                Constraint::Min(10),
+            ],
+        )
+        .header(
+            Row::new(vec![" event", "time", "kelvin", "when"])
+                .style(Style::default().fg(pal.faint)),
+        );
+        frame.render_widget(table, table_area);
+
+        if chart_area.height >= 5 {
+            self.draw_chart(frame, chart_area, pal);
+        }
+    }
+
+    /// Local midnight (unix) and the fractional local hour of "now".
+    fn day_context(&self) -> (f64, f64) {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs_f64())
+            .unwrap_or(0.0);
+        let secs_into_day = (now as i64 + i64::from(self.offset_secs)).rem_euclid(86_400) as f64;
+        (now - secs_into_day, secs_into_day / 3600.0)
     }
 
     /// The status strip under the wordmark: liveness, mode, local time, sun —
@@ -454,13 +577,7 @@ impl App {
             return;
         };
 
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs_f64())
-            .unwrap_or(0.0);
-        let secs_into_day = (now as i64 + i64::from(self.offset_secs)).rem_euclid(86_400) as f64;
-        let midnight = now - secs_into_day;
-        let now_hour = secs_into_day / 3600.0;
+        let (midnight, now_hour) = self.day_context();
 
         let kelvin_at = |hour: f64| -> f64 {
             let elevation =
@@ -541,12 +658,32 @@ fn footer_line(pal: &Palette) -> Paragraph<'static> {
         ]
     };
     let mut spans = vec![Span::raw(" ")];
+    spans.extend(chip("⇥", "tab"));
     spans.extend(chip("t", "toggle"));
     spans.extend(chip("a", "auto"));
     spans.extend(chip("↑↓", "night temp"));
     spans.extend(chip("T", "theme"));
     spans.extend(chip("q", "quit"));
     Paragraph::new(Line::from(spans))
+}
+
+/// "in 2h 05m" / "3h 12m ago" / "now" for a signed hour delta.
+fn relative(delta_hours: f64) -> String {
+    let minutes = (delta_hours * 60.0).round() as i64;
+    if minutes.abs() < 1 {
+        return "now".into();
+    }
+    let (h, m) = (minutes.abs() / 60, minutes.abs() % 60);
+    let span = if h > 0 {
+        format!("{h}h {m:02}m")
+    } else {
+        format!("{m}m")
+    };
+    if minutes > 0 {
+        format!("in {span}")
+    } else {
+        format!("{span} ago")
+    }
 }
 
 /// Names the part of the day for a solar elevation, matching the daemon's
