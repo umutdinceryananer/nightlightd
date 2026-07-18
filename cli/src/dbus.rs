@@ -95,6 +95,35 @@ impl Daemon {
         self.waker.wake();
     }
 
+    /// Pin a manual location (degrees) and persist it; the sun is followed
+    /// there from now on, including after a trip through "auto". Out-of-range
+    /// values are clamped, not rejected.
+    fn set_location(&self, latitude: f64, longitude: f64) {
+        {
+            let mut state = lock(&self.state);
+            let mode = Mode::ManualLocation {
+                lat: latitude.clamp(-90.0, 90.0),
+                lon: longitude.clamp(-180.0, 180.0),
+            };
+            state.mode = mode;
+            state.configured_mode = mode;
+        }
+        persist(&self.state);
+        self.waker.wake();
+    }
+
+    /// Return to deriving the location from the timezone, and persist that
+    /// (the saved coordinates are removed from the config).
+    fn clear_location(&self) {
+        {
+            let mut state = lock(&self.state);
+            state.mode = Mode::Automatic;
+            state.configured_mode = Mode::Automatic;
+        }
+        persist(&self.state);
+        self.waker.wake();
+    }
+
     /// Report a full snapshot: on/off, the applied temperature, what is driving
     /// it, and where the sun is now (a check that the clock and timezone agree
     /// with reality).
@@ -296,6 +325,29 @@ mod tests {
     fn status_has_no_location_in_fixed_mode() {
         let status = daemon(state(true, None, Mode::Fixed(2800))).get_status();
         assert!(!status.has_location);
+    }
+
+    #[test]
+    fn set_location_pins_and_clear_returns_to_timezone() {
+        // config_damaged keeps persist() away from the real config file.
+        let mut s = state(true, None, Mode::Automatic);
+        s.config_damaged = true;
+        let d = daemon(s);
+        // Out-of-range input is clamped, not rejected.
+        d.set_location(95.0, -200.0);
+        {
+            let s = lock(&d.state);
+            let expected = Mode::ManualLocation {
+                lat: 90.0,
+                lon: -180.0,
+            };
+            assert_eq!(s.mode, expected);
+            assert_eq!(s.configured_mode, expected);
+        }
+        d.clear_location();
+        let s = lock(&d.state);
+        assert_eq!(s.mode, Mode::Automatic);
+        assert_eq!(s.configured_mode, Mode::Automatic);
     }
 
     #[test]
