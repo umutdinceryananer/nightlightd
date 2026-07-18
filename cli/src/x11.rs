@@ -98,6 +98,12 @@ pub fn daemon_loop(
         waker.drain();
         drain_screen_changes(&conn)?;
         try_apply(&conn, root, state)?;
+        // Events that raced in during our own round trips would otherwise wake
+        // the loop again at once for a full extra pass; absorb them with one
+        // bounded re-apply instead (never a loop — a storm settles on the tick).
+        if drain_screen_changes(&conn)? {
+            try_apply(&conn, root, state)?;
+        }
         if last_tick.elapsed() >= TICK_INTERVAL {
             last_tick = Instant::now();
         }
