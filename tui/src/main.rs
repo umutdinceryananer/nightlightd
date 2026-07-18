@@ -70,8 +70,8 @@ struct App {
 }
 
 fn main() -> io::Result<()> {
-    let theme_index = match parse_theme_arg() {
-        Ok(index) => index,
+    let (theme_index, tab) = match parse_args() {
+        Ok(parsed) => parsed,
         Err(message) => {
             eprintln!("{message}");
             std::process::exit(2);
@@ -90,7 +90,7 @@ fn main() -> io::Result<()> {
         last_poll: None,
         offset_secs: local_offset_seconds(),
         theme_index,
-        tab: 0,
+        tab,
         settings_selected: 0,
         theme_popup: None,
         start_at_login: autostart::enabled(),
@@ -103,29 +103,52 @@ fn main() -> io::Result<()> {
     result
 }
 
-/// Minimal argument parsing: `--theme <name>` (or `-t <name>`); anything else
-/// prints usage. No clap — two flags do not justify a dependency.
-fn parse_theme_arg() -> Result<usize, String> {
-    let names = || {
+/// Minimal argument parsing: `--theme <name>` and `--tab <name|number>`.
+/// No clap — two flags do not justify a dependency.
+fn parse_args() -> Result<(usize, usize), String> {
+    let theme_names = || {
         THEMES
             .iter()
             .map(|theme| theme.name)
             .collect::<Vec<_>>()
             .join(", ")
     };
+    let usage = || {
+        format!(
+            "usage: nightlight-tui [--theme <{}>] [--tab <{}>]",
+            theme_names(),
+            TABS.join(", ")
+        )
+    };
+    let (mut theme_index, mut tab) = (0, 0);
     let mut args = std::env::args().skip(1);
-    match args.next().as_deref() {
-        None => Ok(0),
-        Some("--theme" | "-t") => match args.next() {
-            Some(name) => theme::index_of(&name)
-                .ok_or_else(|| format!("unknown theme {name:?} — available: {}", names())),
-            None => Err(format!("--theme needs a name — available: {}", names())),
-        },
-        Some(other) => Err(format!(
-            "unknown argument {other:?}\nusage: nightlight-tui [--theme <{}>]",
-            names()
-        )),
+    while let Some(argument) = args.next() {
+        match argument.as_str() {
+            "--theme" | "-t" => {
+                let name = args.next().ok_or_else(usage)?;
+                theme_index = theme::index_of(&name).ok_or_else(|| {
+                    format!("unknown theme {name:?} — available: {}", theme_names())
+                })?;
+            }
+            "--tab" => {
+                let name = args.next().ok_or_else(usage)?;
+                tab = TABS
+                    .iter()
+                    .position(|title| **title == name)
+                    .or_else(|| {
+                        name.parse::<usize>()
+                            .ok()
+                            .filter(|n| (1..=TABS.len()).contains(n))
+                            .map(|n| n - 1)
+                    })
+                    .ok_or_else(|| {
+                        format!("unknown tab {name:?} — available: {}", TABS.join(", "))
+                    })?;
+            }
+            _ => return Err(usage()),
+        }
     }
+    Ok((theme_index, tab))
 }
 
 impl App {
