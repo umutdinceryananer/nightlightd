@@ -89,3 +89,16 @@ impl Client {
         let _ = self.proxy.set_night_temp(kelvin);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Must match the daemon's `cli/src/status.rs` (and the tray's copy) — see
+    /// the pin there. A mismatch makes get_status fail while writes still
+    /// work: no curve, no mirror, but sliders that still move the screen.
+    #[test]
+    fn wire_signature_is_pinned() {
+        assert_eq!(Status::SIGNATURE.to_string(), "(busdbddbuu)");
+    }
+}

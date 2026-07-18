@@ -12,10 +12,11 @@ mod single;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use eframe::egui;
 
-use crate::daemon::Client;
+use crate::daemon::{Client, Status};
 
 /// The slider's ends, in kelvin. Below ~2000 K the screen goes deep orange;
 /// 6500 K is neutral (no filter). Lower is warmer.
@@ -51,6 +52,11 @@ struct Panel {
     /// Set by the single-instance `Present` call; the loop clears it and raises
     /// the window.
     focus: Arc<AtomicBool>,
+    /// The last daemon snapshot and when it was taken. egui redraws every frame
+    /// while interacting; polling on a timer keeps that from becoming a
+    /// blocking D-Bus round trip per frame. `None` forces a fresh read.
+    status: Option<Status>,
+    last_poll: Option<Instant>,
 }
 
 impl eframe::App for Panel {
@@ -62,7 +68,16 @@ impl eframe::App for Panel {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
         }
 
-        let status = self.client.status();
+        // Refresh the snapshot at most once a second (or when an action just
+        // invalidated it); every frame in between reuses the cache.
+        if self
+            .last_poll
+            .is_none_or(|t| t.elapsed() >= Duration::from_secs(1))
+        {
+            self.status = self.client.status();
+            self.last_poll = Some(Instant::now());
+        }
+        let status = self.status.clone();
 
         // In automatic mode the slider mirrors the live sun-based temperature,
         // so it drifts down as the sun sets and snaps back after "Back to
@@ -102,29 +117,40 @@ impl eframe::App for Panel {
             .wrap_mode(egui::TextWrapMode::Extend),
         );
         ui.add_space(8.0);
-        curve::show(ui, status.as_ref(), self.offset_secs);
+        // The curve draws from the local slider values, so it reshapes live
+        // mid-drag even though the daemon only hears about it on release.
+        curve::show(
+            ui,
+            status.as_ref(),
+            self.day_temp,
+            self.night_temp,
+            self.offset_secs,
+        );
         ui.add_space(10.0);
 
-        // The two anchors that shape the curve; the daemon persists each change.
-        if ui
-            .add(
-                egui::Slider::new(&mut self.day_temp, 4000..=6500)
-                    .suffix(" K")
-                    .text("Daytime"),
-            )
-            .changed()
-        {
+        // The two anchors that shape the curve. The ranges lean on each other
+        // so the band cannot invert from here (the daemon clamps regardless),
+        // and a change is sent — and hence written to the config file — once
+        // per release, not once per drag frame.
+        let day_min = self.night_temp.max(4000);
+        let night_max = self.day_temp.min(4500);
+        let day = ui.add(
+            egui::Slider::new(&mut self.day_temp, day_min..=6500)
+                .suffix(" K")
+                .text("Daytime"),
+        );
+        if day.drag_stopped() || (day.changed() && !day.dragged()) {
             self.client.set_day_temp(self.day_temp);
+            self.last_poll = None;
         }
-        if ui
-            .add(
-                egui::Slider::new(&mut self.night_temp, 1500..=4500)
-                    .suffix(" K")
-                    .text("Nighttime"),
-            )
-            .changed()
-        {
+        let night = ui.add(
+            egui::Slider::new(&mut self.night_temp, 1500..=night_max)
+                .suffix(" K")
+                .text("Nighttime"),
+        );
+        if night.drag_stopped() || (night.changed() && !night.dragged()) {
             self.client.set_night_temp(self.night_temp);
+            self.last_poll = None;
         }
 
         ui.add_space(4.0);
@@ -135,6 +161,7 @@ impl eframe::App for Panel {
             self.night_temp = self.orig_night;
             self.client.set_day_temp(self.day_temp);
             self.client.set_night_temp(self.night_temp);
+            self.last_poll = None;
         }
 
         ui.add_space(10.0);
@@ -145,26 +172,35 @@ impl eframe::App for Panel {
 
         let slider = egui::Slider::new(&mut self.kelvin, WARMEST..=NEUTRAL).suffix(" K");
         // Apply live only when the user actually moves it; the daemon pins
-        // whatever the slider lands on and switches to manual.
+        // whatever the slider lands on and switches to manual. The cached
+        // snapshot is updated in place so the following-mode mirror stops
+        // immediately instead of fighting the drag until the next poll.
         if ui.add(slider).changed() {
             self.client.set_temperature(self.kelvin);
+            if let Some(status) = &mut self.status {
+                status.following = false;
+                status.temperature = self.kelvin;
+            }
         }
 
         ui.add_space(12.0);
         if ui.button("Back to automatic").clicked() {
             self.client.follow_the_sun();
+            self.last_poll = None;
         }
 
         ui.add_space(8.0);
         ui.separator();
         ui.add_space(4.0);
-        // Enables/disables the daemon's systemd user service. The state was read
-        // once at startup; a change writes it through immediately.
+        // Enables/disables the daemon's systemd user service, then re-reads the
+        // real state — if systemctl failed (unit not installed), the box must
+        // snap back instead of showing a success that never happened.
         if ui
             .checkbox(&mut self.start_at_login, "Start at login")
             .changed()
         {
             autostart::set(self.start_at_login);
+            self.start_at_login = autostart::enabled();
         }
 
         ui.add_space(10.0);
@@ -242,6 +278,8 @@ fn main() -> eframe::Result<()> {
                 start_at_login: autostart::enabled(),
                 offset_secs: local_offset_seconds(),
                 focus: Arc::clone(&focus),
+                status: None,
+                last_poll: None,
             }))
         }),
     )

@@ -18,10 +18,18 @@ const HEIGHT: f32 = 130.0;
 /// Vertical breathing room so the line never touches the top or bottom edge.
 const PAD: f32 = 12.0;
 
-/// Draws the curve for `status`. Shows a placeholder when no location is known
+/// Draws the curve. `status` supplies the location; `day_temp`/`night_temp`
+/// come from the panel's live slider values so the shape follows a drag before
+/// the daemon has been told. Shows a placeholder when no location is known
 /// (the curve is meaningless without one). `offset_secs` is the local UTC
 /// offset, used to place "now" and the hour axis on local time.
-pub fn show(ui: &mut egui::Ui, status: Option<&Status>, offset_secs: i32) {
+pub fn show(
+    ui: &mut egui::Ui,
+    status: Option<&Status>,
+    day_temp: u32,
+    night_temp: u32,
+    offset_secs: i32,
+) {
     let Some(status) = status.filter(|s| s.has_location) else {
         ui.weak("Waiting for the daemon / location…");
         return;
@@ -39,7 +47,7 @@ pub fn show(ui: &mut egui::Ui, status: Option<&Status>, offset_secs: i32) {
     let kelvin_at = |hour: f32| -> f32 {
         let t = midnight + f64::from(hour) * 3600.0;
         let elevation = solar_elevation(status.latitude, status.longitude, t);
-        target_temperature(elevation, status.day_temp, status.night_temp) as f32
+        target_temperature(elevation, day_temp, night_temp) as f32
     };
 
     let (response, painter) = ui.allocate_painter(
@@ -49,8 +57,8 @@ pub fn show(ui: &mut egui::Ui, status: Option<&Status>, offset_secs: i32) {
     let rect = response.rect;
 
     let to_x = |hour: f32| rect.left() + (hour / 24.0) * rect.width();
-    let night = status.night_temp as f32;
-    let day = status.day_temp as f32;
+    let night = night_temp as f32;
+    let day = day_temp as f32;
     let span = (day - night).max(1.0);
     let to_y = |kelvin: f32| {
         let frac = ((kelvin - night) / span).clamp(0.0, 1.0);
