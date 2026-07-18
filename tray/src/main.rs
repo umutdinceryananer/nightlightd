@@ -60,12 +60,22 @@ impl NightLight {
 
     /// Flips sun-tracking for the "Automatic" checkbox: if it is currently
     /// following, freeze where it is; otherwise resume following the sun.
+    /// Refreshes first — the cached status can be 5 s stale, and acting on it
+    /// could pin an outdated temperature or re-enable a filter turned off from
+    /// another surface moments ago.
     fn toggle_follow(&mut self) {
+        self.refresh();
         if self.status.as_ref().is_some_and(|status| status.following) {
             self.hold();
         } else {
             self.follow_the_sun();
         }
+    }
+
+    /// Applies the direction the menu label advertised, then refreshes.
+    fn set_enabled(&mut self, enabled: bool) {
+        self.client.set_enabled(enabled);
+        self.refresh();
     }
 }
 
@@ -114,11 +124,13 @@ impl ksni::Tray for NightLight {
     /// reflects the current state so it reads as an action, not a question.
     fn menu(&self) -> Vec<MenuItem<Self>> {
         let on = self.status.as_ref().is_some_and(|status| status.enabled);
-        let toggle_label = if on { "Turn off" } else { "Turn on" };
+        // The item promises a direction, so send that direction — a blind
+        // Toggle against status gone stale would do the opposite of the label.
+        let turn_on = !on;
         vec![
             StandardItem {
-                label: toggle_label.into(),
-                activate: Box::new(|this: &mut Self| this.toggle()),
+                label: if turn_on { "Turn on" } else { "Turn off" }.into(),
+                activate: Box::new(move |this: &mut Self| this.set_enabled(turn_on)),
                 ..Default::default()
             }
             .into(),

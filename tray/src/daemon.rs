@@ -114,4 +114,23 @@ impl Client {
     pub fn hold(&self, kelvin: u32) {
         let _ = self.proxy.set_temperature(kelvin);
     }
+
+    /// Turns the filter on or off explicitly, so a menu item does what its
+    /// label showed rather than blindly flipping. Errors swallowed.
+    pub fn set_enabled(&self, enabled: bool) {
+        let _ = self.proxy.set_enabled(enabled);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Must match the daemon's `cli/src/status.rs` (and the panel's copy) —
+    /// see the pin there. A mismatch makes get_status fail while writes still
+    /// work, which reads as "daemon not running" with a working left-click.
+    #[test]
+    fn wire_signature_is_pinned() {
+        assert_eq!(Status::SIGNATURE.to_string(), "(busdbddbuu)");
+    }
 }
