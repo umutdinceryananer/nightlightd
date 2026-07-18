@@ -19,10 +19,16 @@
 [Unit]
 Description=Screen colour temperature (nightlightd)
 PartOf=graphical-session.target
+# Never give up on restarts. With the default limit (5 in 10 s), the instant
+# exits before DISPLAY is imported at login burn all attempts in ~0.5 s and
+# the unit lands in permanent start-limit-hit.
+StartLimitIntervalSec=0
 
 [Service]
 ExecStart=%h/.cargo/bin/nightlightd --daemon
 Restart=on-failure
+# Pace the retries so the X server has time to appear between attempts.
+RestartSec=2
 
 # graphical-session.target is not started by every desktop (notably XFCE/Mint,
 # our audience), so an enabled unit would never autostart. default.target is
