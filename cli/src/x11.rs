@@ -86,7 +86,7 @@ pub fn daemon_loop(
     // timezone-lookup failure (seen under boot I/O load) reuses it instead of
     // blanking the screen back to neutral.
     let mut location: Option<(f64, f64)> = None;
-    apply_desired(&conn, root, state, &mut location)?;
+    try_apply(&conn, root, state, &mut location)?;
 
     let mut last_tick = Instant::now();
     while !terminate.load(Ordering::Relaxed) {
@@ -101,12 +101,49 @@ pub fn daemon_loop(
         // thing: drain both wake sources and re-apply what the state now wants.
         waker.drain();
         drain_screen_changes(&conn)?;
-        apply_desired(&conn, root, state, &mut location)?;
+        try_apply(&conn, root, state, &mut location)?;
         if last_tick.elapsed() >= TICK_INTERVAL {
             last_tick = Instant::now();
         }
     }
     Ok(())
+}
+
+/// Applies, degrading quietly on per-request X errors: a CRTC can vanish
+/// between fetching the screen resources and the per-CRTC round trips (a
+/// monitor unplugged mid-apply returns BadCrtc), and that must not kill the
+/// daemon — the next tick retries against fresh resources. Only the loss of
+/// the X connection itself is fatal, since nothing can be applied or restored
+/// without it.
+fn try_apply<C: Connection>(
+    conn: &C,
+    root: u32,
+    state: &Shared,
+    location: &mut Option<(f64, f64)>,
+) -> Result<(), Box<dyn Error>> {
+    match apply_desired(conn, root, state, location) {
+        Ok(()) => Ok(()),
+        Err(error) if is_connection_error(error.as_ref()) => Err(error),
+        Err(error) => {
+            tracing::warn!("could not apply (will retry on the next tick): {error}");
+            Ok(())
+        }
+    }
+}
+
+/// Whether `error` means the X connection itself is gone, as opposed to a
+/// single request failing against hardware that changed under us.
+fn is_connection_error(error: &(dyn Error + 'static)) -> bool {
+    use x11rb::errors::{ConnectionError, ReplyError, ReplyOrIdError};
+    error.downcast_ref::<ConnectionError>().is_some()
+        || matches!(
+            error.downcast_ref::<ReplyError>(),
+            Some(ReplyError::ConnectionError(_))
+        )
+        || matches!(
+            error.downcast_ref::<ReplyOrIdError>(),
+            Some(ReplyOrIdError::ConnectionError(_))
+        )
 }
 
 /// Blocks on the X fd until an event, `timeout`, or a signal. Returns `false`
@@ -264,5 +301,41 @@ fn duration_to_timespec(duration: Duration) -> Timespec {
     Timespec {
         tv_sec: duration.as_secs() as i64,
         tv_nsec: i64::from(duration.subsec_nanos()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use x11rb::errors::{ConnectionError, ReplyError};
+    use x11rb::protocol::ErrorKind;
+    use x11rb::x11_utils::X11Error;
+
+    #[test]
+    fn connection_loss_is_fatal() {
+        assert!(is_connection_error(&ConnectionError::UnknownError));
+        assert!(is_connection_error(&ReplyError::ConnectionError(
+            ConnectionError::UnknownError
+        )));
+    }
+
+    #[test]
+    fn a_protocol_error_is_not_fatal() {
+        // The BadCrtc case: a monitor vanished mid-apply. RandR extension
+        // errors carry extension-specific codes; any X11Error goes down the
+        // retry path, not the fatal one.
+        let bad_request = X11Error {
+            error_kind: ErrorKind::Request,
+            error_code: 1,
+            sequence: 0,
+            bad_value: 0,
+            minor_opcode: 0,
+            major_opcode: 0,
+            extension_name: None,
+            request_name: None,
+        };
+        assert!(!is_connection_error(&ReplyError::X11Error(bad_request)));
+        let io = std::io::Error::other("unrelated");
+        assert!(!is_connection_error(&io));
     }
 }
