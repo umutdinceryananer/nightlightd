@@ -163,6 +163,12 @@ impl App {
     fn draw(&self, frame: &mut Frame<'_>) {
         let pal = self.palette();
         let area = frame.area();
+        // Paint the whole screen in the theme's background and text tones —
+        // the palette owns the canvas, not the terminal's default colours.
+        frame.render_widget(
+            Block::default().style(Style::default().bg(pal.bg).fg(pal.text)),
+            area,
+        );
         if area.width < 66 || area.height < 26 {
             self.draw_compact(frame, area, &pal);
             return;
@@ -491,7 +497,7 @@ impl App {
                 .data(&points),
             Dataset::default()
                 .marker(Marker::Dot)
-                .style(Style::default().fg(Color::White))
+                .style(Style::default().fg(pal.text))
                 .data(&now_point),
         ];
         let chart = Chart::new(datasets)
@@ -529,7 +535,7 @@ fn footer_line(pal: &Palette) -> Paragraph<'static> {
         vec![
             Span::styled(
                 format!(" {key} "),
-                Style::default().fg(Color::Black).bg(pal.accent),
+                Style::default().fg(pal.bg).bg(pal.accent),
             ),
             Span::styled(format!(" {label}   "), Style::default().fg(pal.muted)),
         ]
