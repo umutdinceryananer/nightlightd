@@ -43,6 +43,7 @@ trait Daemon {
     fn set_night_temp(&self, kelvin: u32) -> zbus::Result<()>;
     fn set_location(&self, latitude: f64, longitude: f64) -> zbus::Result<()>;
     fn clear_location(&self) -> zbus::Result<()>;
+    fn get_outputs(&self) -> zbus::Result<Vec<(u32, u16)>>;
 }
 
 /// A live handle to the daemon: the session-bus connection plus a proxy.
@@ -97,6 +98,12 @@ impl Client {
     /// Returns to deriving the location from the timezone.
     pub fn clear_location(&self) {
         let _ = self.proxy.clear_location();
+    }
+
+    /// The active outputs as `(crtc, gamma_ramp_size)`, or `None` when the
+    /// daemon cannot be reached.
+    pub fn outputs(&self) -> Option<Vec<(u32, u16)>> {
+        self.proxy.get_outputs().ok()
     }
 }
 

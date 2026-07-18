@@ -44,10 +44,10 @@ const NIGHT_STEP: u32 = 100;
 const WORDMARK: &str = include_str!("wordmark.txt");
 
 /// The tab bar, in order. Each holds real content or it does not exist.
-const TABS: &[&str] = &["now", "today", "location", "settings"];
+const TABS: &[&str] = &["now", "today", "location", "outputs", "settings"];
 const LOCATION_TAB: usize = 2;
 /// The settings tab's index and its selectable rows: day, night, theme, login.
-const SETTINGS_TAB: usize = 3;
+const SETTINGS_TAB: usize = 4;
 const SETTINGS_ITEMS: usize = 4;
 
 /// Picker steps in degrees — coarse on purpose; braille map cells are chunky.
@@ -67,6 +67,8 @@ struct App {
     start_at_login: bool,
     /// The map's location picker: `Some((lat, lon))` cursor while picking.
     picker: Option<(f64, f64)>,
+    /// The active outputs, polled together with the status.
+    outputs: Option<Vec<(u32, u16)>>,
 }
 
 fn main() -> io::Result<()> {
@@ -95,6 +97,7 @@ fn main() -> io::Result<()> {
         theme_popup: None,
         start_at_login: autostart::enabled(),
         picker: None,
+        outputs: None,
     };
 
     let mut terminal = ratatui::init();
@@ -161,6 +164,7 @@ impl App {
                 .is_none_or(|t| t.elapsed() >= Duration::from_secs(1))
             {
                 self.status = self.client.status();
+                self.outputs = self.client.outputs();
                 self.last_poll = Some(Instant::now());
             }
             terminal.draw(|frame| self.draw(frame))?;
@@ -389,7 +393,8 @@ impl App {
         match self.tab {
             1 => self.draw_today_tab(frame, content, &pal),
             2 => self.draw_location_tab(frame, content, &pal),
-            3 => self.draw_settings_tab(frame, content, &pal),
+            3 => self.draw_outputs_tab(frame, content, &pal),
+            4 => self.draw_settings_tab(frame, content, &pal),
             _ => self.draw_now_tab(frame, content, &pal),
         }
         frame.render_widget(footer_line(self.tab, &pal), footer);
@@ -480,7 +485,77 @@ impl App {
         frame.render_widget(Paragraph::new(lines), info);
     }
 
-    /// Tab 4: the settings — the two bounds, the theme, autostart, and where
+    /// Tab 4: the outputs — every CRTC the daemon is writing gamma ramps to,
+    /// with its ramp size and the shared applied temperature. Per-output
+    /// temperatures are #34 (v0.2); this tab is their future home.
+    fn draw_outputs_tab(&self, frame: &mut Frame<'_>, area: Rect, pal: &Palette) {
+        let block = card(" outputs ", pal);
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let Some(outputs) = self.outputs.as_ref().filter(|list| !list.is_empty()) else {
+            let message = if self.status.is_some() {
+                " no active outputs reported yet"
+            } else {
+                " daemon not running"
+            };
+            frame.render_widget(
+                Paragraph::new(message).style(Style::default().fg(pal.muted)),
+                inner,
+            );
+            return;
+        };
+
+        let applied = self
+            .status
+            .as_ref()
+            .map(|s| format!("{} K", s.temperature))
+            .unwrap_or_else(|| "—".into());
+        let rows: Vec<Row<'_>> = outputs
+            .iter()
+            .map(|(crtc, ramp)| {
+                Row::new(vec![
+                    format!(" CRTC {crtc}"),
+                    format!("{ramp} steps"),
+                    applied.clone(),
+                ])
+            })
+            .collect();
+        let table_height = (outputs.len() + 1) as u16;
+        let [table_area, note_area] =
+            Layout::vertical([Constraint::Length(table_height + 1), Constraint::Min(0)])
+                .areas(inner);
+        frame.render_widget(
+            Table::new(
+                rows,
+                [
+                    Constraint::Length(12),
+                    Constraint::Length(12),
+                    Constraint::Min(8),
+                ],
+            )
+            .header(
+                Row::new(vec![" output", "gamma ramp", "applied"])
+                    .style(Style::default().fg(pal.faint)),
+            ),
+            table_area,
+        );
+        frame.render_widget(
+            Paragraph::new(vec![
+                Line::from(Span::styled(
+                    " every output wears the same temperature today",
+                    Style::default().fg(pal.muted),
+                )),
+                Line::from(Span::styled(
+                    " per-output control is #34, planned for v0.2 — this is its home",
+                    Style::default().fg(pal.faint),
+                )),
+            ]),
+            note_area,
+        );
+    }
+
+    /// Tab 5: the settings — the two bounds, the theme, autostart, and where
     /// the config lives. Row-based: arrows select and adjust, enter acts.
     fn draw_settings_tab(&self, frame: &mut Frame<'_>, area: Rect, pal: &Palette) {
         let block = card(" settings ", pal);
