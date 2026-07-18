@@ -39,6 +39,7 @@ trait Daemon {
     fn get_status(&self) -> zbus::Result<Status>;
     fn toggle(&self) -> zbus::Result<()>;
     fn set_mode(&self, mode: &str) -> zbus::Result<()>;
+    fn set_day_temp(&self, kelvin: u32) -> zbus::Result<()>;
     fn set_night_temp(&self, kelvin: u32) -> zbus::Result<()>;
 }
 
@@ -72,6 +73,12 @@ impl Client {
     /// and turns the filter on itself.
     pub fn follow_the_sun(&self) {
         let _ = self.proxy.set_mode("auto");
+    }
+
+    /// Sets the daytime target temperature; persisted by the daemon (which
+    /// also keeps the band ordered). Errors swallowed.
+    pub fn set_day_temp(&self, kelvin: u32) {
+        let _ = self.proxy.set_day_temp(kelvin);
     }
 
     /// Sets the night target temperature; persisted by the daemon (which also

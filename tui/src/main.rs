@@ -9,6 +9,7 @@
 //! or config editing beyond the night bound: a remote control, not an
 //! application.
 
+mod autostart;
 mod daemon;
 mod theme;
 mod today;
@@ -25,7 +26,8 @@ use ratatui::style::{Color, Style};
 use ratatui::symbols::Marker;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
-    Axis, Block, BorderType, Chart, Dataset, GraphType, LineGauge, Paragraph, Row, Table, Tabs,
+    Axis, Block, BorderType, Chart, Clear, Dataset, GraphType, LineGauge, Paragraph, Row, Table,
+    Tabs,
 };
 use ratatui::{DefaultTerminal, Frame};
 use tui_big_text::{BigText, PixelSize};
@@ -41,7 +43,10 @@ const NIGHT_STEP: u32 = 100;
 const WORDMARK: &str = include_str!("wordmark.txt");
 
 /// The tab bar, in order. Each holds real content or it does not exist.
-const TABS: &[&str] = &["now", "today"];
+const TABS: &[&str] = &["now", "today", "settings"];
+/// The settings tab's index and its selectable rows: day, night, theme, login.
+const SETTINGS_TAB: usize = 2;
+const SETTINGS_ITEMS: usize = 4;
 
 struct App {
     client: Client,
@@ -50,6 +55,10 @@ struct App {
     offset_secs: i32,
     theme_index: usize,
     tab: usize,
+    settings_selected: usize,
+    /// The theme picker popup: `Some(highlighted index)` while open.
+    theme_popup: Option<usize>,
+    start_at_login: bool,
 }
 
 fn main() -> io::Result<()> {
@@ -74,6 +83,9 @@ fn main() -> io::Result<()> {
         offset_secs: local_offset_seconds(),
         theme_index,
         tab: 0,
+        settings_selected: 0,
+        theme_popup: None,
+        start_at_login: autostart::enabled(),
     };
 
     let mut terminal = ratatui::init();
@@ -133,6 +145,11 @@ impl App {
     /// Handles one keypress; returns `true` to quit. Every daemon action
     /// invalidates the snapshot so the next frame shows the daemon's answer.
     fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> bool {
+        // A modal popup owns the keyboard while it is open.
+        if self.theme_popup.is_some() {
+            self.popup_key(code);
+            return false;
+        }
         match code {
             KeyCode::Char('q') | KeyCode::Esc => return true,
             KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => return true,
@@ -156,6 +173,9 @@ impl App {
                     self.tab = index;
                 }
             }
+            // The settings tab owns the arrows and enter; elsewhere the
+            // arrows stay the quick night-temperature nudge.
+            _ if self.tab == SETTINGS_TAB => self.settings_key(code),
             KeyCode::Up | KeyCode::Down => {
                 if let Some(status) = &self.status {
                     let night = if code == KeyCode::Up {
@@ -171,6 +191,86 @@ impl App {
             _ => {}
         }
         false
+    }
+
+    fn settings_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Up => self.settings_selected = self.settings_selected.saturating_sub(1),
+            KeyCode::Down => {
+                self.settings_selected = (self.settings_selected + 1).min(SETTINGS_ITEMS - 1);
+            }
+            KeyCode::Left | KeyCode::Right => self.adjust_setting(code == KeyCode::Right),
+            KeyCode::Enter | KeyCode::Char(' ') => match self.settings_selected {
+                2 => self.theme_popup = Some(self.theme_index),
+                3 => self.toggle_login(),
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+
+    /// Left/right on the selected settings row: nudge the bounds (the daemon
+    /// clamps and persists), cycle the theme, or flip the login toggle.
+    fn adjust_setting(&mut self, increase: bool) {
+        match self.settings_selected {
+            0 => {
+                if let Some(status) = &self.status {
+                    let day = if increase {
+                        status.day_temp.saturating_add(NIGHT_STEP)
+                    } else {
+                        status.day_temp.saturating_sub(NIGHT_STEP)
+                    }
+                    .clamp(status.night_temp, 6500);
+                    self.client.set_day_temp(day);
+                    self.last_poll = None;
+                }
+            }
+            1 => {
+                if let Some(status) = &self.status {
+                    let night = if increase {
+                        status.night_temp.saturating_add(NIGHT_STEP)
+                    } else {
+                        status.night_temp.saturating_sub(NIGHT_STEP)
+                    }
+                    .clamp(NIGHT_MIN, status.day_temp);
+                    self.client.set_night_temp(night);
+                    self.last_poll = None;
+                }
+            }
+            2 => {
+                let count = THEMES.len();
+                self.theme_index = if increase {
+                    (self.theme_index + 1) % count
+                } else {
+                    (self.theme_index + count - 1) % count
+                };
+            }
+            3 => self.toggle_login(),
+            _ => {}
+        }
+    }
+
+    /// Flips the systemd enablement and re-reads the truth, so a failed
+    /// systemctl call shows as unchanged instead of as false success.
+    fn toggle_login(&mut self) {
+        autostart::set(!self.start_at_login);
+        self.start_at_login = autostart::enabled();
+    }
+
+    fn popup_key(&mut self, code: KeyCode) {
+        let Some(selected) = self.theme_popup else {
+            return;
+        };
+        match code {
+            KeyCode::Up => self.theme_popup = Some(selected.saturating_sub(1)),
+            KeyCode::Down => self.theme_popup = Some((selected + 1).min(THEMES.len() - 1)),
+            KeyCode::Enter => {
+                self.theme_index = selected;
+                self.theme_popup = None;
+            }
+            KeyCode::Esc | KeyCode::Char('q') => self.theme_popup = None,
+            _ => {}
+        }
     }
 
     fn palette(&self) -> Palette {
@@ -208,9 +308,110 @@ impl App {
         self.draw_tabs(frame, tabs, &pal);
         match self.tab {
             1 => self.draw_today_tab(frame, content, &pal),
+            2 => self.draw_settings_tab(frame, content, &pal),
             _ => self.draw_now_tab(frame, content, &pal),
         }
-        frame.render_widget(footer_line(&pal), footer);
+        frame.render_widget(footer_line(self.tab, &pal), footer);
+        if self.theme_popup.is_some() {
+            self.draw_theme_popup(frame, area, &pal);
+        }
+    }
+
+    /// Tab 3: the settings — the two bounds, the theme, autostart, and where
+    /// the config lives. Row-based: arrows select and adjust, enter acts.
+    fn draw_settings_tab(&self, frame: &mut Frame<'_>, area: Rect, pal: &Palette) {
+        let block = card(" settings ", pal);
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let value = |v: Option<String>| v.unwrap_or_else(|| "—".into());
+        let day = value(self.status.as_ref().map(|s| format!("{} K", s.day_temp)));
+        let night = value(self.status.as_ref().map(|s| format!("{} K", s.night_temp)));
+        let rows: [(&str, String, &str); SETTINGS_ITEMS] = [
+            ("daytime", day, "‹ › adjust"),
+            ("nighttime", night, "‹ › adjust"),
+            (
+                "theme",
+                THEMES[self.theme_index].name.to_string(),
+                "⏎ choose · ‹ › cycle",
+            ),
+            (
+                "start at login",
+                if self.start_at_login {
+                    "[x] enabled".to_string()
+                } else {
+                    "[ ] disabled".to_string()
+                },
+                "⏎ toggle",
+            ),
+        ];
+
+        let mut lines: Vec<Line<'_>> = vec![Line::default()];
+        for (index, (label, val, hint)) in rows.into_iter().enumerate() {
+            let body = format!("  {label:<16} {val:<14}");
+            if index == self.settings_selected {
+                lines.push(Line::from(vec![
+                    Span::styled(body, Style::default().fg(pal.bg).bg(pal.accent).bold()),
+                    Span::styled(format!("  {hint}"), Style::default().fg(pal.muted)),
+                ]));
+            } else {
+                lines.push(Line::from(vec![
+                    Span::styled(format!("  {label:<16} "), Style::default().fg(pal.muted)),
+                    Span::styled(format!("{val:<14}"), Style::default().fg(pal.text)),
+                ]));
+            }
+            lines.push(Line::default());
+        }
+        lines.push(Line::from(Span::styled(
+            format!("  config  {}", config_path_display()),
+            Style::default().fg(pal.faint),
+        )));
+        lines.push(Line::from(Span::styled(
+            "          day & night changes persist there automatically",
+            Style::default().fg(pal.faint),
+        )));
+        frame.render_widget(Paragraph::new(lines), inner);
+    }
+
+    /// The theme picker, as a centered modal over everything.
+    fn draw_theme_popup(&self, frame: &mut Frame<'_>, area: Rect, pal: &Palette) {
+        let Some(selected) = self.theme_popup else {
+            return;
+        };
+        let width = 28.min(area.width);
+        let height = (THEMES.len() as u16 + 2).min(area.height);
+        let popup = Rect {
+            x: area.x + (area.width.saturating_sub(width)) / 2,
+            y: area.y + (area.height.saturating_sub(height)) / 2,
+            width,
+            height,
+        };
+        frame.render_widget(Clear, popup);
+        let block = card(" theme — ⏎ apply ", pal).style(Style::default().bg(pal.bg));
+        let inner = block.inner(popup);
+        frame.render_widget(block, popup);
+
+        let lines: Vec<Line<'_>> = THEMES
+            .iter()
+            .enumerate()
+            .map(|(index, theme)| {
+                let current = if index == self.theme_index {
+                    "•"
+                } else {
+                    " "
+                };
+                let body = format!(" {current} {:<20}", theme.name);
+                if index == selected {
+                    Line::from(Span::styled(
+                        body,
+                        Style::default().fg(pal.bg).bg(pal.accent).bold(),
+                    ))
+                } else {
+                    Line::from(Span::styled(body, Style::default().fg(pal.text)))
+                }
+            })
+            .collect();
+        frame.render_widget(Paragraph::new(lines), inner);
     }
 
     /// The tab bar: numbered titles, the active one on an accent chip.
@@ -396,7 +597,7 @@ impl App {
         .areas(inner);
         frame.render_widget(Paragraph::new(self.compact_header(pal)), header);
         self.draw_chart(frame, chart, pal);
-        frame.render_widget(footer_line(pal), footer);
+        frame.render_widget(footer_line(0, pal), footer);
     }
 
     fn compact_header(&self, pal: &Palette) -> Vec<Line<'_>> {
@@ -646,8 +847,8 @@ fn card<'a>(title: &'a str, pal: &Palette) -> Block<'a> {
 }
 
 /// The key hints, styled as chips: the key on an accent background, the label
-/// muted.
-fn footer_line(pal: &Palette) -> Paragraph<'static> {
+/// muted. The set follows the active tab.
+fn footer_line(tab: usize, pal: &Palette) -> Paragraph<'static> {
     let chip = |key: &str, label: &str| {
         vec![
             Span::styled(
@@ -659,12 +860,35 @@ fn footer_line(pal: &Palette) -> Paragraph<'static> {
     };
     let mut spans = vec![Span::raw(" ")];
     spans.extend(chip("⇥", "tab"));
-    spans.extend(chip("t", "toggle"));
-    spans.extend(chip("a", "auto"));
-    spans.extend(chip("↑↓", "night temp"));
-    spans.extend(chip("T", "theme"));
+    if tab == SETTINGS_TAB {
+        spans.extend(chip("↑↓", "select"));
+        spans.extend(chip("‹›", "adjust"));
+        spans.extend(chip("⏎", "apply"));
+    } else {
+        spans.extend(chip("t", "toggle"));
+        spans.extend(chip("a", "auto"));
+        spans.extend(chip("↑↓", "night temp"));
+        spans.extend(chip("T", "theme"));
+    }
     spans.extend(chip("q", "quit"));
     Paragraph::new(Line::from(spans))
+}
+
+/// Where the daemon's config lives, for the settings tab's info line — the
+/// same XDG derivation the daemon uses.
+fn config_path_display() -> String {
+    std::env::var_os("XDG_CONFIG_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".config"))
+        })
+        .map(|base| {
+            base.join("nightlightd")
+                .join("config.toml")
+                .display()
+                .to_string()
+        })
+        .unwrap_or_else(|| "~/.config/nightlightd/config.toml".into())
 }
 
 /// "in 2h 05m" / "3h 12m ago" / "now" for a signed hour delta.
