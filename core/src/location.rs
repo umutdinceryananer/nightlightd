@@ -146,12 +146,42 @@ fn lookup_zone(zone: &str) -> Option<(f64, f64)> {
     None
 }
 
+/// Finds the canonical zone a backward-compatibility alias points to, in the
+/// text of a `tzdata.zi` file. Link lines read `L <canonical> <alias>`
+/// (whitespace-separated); every other line kind (`Z`, `R`, comments) is
+/// skipped. Returns [`None`] when `zone` is not an alias.
+fn canonical_from_links<'a>(contents: &'a str, zone: &str) -> Option<&'a str> {
+    for line in contents.lines() {
+        let mut fields = line.split_whitespace();
+        if fields.next() != Some("L") {
+            continue;
+        }
+        let (Some(canonical), Some(alias)) = (fields.next(), fields.next()) else {
+            continue;
+        };
+        if alias == zone {
+            return Some(canonical);
+        }
+    }
+    None
+}
+
+/// Resolves a backward-compatibility zone name (`Turkey`, `US/Eastern`) to its
+/// canonical form via the system's `tzdata.zi`. These aliases never appear in
+/// `zone.tab`, so without this step they would silently resolve to no location.
+fn resolve_alias(zone: &str) -> Option<String> {
+    let contents = std::fs::read_to_string("/usr/share/zoneinfo/tzdata.zi").ok()?;
+    canonical_from_links(&contents, zone).map(String::from)
+}
+
 /// The system's approximate location as `(latitude, longitude)` in degrees,
-/// derived from its timezone. Returns [`None`] if the timezone or the zoneinfo
-/// database cannot be read.
+/// derived from its timezone. A name missing from the coordinate table is
+/// retried through the backward-link aliases (`TZ=Turkey` still finds
+/// Istanbul). Returns [`None`] if the timezone or the zoneinfo database cannot
+/// be read.
 pub fn location_from_timezone() -> Option<(f64, f64)> {
     let zone = zone_name()?;
-    lookup_zone(&zone)
+    lookup_zone(&zone).or_else(|| lookup_zone(&resolve_alias(&zone)?))
 }
 
 #[cfg(test)]
@@ -238,6 +268,48 @@ this line is malformed and has no tabs
         );
         assert_eq!(zone_from_tz_value(""), None);
         assert_eq!(zone_from_tz_value(":"), None);
+    }
+
+    const LINKS_SAMPLE: &str = "\
+# tzdata.zi carries zones (Z), rules (R), and links (L)
+Z Europe/Istanbul 1:55:52 - LMT 1880
+R T 1916 o - Ap 30 0 1 S
+L Europe/Istanbul Turkey
+L America/New_York US/Eastern
+L\tEtc/GMT\tGMT
+";
+
+    #[test]
+    fn resolves_backward_link_aliases() {
+        assert_eq!(
+            canonical_from_links(LINKS_SAMPLE, "Turkey"),
+            Some("Europe/Istanbul")
+        );
+        assert_eq!(
+            canonical_from_links(LINKS_SAMPLE, "US/Eastern"),
+            Some("America/New_York")
+        );
+        // Tab-separated link lines parse too.
+        assert_eq!(canonical_from_links(LINKS_SAMPLE, "GMT"), Some("Etc/GMT"));
+    }
+
+    #[test]
+    fn non_aliases_and_non_link_lines_yield_none() {
+        // A canonical name is not an alias, and Z/R lines are never matched.
+        assert_eq!(canonical_from_links(LINKS_SAMPLE, "Europe/Istanbul"), None);
+        assert_eq!(canonical_from_links(LINKS_SAMPLE, "T"), None);
+        assert_eq!(canonical_from_links("", "Turkey"), None);
+    }
+
+    #[test]
+    fn real_alias_resolves_if_tzdata_is_present() {
+        // Uses the system's tzdata.zi when available; absent on some minimal
+        // environments, so only assert when a resolution came back at all.
+        if let Some(canonical) = resolve_alias("Turkey") {
+            assert_eq!(canonical, "Europe/Istanbul");
+            let (lat, _) = lookup_zone(&canonical).expect("canonical zone in zone.tab");
+            assert!((40.0..42.0).contains(&lat), "lat {lat}");
+        }
     }
 
     #[test]
