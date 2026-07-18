@@ -97,7 +97,8 @@ fn run_client(request: client::Request) {
 /// the screen on exit unless `no_reset` is set.
 fn run_daemon(no_reset: bool) {
     init_logging();
-    let config = config::load();
+    let loaded = config::load();
+    let config = loaded.config;
 
     let waker = match waker::waker() {
         Ok(waker) => waker,
@@ -107,6 +108,8 @@ fn run_daemon(no_reset: bool) {
         enabled: true,
         override_temp: None,
         mode: config.mode(),
+        configured_mode: config.mode(),
+        config_damaged: loaded.damaged,
         day_temp: config.day_temp,
         night_temp: config.night_temp,
         current_temp: x11::NEUTRAL_KELVIN,

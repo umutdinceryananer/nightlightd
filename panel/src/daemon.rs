@@ -71,9 +71,9 @@ impl Client {
         let _ = self.proxy.set_temperature(kelvin);
     }
 
-    /// Hands control back to the sun: on, and following again.
+    /// Hands control back to the sun. The daemon's "auto" clears the override
+    /// and turns the filter on itself, so one call carries the whole intent.
     pub fn follow_the_sun(&self) {
-        let _ = self.proxy.set_enabled(true);
         let _ = self.proxy.set_mode("auto");
     }
 

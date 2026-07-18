@@ -18,6 +18,14 @@ pub struct State {
     pub override_temp: Option<u32>,
     /// The location mode used when following the sun.
     pub mode: Mode,
+    /// The mode the config file asked for. `SetMode("auto")` returns to this —
+    /// a manual-location user's coordinates must survive a trip through auto —
+    /// and persisting derives the saved coordinates from it.
+    pub configured_mode: Mode,
+    /// Whether the config file on disk failed to load. When set, nothing ever
+    /// saves over it: the user's hand-written file is wrong by one typo, not
+    /// worthless.
+    pub config_damaged: bool,
     /// Daytime temperature bound (kelvin), from the config.
     pub day_temp: u32,
     /// Night temperature bound (kelvin), from the config.

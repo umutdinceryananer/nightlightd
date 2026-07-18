@@ -56,13 +56,17 @@ impl Daemon {
         self.waker.wake();
     }
 
-    /// Switch mode. `"auto"` clears any manual override and follows the sun.
+    /// Switch mode. `"auto"` clears any manual override, returns to the
+    /// configured sun-following mode (keeping a manual location from the
+    /// config), and turns the filter on — "follow the sun" implies there is
+    /// something to see, so clients need no compensating SetEnabled call.
     fn set_mode(&self, mode: String) {
         {
             let mut state = lock(&self.state);
             if mode == "auto" {
                 state.override_temp = None;
-                state.mode = Mode::Automatic;
+                state.mode = state.configured_mode;
+                state.enabled = true;
             }
         }
         self.waker.wake();
@@ -122,13 +126,22 @@ impl Daemon {
     }
 }
 
-/// Writes the current day/night temperatures (and any manual location) back to
-/// the config file so a settings change survives a restart. A write failure is
+/// Writes the current day/night temperatures (and any configured manual
+/// location) back to the config file so a settings change survives a restart.
+/// The coordinates come from `configured_mode`, not the live mode, so a trip
+/// through auto never deletes them. A damaged file is never written over —
+/// the user's hand-written settings are still in it. A write failure is
 /// logged, not fatal.
 fn persist(state: &Shared) {
     let config = {
         let state = lock(state);
-        let (latitude, longitude) = match state.mode {
+        if state.config_damaged {
+            tracing::warn!(
+                "not saving: the config file on disk failed to load; fix it and restart"
+            );
+            return;
+        }
+        let (latitude, longitude) = match state.configured_mode {
             Mode::ManualLocation { lat, lon } => (Some(lat), Some(lon)),
             _ => (None, None),
         };
@@ -200,10 +213,35 @@ mod tests {
             enabled,
             override_temp,
             mode,
+            configured_mode: Mode::Automatic,
+            config_damaged: false,
             day_temp: 6500,
             night_temp: 3500,
             current_temp: 6500,
         }
+    }
+
+    #[test]
+    fn auto_enables_and_restores_the_configured_mode() {
+        use std::sync::{Arc, Mutex};
+        // A manual-location user who turned the filter off and pinned a temp.
+        let configured = Mode::ManualLocation {
+            lat: 39.93,
+            lon: 32.85,
+        };
+        let mut s = state(false, Some(2200), Mode::Automatic);
+        s.configured_mode = configured;
+        let shared = Arc::new(Mutex::new(s));
+        let daemon = Daemon {
+            state: Arc::clone(&shared),
+            waker: crate::waker::waker().expect("eventfd"),
+        };
+        daemon.set_mode("auto".into());
+        let s = lock(&shared);
+        // Back on, following the sun, at the *configured* location.
+        assert!(s.enabled);
+        assert_eq!(s.override_temp, None);
+        assert_eq!(s.mode, configured);
     }
 
     #[test]

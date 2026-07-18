@@ -103,11 +103,9 @@ impl Client {
         let _ = self.proxy.toggle();
     }
 
-    /// Returns to following the sun: turns the filter on and clears any manual
-    /// override. Enabling matters when the filter was off — "follow the sun"
-    /// with nothing on screen would be a no-op that looks broken.
+    /// Returns to following the sun. The daemon's "auto" clears the override
+    /// and turns the filter on itself, so one call carries the whole intent.
     pub fn follow_the_sun(&self) {
-        let _ = self.proxy.set_enabled(true);
         let _ = self.proxy.set_mode("auto");
     }
 
