@@ -303,6 +303,28 @@ At the end of this milestone the tool becomes genuinely usable.
 - **Difficulty:** Medium
 - **Depends on:** #21, #24
 
+### #35 TUI client (`nightlight-tui`, ratatui)
+
+- **What:** A fifth crate: a ratatui terminal dashboard speaking the same D-Bus
+  interface — the day/night curve drawn in braille, live kelvin + sun elevation,
+  keybindings (`t` toggle, `a` auto, arrows nudge the night temperature).
+- **Why:** The showcase piece for #30. Terminal screenshots and GIFs travel:
+  ratatui has a curated `awesome-ratatui` list and an active showcase community,
+  and a polished TUI is the most shareable artifact this project can produce.
+- **Positioning:** SunReactor (a sun-driven *brightness* daemon) already ships a
+  ratatui TUI. The overlap is cosmetic, not functional — we drive colour, it
+  drives the backlight; zero collision in what the two tools touch. But any
+  announce must say "colour temperature, not brightness" in its first line.
+- **Detail:** Thin client only, like the tray and panel: no state, reads
+  `GetStatus`, sends the same methods the tray does. It re-declares `Status` a
+  *fourth* time, so the signature-pin test (AUDIT M10) must be copied in. It
+  should land after the daemon-side "auto also enables" fix (AUDIT M1) so it
+  needs no client-side compensation logic.
+- **Done when:** `nightlight-tui` renders the live curve and controls the
+  daemon; a GIF of it is in the README; submitted to `awesome-ratatui`.
+- **Difficulty:** Medium
+- **Depends on:** #18–#20, AUDIT P1
+
 ---
 
 ## M6 — Packaging and distribution
