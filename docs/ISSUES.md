@@ -285,6 +285,10 @@ At the end of this milestone the tool becomes genuinely usable.
 - **Done when:** The icon appears and responds in the XFCE, MATE and Cinnamon trays.
 - **Difficulty:** Hard
 - **Depends on:** #20
+- **Shipped (2026-07-16):** `tray/` crate via `ksni` (SNI, pure Rust) — the
+  research step measured XFCE's own systray already hosting
+  StatusNotifierWatcher, ruling out GTK/appindicator. Verified on XFCE; MATE
+  and Cinnamon still untested.
 
 ### #24 Settings window
 
@@ -294,6 +298,11 @@ At the end of this milestone the tool becomes genuinely usable.
 - **Done when:** The window opens, settings persist, and the daemon applies them immediately.
 - **Difficulty:** Hard
 - **Depends on:** #23
+- **Shipped (2026-07-17):** `panel/` crate as an **egui** window, not GTK —
+  pure Rust, no `libgtk-4-dev` to install, and its canvas draws the f.lux-style
+  day/night curve. Changes apply live over D-Bus and persist via the daemon; no
+  Save button needed. A "transition span" control was not built (the curve
+  follows solar elevation, redshift-style).
 
 ### #25 "Start at login" wires up systemd
 
@@ -302,6 +311,8 @@ At the end of this milestone the tool becomes genuinely usable.
 - **Done when:** Ticking the box means the daemon is running after the next login.
 - **Difficulty:** Medium
 - **Depends on:** #21, #24
+- **Shipped (2026-07-17):** a checkbox in the panel; it re-reads systemd's
+  actual answer after acting, so a failed enable shows as unticked.
 
 ### #35 TUI client (`nightlight-tui`, ratatui)
 

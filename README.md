@@ -13,7 +13,7 @@
 [![CI](https://github.com/umutdinceryananer/nightlightd/actions/workflows/ci.yml/badge.svg)](https://github.com/umutdinceryananer/nightlightd/actions/workflows/ci.yml)
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
 
-> **Status: v0.1-alpha.** The daemon works — timezone-based location, a single-instance D-Bus lock, gamma ramps over XRandR, re-apply on resume from suspend, and a `--status` readout. Milestones M0–M4 are done; it is now in a week of dogfooding. There are no packaged releases yet, so if you need a night light you can lean on today, install [gammastep](https://gitlab.com/chinstrap/gammastep) — this is not that yet.
+> **Status: v0.1-alpha.** The daemon works — timezone-based location, a single-instance D-Bus lock, gamma ramps over XRandR, re-apply on resume from suspend, a `--status` readout — and so does the interface: a tray icon and an f.lux-style settings panel with a day/night curve. Milestones M0–M5 are done and a `.deb` builds; packaging and release (M6) are in progress. There are no published releases yet, so if you need a night light you can lean on today, install [gammastep](https://gitlab.com/chinstrap/gammastep) — this is not that yet.
 
 ---
 
@@ -68,6 +68,29 @@ Read [`docs/HOW-IT-WORKS.md`](docs/HOW-IT-WORKS.md) for the long version, writte
 
 ---
 
+## Install
+
+Not released yet — build from source (Rust toolchain required):
+
+```
+cargo install --path cli     # the daemon + CLI: nightlightd
+cargo install --path tray    # tray icon: nightlight-tray
+cargo install --path panel   # settings panel: nightlight-panel
+
+mkdir -p ~/.config/systemd/user
+cp dist/nightlightd.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now nightlightd
+```
+
+A `.deb` can be built with `cargo build --release --workspace && cargo deb -p
+nightlightd --no-build`. It installs the binaries, the systemd user unit, and
+the tray's autostart entry — but a *user* unit cannot be enabled for you at
+install time, so the daemon still needs one `systemctl --user enable --now
+nightlightd` (or a log-out/log-in plus the panel's "Start at login" box).
+
+---
+
 ## Roadmap
 
 Tracked in [`docs/ISSUES.md`](docs/ISSUES.md).
@@ -80,8 +103,8 @@ Tracked in [`docs/ISSUES.md`](docs/ISSUES.md).
 | M2 | X11 backend | ✅ done |
 | M3 | Daemon and event loop | ✅ done |
 | M4 | DBus, CLI, systemd, suspend | ✅ done |
-| M5 | Tray icon and settings | not started |
-| M6 | Packaging and release | not started |
+| M5 | Tray icon and settings | ✅ done |
+| M6 | Packaging and release | 🔶 in progress (.deb builds) |
 
 Before writing a line of Rust here, the timezone fallback is going upstream to gammastep as a merge request. It helps far more people there, and the review will say whether defects 2 and 3 can be patched in place — in which case this repository should not exist. See [`docs/UPSTREAM-MR.md`](docs/UPSTREAM-MR.md).
 
