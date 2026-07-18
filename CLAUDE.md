@@ -15,7 +15,7 @@ These are settled. Do not propose alternatives unless something concrete forces 
 - **DBus name `org.nightlightd.Daemon` is the single-instance lock.** Name taken means another daemon is running; exit cleanly.
 - **A single-threaded event loop** waiting on two sources: the X11 file descriptor and a timer. Never two things at once.
 - **systemd user service** for autostart, enabled in *user* scope, never global.
-- **Two crates.** `core` holds pure logic — colour, solar elevation, timezone lookup — and depends on nothing. `cli` holds the binary, X11, and DBus. `core` must be testable without a display.
+- **A workspace of small crates.** `core` holds pure logic — colour, solar elevation, timezone lookup — depends on nothing, and must be testable without a display. `cli` holds the daemon binary, X11, and DBus. Every interface is its own thin-client crate (`tray`, `panel`, next `tui`) speaking D-Bus and holding no state — GUI dependencies never touch the daemon, and if a client dies, the filter lives. (This replaced the original "two crates" rule when #23 landed.)
 
 ---
 
