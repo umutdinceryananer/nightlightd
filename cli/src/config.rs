@@ -49,27 +49,66 @@ impl Config {
     }
 }
 
-/// Loads the config. A missing file yields defaults silently; a malformed file
-/// prints a clear error and yields defaults. Never fails.
-pub fn load() -> Config {
+/// What `load` produced: the config to run with, and whether the file on disk
+/// is damaged (existed but could not be read or parsed). A damaged file must
+/// never be overwritten by a later save — the user's hand-written settings are
+/// still in it, wrong by one typo.
+pub struct Loaded {
+    pub config: Config,
+    pub damaged: bool,
+}
+
+/// Loads the config. A missing file yields defaults silently; an unreadable or
+/// malformed file prints a clear error, yields defaults, and is flagged
+/// `damaged` so nothing ever saves over it. Never fails.
+pub fn load() -> Loaded {
     let Some(path) = config_path() else {
-        return Config::default();
+        return Loaded {
+            config: Config::default(),
+            damaged: false,
+        };
     };
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        return Config::default();
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Loaded {
+                config: Config::default(),
+                damaged: false,
+            };
+        }
+        Err(error) => {
+            tracing::warn!(
+                "{}: {error}; using defaults, will not overwrite",
+                path.display()
+            );
+            return Loaded {
+                config: Config::default(),
+                damaged: true,
+            };
+        }
     };
     match toml::from_str(&text) {
-        Ok(config) => config,
+        Ok(config) => Loaded {
+            config,
+            damaged: false,
+        },
         Err(error) => {
-            tracing::warn!("{}: {error}; using defaults", path.display());
-            Config::default()
+            tracing::warn!(
+                "{}: {error}; using defaults, will not overwrite",
+                path.display()
+            );
+            Loaded {
+                config: Config::default(),
+                damaged: true,
+            }
         }
     }
 }
 
-/// Writes `config` to the config file, creating the directory if needed. Used
-/// when the settings panel changes a value so it survives a restart. Degrades
-/// to an error the caller can log rather than panicking.
+/// Writes `config` to the config file, creating the directory if needed.
+/// Writes a sibling temp file and renames it into place, so a crash mid-write
+/// can never leave a truncated config behind. Degrades to an error the caller
+/// can log rather than panicking.
 pub fn save(config: &Config) -> std::io::Result<()> {
     let Some(path) = config_path() else {
         return Ok(());
@@ -78,7 +117,9 @@ pub fn save(config: &Config) -> std::io::Result<()> {
         std::fs::create_dir_all(parent)?;
     }
     let text = toml::to_string(config).map_err(std::io::Error::other)?;
-    std::fs::write(path, text)
+    let tmp = path.with_extension("toml.tmp");
+    std::fs::write(&tmp, text)?;
+    std::fs::rename(&tmp, &path)
 }
 
 /// `$XDG_CONFIG_HOME/nightlightd/config.toml`, or `~/.config/...` as a fallback.
