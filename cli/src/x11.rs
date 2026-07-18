@@ -175,16 +175,19 @@ fn drain_screen_changes<C: Connection>(conn: &C) -> Result<bool, Box<dyn Error>>
     Ok(changed)
 }
 
-/// Applies the temperature the current state calls for, and records it as the
-/// current temperature (without holding the lock across the X writes).
+/// Applies the temperature the current state calls for, and records it — plus
+/// the outputs it landed on — back into the state (without holding the lock
+/// across the X writes).
 fn apply_desired<C: Connection>(conn: &C, root: u32, state: &Shared) -> Result<(), Box<dyn Error>> {
     let (target, previous) = {
         let mut state = lock(state);
         let target = desired_temp(&mut state);
         (target, state.current_temp)
     };
-    reapply(conn, root, target, target != previous)?;
-    lock(state).current_temp = target;
+    let crtcs = reapply(conn, root, target, target != previous)?;
+    let mut state = lock(state);
+    state.current_temp = target;
+    state.outputs = crtcs.iter().map(|c| (c.crtc, c.gamma_size)).collect();
     Ok(())
 }
 
@@ -228,19 +231,20 @@ pub(crate) fn unix_now() -> f64 {
         .map_or(0.0, |elapsed| elapsed.as_secs_f64())
 }
 
-/// Re-reads the current CRTCs and writes the `kelvin` ramp to each. Re-reading
-/// means a newly-attached monitor is covered too (issue #14).
+/// Re-reads the current CRTCs, writes the `kelvin` ramp to each, and returns
+/// what it wrote to. Re-reading means a newly-attached monitor is covered too
+/// (issue #14).
 fn reapply<C: Connection>(
     conn: &C,
     root: u32,
     kelvin: u32,
     changed: bool,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<Vec<CrtcInfo>, Box<dyn Error>> {
     let resources = conn.randr_get_screen_resources(root)?.reply()?;
     let crtcs = active_crtcs(conn, &resources)?;
     write_ramps(conn, &crtcs, kelvin, changed)?;
     conn.flush()?;
-    Ok(())
+    Ok(crtcs)
 }
 
 /// Collects the active CRTCs (those driving an output) and their gamma sizes

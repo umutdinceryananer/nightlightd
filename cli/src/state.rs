@@ -37,6 +37,9 @@ pub struct State {
     /// every call, and a transient lookup failure reuses it instead of
     /// blanking the screen.
     pub location: Option<(f64, f64)>,
+    /// The active outputs as `(crtc, gamma_ramp_size)`, refreshed by every
+    /// apply. `GetOutputs` reads this cache; empty until the first apply.
+    pub outputs: Vec<(u32, u16)>,
 }
 
 /// State shared between the poll loop and the D-Bus reactor thread.

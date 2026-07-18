@@ -112,6 +112,12 @@ impl Daemon {
         self.waker.wake();
     }
 
+    /// The active outputs as `(crtc, gamma_ramp_size)` pairs, as last seen by
+    /// the apply loop. Empty until the first apply.
+    fn get_outputs(&self) -> Vec<(u32, u16)> {
+        lock(&self.state).outputs.clone()
+    }
+
     /// Return to deriving the location from the timezone, and persist that
     /// (the saved coordinates are removed from the config).
     fn clear_location(&self) {
@@ -254,6 +260,7 @@ mod tests {
             night_temp: 3500,
             current_temp: 6500,
             location: None,
+            outputs: Vec::new(),
         }
     }
 
