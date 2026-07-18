@@ -25,6 +25,7 @@ use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::symbols::Marker;
 use ratatui::text::{Line, Span};
+use ratatui::widgets::canvas::{Canvas, Map, MapResolution};
 use ratatui::widgets::{
     Axis, Block, BorderType, Chart, Clear, Dataset, GraphType, LineGauge, Paragraph, Row, Table,
     Tabs,
@@ -43,10 +44,15 @@ const NIGHT_STEP: u32 = 100;
 const WORDMARK: &str = include_str!("wordmark.txt");
 
 /// The tab bar, in order. Each holds real content or it does not exist.
-const TABS: &[&str] = &["now", "today", "settings"];
+const TABS: &[&str] = &["now", "today", "location", "settings"];
+const LOCATION_TAB: usize = 2;
 /// The settings tab's index and its selectable rows: day, night, theme, login.
-const SETTINGS_TAB: usize = 2;
+const SETTINGS_TAB: usize = 3;
 const SETTINGS_ITEMS: usize = 4;
+
+/// Picker steps in degrees — coarse on purpose; braille map cells are chunky.
+const PICK_LAT_STEP: f64 = 3.0;
+const PICK_LON_STEP: f64 = 5.0;
 
 struct App {
     client: Client,
@@ -59,6 +65,8 @@ struct App {
     /// The theme picker popup: `Some(highlighted index)` while open.
     theme_popup: Option<usize>,
     start_at_login: bool,
+    /// The map's location picker: `Some((lat, lon))` cursor while picking.
+    picker: Option<(f64, f64)>,
 }
 
 fn main() -> io::Result<()> {
@@ -86,6 +94,7 @@ fn main() -> io::Result<()> {
         settings_selected: 0,
         theme_popup: None,
         start_at_login: autostart::enabled(),
+        picker: None,
     };
 
     let mut terminal = ratatui::init();
@@ -150,6 +159,10 @@ impl App {
             self.popup_key(code);
             return false;
         }
+        // So does the map picker (esc cancels the pick, q still quits).
+        if self.picker.is_some() && self.tab == LOCATION_TAB {
+            return self.picker_key(code);
+        }
         match code {
             KeyCode::Char('q') | KeyCode::Esc => return true,
             KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => return true,
@@ -173,9 +186,10 @@ impl App {
                     self.tab = index;
                 }
             }
-            // The settings tab owns the arrows and enter; elsewhere the
-            // arrows stay the quick night-temperature nudge.
+            // The settings tab owns the arrows and enter; the location tab
+            // owns enter and c; elsewhere the arrows stay the night nudge.
             _ if self.tab == SETTINGS_TAB => self.settings_key(code),
+            _ if self.tab == LOCATION_TAB => self.location_key(code),
             KeyCode::Up | KeyCode::Down => {
                 if let Some(status) = &self.status {
                     let night = if code == KeyCode::Up {
@@ -257,6 +271,49 @@ impl App {
         self.start_at_login = autostart::enabled();
     }
 
+    /// Keys on the location tab while not picking: enter starts the picker at
+    /// the active location, c returns to the timezone.
+    fn location_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Enter => {
+                let start = self
+                    .status
+                    .as_ref()
+                    .filter(|s| s.has_location)
+                    .map(|s| (s.latitude, s.longitude))
+                    .unwrap_or((0.0, 0.0));
+                self.picker = Some(start);
+            }
+            KeyCode::Char('c') => {
+                self.client.clear_location();
+                self.last_poll = None;
+            }
+            _ => {}
+        }
+    }
+
+    /// Keys while the map picker is active; returns `true` to quit the app.
+    fn picker_key(&mut self, code: KeyCode) -> bool {
+        let Some((lat, lon)) = self.picker else {
+            return false;
+        };
+        match code {
+            KeyCode::Up => self.picker = Some(((lat + PICK_LAT_STEP).min(85.0), lon)),
+            KeyCode::Down => self.picker = Some(((lat - PICK_LAT_STEP).max(-85.0), lon)),
+            KeyCode::Right => self.picker = Some((lat, (lon + PICK_LON_STEP).min(179.0))),
+            KeyCode::Left => self.picker = Some((lat, (lon - PICK_LON_STEP).max(-179.0))),
+            KeyCode::Enter => {
+                self.client.set_location(lat, lon);
+                self.picker = None;
+                self.last_poll = None;
+            }
+            KeyCode::Esc => self.picker = None,
+            KeyCode::Char('q') => return true,
+            _ => {}
+        }
+        false
+    }
+
     fn popup_key(&mut self, code: KeyCode) {
         let Some(selected) = self.theme_popup else {
             return;
@@ -308,7 +365,8 @@ impl App {
         self.draw_tabs(frame, tabs, &pal);
         match self.tab {
             1 => self.draw_today_tab(frame, content, &pal),
-            2 => self.draw_settings_tab(frame, content, &pal),
+            2 => self.draw_location_tab(frame, content, &pal),
+            3 => self.draw_settings_tab(frame, content, &pal),
             _ => self.draw_now_tab(frame, content, &pal),
         }
         frame.render_widget(footer_line(self.tab, &pal), footer);
@@ -317,7 +375,89 @@ impl App {
         }
     }
 
-    /// Tab 3: the settings — the two bounds, the theme, autostart, and where
+    /// Tab 3: the world map — the resolved location marked on it, and a picker
+    /// to pin a manual one. The map is ratatui's own braille world.
+    fn draw_location_tab(&self, frame: &mut Frame<'_>, area: Rect, pal: &Palette) {
+        let block = card(" location ", pal);
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let [map_area, info] =
+            Layout::vertical([Constraint::Min(8), Constraint::Length(2)]).areas(inner);
+
+        let active = self
+            .status
+            .as_ref()
+            .filter(|s| s.has_location)
+            .map(|s| (s.latitude, s.longitude));
+        let picker = self.picker;
+        let accent = pal.accent;
+        let faint = pal.faint;
+        let text = pal.text;
+        let canvas = Canvas::default()
+            .marker(Marker::Braille)
+            .x_bounds([-180.0, 180.0])
+            .y_bounds([-90.0, 90.0])
+            .paint(move |ctx| {
+                ctx.draw(&Map {
+                    resolution: MapResolution::High,
+                    color: faint,
+                });
+                if let Some((lat, lon)) = active {
+                    ctx.print(
+                        lon,
+                        lat,
+                        Span::styled("◉", Style::default().fg(accent).bold()),
+                    );
+                }
+                if let Some((lat, lon)) = picker {
+                    ctx.layer();
+                    ctx.print(
+                        lon,
+                        lat,
+                        Span::styled("✛", Style::default().fg(text).bold()),
+                    );
+                }
+            });
+        frame.render_widget(canvas, map_area);
+
+        let lines = match (picker, &self.status) {
+            (Some((lat, lon)), _) => vec![
+                Line::from(Span::styled(
+                    format!(" ✛ picking {}", format_coords(lat, lon)),
+                    Style::default().fg(pal.accent).bold(),
+                )),
+                Line::from(Span::styled(
+                    "   arrows move · ⏎ pin it · esc cancel",
+                    Style::default().fg(pal.muted),
+                )),
+            ],
+            (None, Some(status)) if status.has_location => vec![
+                Line::from(vec![
+                    Span::styled(" ◉ ", Style::default().fg(pal.accent)),
+                    Span::styled(
+                        format_coords(status.latitude, status.longitude),
+                        Style::default().fg(pal.text),
+                    ),
+                    Span::styled(
+                        format!("  ·  {}", status.source),
+                        Style::default().fg(pal.muted),
+                    ),
+                ]),
+                Line::from(Span::styled(
+                    "   ⏎ pick a spot on the map · c use the timezone",
+                    Style::default().fg(pal.faint),
+                )),
+            ],
+            _ => vec![Line::from(Span::styled(
+                " no location — ⏎ to pick one on the map",
+                Style::default().fg(pal.muted),
+            ))],
+        };
+        frame.render_widget(Paragraph::new(lines), info);
+    }
+
+    /// Tab 4: the settings — the two bounds, the theme, autostart, and where
     /// the config lives. Row-based: arrows select and adjust, enter acts.
     fn draw_settings_tab(&self, frame: &mut Frame<'_>, area: Rect, pal: &Palette) {
         let block = card(" settings ", pal);
@@ -864,6 +1004,10 @@ fn footer_line(tab: usize, pal: &Palette) -> Paragraph<'static> {
         spans.extend(chip("↑↓", "select"));
         spans.extend(chip("‹›", "adjust"));
         spans.extend(chip("⏎", "apply"));
+    } else if tab == LOCATION_TAB {
+        spans.extend(chip("⏎", "pick"));
+        spans.extend(chip("c", "timezone"));
+        spans.extend(chip("T", "theme"));
     } else {
         spans.extend(chip("t", "toggle"));
         spans.extend(chip("a", "auto"));
@@ -889,6 +1033,17 @@ fn config_path_display() -> String {
                 .to_string()
         })
         .unwrap_or_else(|| "~/.config/nightlightd/config.toml".into())
+}
+
+/// "41.0°N 29.0°E" for a signed coordinate pair.
+fn format_coords(latitude: f64, longitude: f64) -> String {
+    format!(
+        "{:.1}°{} {:.1}°{}",
+        latitude.abs(),
+        if latitude >= 0.0 { "N" } else { "S" },
+        longitude.abs(),
+        if longitude >= 0.0 { "E" } else { "W" },
+    )
 }
 
 /// "in 2h 05m" / "3h 12m ago" / "now" for a signed hour delta.

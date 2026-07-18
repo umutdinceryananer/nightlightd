@@ -41,6 +41,8 @@ trait Daemon {
     fn set_mode(&self, mode: &str) -> zbus::Result<()>;
     fn set_day_temp(&self, kelvin: u32) -> zbus::Result<()>;
     fn set_night_temp(&self, kelvin: u32) -> zbus::Result<()>;
+    fn set_location(&self, latitude: f64, longitude: f64) -> zbus::Result<()>;
+    fn clear_location(&self) -> zbus::Result<()>;
 }
 
 /// A live handle to the daemon: the session-bus connection plus a proxy.
@@ -85,6 +87,16 @@ impl Client {
     /// keeps the band ordered). Errors swallowed.
     pub fn set_night_temp(&self, kelvin: u32) {
         let _ = self.proxy.set_night_temp(kelvin);
+    }
+
+    /// Pins a manual location (degrees); the daemon clamps and persists it.
+    pub fn set_location(&self, latitude: f64, longitude: f64) {
+        let _ = self.proxy.set_location(latitude, longitude);
+    }
+
+    /// Returns to deriving the location from the timezone.
+    pub fn clear_location(&self) {
+        let _ = self.proxy.clear_location();
     }
 }
 
