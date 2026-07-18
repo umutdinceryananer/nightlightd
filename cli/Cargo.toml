@@ -53,7 +53,7 @@ priority = "optional"
 # $auto covers what the linker records (libc). The panel's GL and X11 libraries
 # are dlopen'd by eframe/winit at runtime, so ldd can't see them and they must
 # be listed by hand or the panel won't start on a minimal install.
-depends = "$auto, libgl1, libegl1, libxkbcommon0, libx11-6, libxcursor1, libxrandr2, libxi6"
+depends = "$auto, libgl1, libegl1, libxkbcommon0, libxkbcommon-x11-0, libx11-6, libxcursor1, libxrandr2, libxi6"
 extended-description = """\
 Zero-config screen colour temperature daemon for X11. Reads your timezone to \
 find your location, warms the screen after sunset, refuses to run twice, and \
