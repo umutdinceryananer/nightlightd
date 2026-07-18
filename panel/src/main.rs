@@ -57,6 +57,13 @@ struct Panel {
     /// blocking D-Bus round trip per frame. `None` forces a fresh read.
     status: Option<Status>,
     last_poll: Option<Instant>,
+    /// The day/night bounds as the daemon last reported them, plus whether a
+    /// bound slider is mid-drag — so a change made elsewhere (another client, a
+    /// daemon restart with a different config) is adopted instead of the panel
+    /// showing stale sliders forever, without stomping an in-progress drag.
+    daemon_day: u32,
+    daemon_night: u32,
+    bounds_dragging: bool,
 }
 
 impl eframe::App for Panel {
@@ -100,11 +107,27 @@ impl eframe::App for Panel {
             self.night_temp = status.night_temp;
             self.orig_day = status.day_temp;
             self.orig_night = status.night_temp;
+            self.daemon_day = status.day_temp;
+            self.daemon_night = status.night_temp;
             // Seed the warm slider from what is actually applied, so a panel
             // opened during a manual override shows the truth instead of the
             // compile-time default (the following-mode mirror only covers auto).
             self.kelvin = status.temperature.clamp(WARMEST, NEUTRAL);
             self.anchors_synced = true;
+        }
+
+        // Adopt bounds changed elsewhere (another client, a daemon restart with
+        // a different config); our own sends update daemon_* via the poll that
+        // follows them, so this only fires on genuinely external changes.
+        if self.anchors_synced
+            && !self.bounds_dragging
+            && let Some(status) = &status
+            && (status.day_temp != self.daemon_day || status.night_temp != self.daemon_night)
+        {
+            self.day_temp = status.day_temp;
+            self.night_temp = status.night_temp;
+            self.daemon_day = status.day_temp;
+            self.daemon_night = status.night_temp;
         }
 
         ui.add(
@@ -152,6 +175,7 @@ impl eframe::App for Panel {
             self.client.set_night_temp(self.night_temp);
             self.last_poll = None;
         }
+        self.bounds_dragging = day.dragged() || night.dragged();
 
         ui.add_space(4.0);
         // Back to the values the panel opened with, undoing this session's
@@ -280,6 +304,9 @@ fn main() -> eframe::Result<()> {
                 focus: Arc::clone(&focus),
                 status: None,
                 last_poll: None,
+                daemon_day: 6500,
+                daemon_night: 4500,
+                bounds_dragging: false,
             }))
         }),
     )
