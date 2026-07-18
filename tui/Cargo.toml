@@ -13,4 +13,5 @@ license.workspace = true
 nightlightd-core = { version = "0.1.0", path = "../core" }
 ratatui = "0.30.2"
 serde = { version = "1.0.228", features = ["derive"] }
+tui-big-text = "0.8.8"
 zbus = "5"

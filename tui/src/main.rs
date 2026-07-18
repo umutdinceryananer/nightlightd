@@ -1,33 +1,42 @@
 //! The TUI client (#35): a one-screen ratatui dashboard.
 //!
 //! A thin client like the tray and panel — no state beyond the last snapshot;
-//! the daemon owns everything. One glanceable screen: the current temperature
-//! and what drives it, where the sun is, the day/night curve drawn from the
-//! same core maths the daemon runs, and a handful of keys. Deliberately not an
-//! "application": no tabs, no views, no config editing beyond the night bound.
+//! the daemon owns everything. One glanceable screen, but a *designed* one:
+//! the slant wordmark, a "now" card whose big temperature readout is tinted
+//! with the actual colour of the screen, a sun card with a night⟷day gauge,
+//! and the day/night curve from the same core maths the daemon runs.
+//! Deliberately no tabs, views, or config editing beyond the night bound:
+//! this is a remote control, not an application.
 
 mod daemon;
 
 use std::io;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use nightlightd_core::color::temperature_to_rgb;
 use nightlightd_core::solar::solar_elevation;
 use nightlightd_core::transition::target_temperature;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
-use ratatui::layout::{Constraint, Layout};
-use ratatui::style::{Color, Style};
+use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::style::{Color, Style, Stylize};
 use ratatui::symbols::Marker;
-use ratatui::text::Line;
-use ratatui::widgets::{Axis, Block, Chart, Dataset, GraphType, Paragraph};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Axis, Block, BorderType, Chart, Dataset, GraphType, LineGauge, Paragraph};
 use ratatui::{DefaultTerminal, Frame};
+use tui_big_text::{BigText, PixelSize};
 
 use crate::daemon::{Client, Status};
 
-/// The warm identity colour, matching the panel's curve.
+/// The warm identity colour, matching the panel's curve and the README art.
 const WARM: Color = Color::Rgb(255, 170, 90);
+/// Secondary chrome: borders, axes, hints.
+const DIM: Color = Color::DarkGray;
 /// Bounds and step for the night-temperature keys, mirroring the panel.
 const NIGHT_MIN: u32 = 1500;
 const NIGHT_STEP: u32 = 100;
+
+/// The figlet "slant" wordmark, the same one the README and the panel use.
+const WORDMARK: &str = include_str!("wordmark.txt");
 
 struct App {
     client: Client,
@@ -112,59 +121,219 @@ impl App {
     }
 
     fn draw(&self, frame: &mut Frame<'_>) {
-        let outer = Block::bordered().title(" nightlightd — colour temperature ");
-        let inner = outer.inner(frame.area());
-        frame.render_widget(outer, frame.area());
+        let area = frame.area();
+        if area.width < 66 || area.height < 24 {
+            self.draw_compact(frame, area);
+            return;
+        }
 
+        let [wordmark, cards, curve, footer] = Layout::vertical([
+            Constraint::Length(7),
+            Constraint::Length(8),
+            Constraint::Min(9),
+            Constraint::Length(1),
+        ])
+        .areas(area);
+
+        frame.render_widget(
+            Paragraph::new(WORDMARK.trim_end_matches('\n')).style(Style::default().fg(WARM)),
+            wordmark,
+        );
+
+        let [now_card, sun_card] =
+            Layout::horizontal([Constraint::Length(32), Constraint::Min(32)]).areas(cards);
+        self.draw_now_card(frame, now_card);
+        self.draw_sun_card(frame, sun_card);
+        self.draw_curve_card(frame, curve);
+        frame.render_widget(footer_line(), footer);
+    }
+
+    /// The fallback for small terminals: no wordmark, no cards — just the
+    /// status lines, the curve, and the keys.
+    fn draw_compact(&self, frame: &mut Frame<'_>, area: Rect) {
+        let outer = card(" nightlightd ");
+        let inner = outer.inner(area);
+        frame.render_widget(outer, area);
         let [header, chart, footer] = Layout::vertical([
             Constraint::Length(2),
-            Constraint::Min(6),
+            Constraint::Min(5),
             Constraint::Length(1),
         ])
         .areas(inner);
-
-        frame.render_widget(Paragraph::new(self.header_lines()), header);
-        self.draw_curve(frame, chart);
-        frame.render_widget(
-            Paragraph::new(Line::from(" [t]oggle   [a]uto   [↑/↓] night temp   [q]uit"))
-                .style(Style::default().fg(Color::DarkGray)),
-            footer,
-        );
+        frame.render_widget(Paragraph::new(self.compact_header()), header);
+        self.draw_chart(frame, chart);
+        frame.render_widget(footer_line(), footer);
     }
 
-    /// The two status lines at the top: what is applied and why, and the sun.
-    fn header_lines(&self) -> Vec<Line<'_>> {
+    fn compact_header(&self) -> Vec<Line<'_>> {
         match &self.status {
             Some(status) => {
                 let onoff = if status.enabled { "on" } else { "off" };
-                let mut lines = vec![Line::from(format!(
-                    " {} · {} K · {}",
-                    onoff, status.temperature, status.source
-                ))];
-                if status.has_location {
-                    lines.push(Line::from(format!(
-                        " sun {:+.1}° ({}) at {:.1}°, {:.1}° · day {} K / night {} K",
+                vec![
+                    Line::from(format!(
+                        " {} · {} K · {}",
+                        onoff, status.temperature, status.source
+                    )),
+                    Line::from(format!(
+                        " sun {:+.1}° ({}) · day {} K / night {} K",
                         status.elevation,
                         sun_phase(status.elevation),
-                        status.latitude,
-                        status.longitude,
                         status.day_temp,
                         status.night_temp,
-                    )));
-                }
-                lines
+                    )),
+                ]
             }
-            None => vec![Line::from(" daemon not running").style(Style::default().fg(Color::Red))],
+            None => vec![Line::from(" daemon not running").red()],
         }
     }
 
-    /// The day/night curve, from the same core maths the daemon runs, with a
-    /// dot at "now". Falls back to a hint when no location is known.
-    fn draw_curve(&self, frame: &mut Frame<'_>, area: ratatui::layout::Rect) {
+    /// Left card: state badges and the big temperature readout, tinted with
+    /// the actual colour the screen is filtered to right now.
+    fn draw_now_card(&self, frame: &mut Frame<'_>, area: Rect) {
+        let block = card(" now ");
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let Some(status) = &self.status else {
+            frame.render_widget(
+                Paragraph::new("\n daemon not running").style(Style::default().fg(Color::Red)),
+                inner,
+            );
+            return;
+        };
+
+        let [badges, big] =
+            Layout::vertical([Constraint::Length(2), Constraint::Min(4)]).areas(inner);
+
+        let (dot, dot_colour) = if status.enabled {
+            ("●", Color::Green)
+        } else {
+            ("○", Color::Red)
+        };
+        let mode = if !status.enabled {
+            "OFF"
+        } else if status.following {
+            "AUTO"
+        } else {
+            "MANUAL"
+        };
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(format!(" {dot} "), Style::default().fg(dot_colour)),
+                Span::styled(
+                    if status.enabled { "ON" } else { "OFF" },
+                    Style::default().fg(dot_colour).bold(),
+                ),
+                Span::styled("  ·  ", Style::default().fg(DIM)),
+                Span::styled(mode, Style::default().fg(WARM).bold()),
+            ])),
+            badges,
+        );
+
+        // The number wears the tint the screen wears: white at 6500 K,
+        // candle-orange at 2000 K. Dimmed when the filter is off.
+        let (r, g, b) = temperature_to_rgb(status.temperature);
+        let tint = if status.enabled {
+            Color::Rgb(
+                (r * 255.0).round() as u8,
+                (g * 255.0).round() as u8,
+                (b * 255.0).round() as u8,
+            )
+        } else {
+            DIM
+        };
+        frame.render_widget(
+            BigText::builder()
+                .pixel_size(PixelSize::Quadrant)
+                .style(Style::default().fg(tint))
+                .lines(vec![Line::from(format!("{}K", status.temperature))])
+                .build(),
+            big,
+        );
+    }
+
+    /// Right card: where the sun is, where we are, and how far into the night
+    /// the transition has come.
+    fn draw_sun_card(&self, frame: &mut Frame<'_>, area: Rect) {
+        let block = card(" sun ");
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let Some(status) = self.status.as_ref().filter(|s| s.has_location) else {
+            frame.render_widget(
+                Paragraph::new("\n no location resolved").style(Style::default().fg(DIM)),
+                inner,
+            );
+            return;
+        };
+
+        let [text, gauge] =
+            Layout::vertical([Constraint::Min(3), Constraint::Length(1)]).areas(inner);
+
+        let phase = sun_phase(status.elevation);
+        let icon = match phase {
+            "day" => "☀",
+            "night" => "☾",
+            _ => "◐",
+        };
+        let lat_hemisphere = if status.latitude >= 0.0 { "N" } else { "S" };
+        let lon_hemisphere = if status.longitude >= 0.0 { "E" } else { "W" };
+        frame.render_widget(
+            Paragraph::new(vec![
+                Line::from(vec![
+                    Span::styled(format!(" {icon} "), Style::default().fg(WARM)),
+                    Span::styled(
+                        format!("{:+.1}°", status.elevation),
+                        Style::default().bold(),
+                    ),
+                    Span::styled(format!("  {phase}"), Style::default().fg(DIM)),
+                ]),
+                Line::from(Span::styled(
+                    format!(
+                        "   {:.1}°{lat_hemisphere} {:.1}°{lon_hemisphere} · from the timezone",
+                        status.latitude.abs(),
+                        status.longitude.abs(),
+                    ),
+                    Style::default().fg(DIM),
+                )),
+                Line::from(Span::styled(
+                    format!(
+                        "   day {} K · night {} K",
+                        status.day_temp, status.night_temp
+                    ),
+                    Style::default().fg(DIM),
+                )),
+            ]),
+            text,
+        );
+
+        // Where the transition stands: full night at -6°, full day at +3°.
+        let ratio = ((status.elevation + 6.0) / 9.0).clamp(0.0, 1.0);
+        frame.render_widget(
+            LineGauge::default()
+                .ratio(ratio)
+                .label(Span::styled("☾⟷☀", Style::default().fg(DIM)))
+                .filled_style(Style::default().fg(WARM))
+                .unfilled_style(Style::default().fg(Color::Rgb(60, 60, 60))),
+            gauge,
+        );
+    }
+
+    fn draw_curve_card(&self, frame: &mut Frame<'_>, area: Rect) {
+        let block = card(" today ");
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+        self.draw_chart(frame, inner);
+    }
+
+    /// The day/night curve, from the same core maths the daemon runs: a dotted
+    /// vertical line and a dot mark "now". Falls back to a hint when no
+    /// location is known.
+    fn draw_chart(&self, frame: &mut Frame<'_>, area: Rect) {
         let Some(status) = self.status.as_ref().filter(|s| s.has_location) else {
             frame.render_widget(
                 Paragraph::new(" no location — the curve needs one")
-                    .style(Style::default().fg(Color::DarkGray)),
+                    .style(Style::default().fg(DIM)),
                 area,
             );
             return;
@@ -193,13 +362,19 @@ impl App {
                 (h, kelvin_at(h))
             })
             .collect();
-        let now_point = [(now_hour, kelvin_at(now_hour))];
 
         let night = f64::from(status.night_temp);
         let day = f64::from(status.day_temp);
         let pad = ((day - night) * 0.08).max(50.0);
+        let now_line = [(now_hour, night - pad), (now_hour, day + pad)];
+        let now_point = [(now_hour, kelvin_at(now_hour))];
 
         let datasets = vec![
+            Dataset::default()
+                .marker(Marker::Braille)
+                .graph_type(GraphType::Line)
+                .style(Style::default().fg(Color::Rgb(70, 70, 70)))
+                .data(&now_line),
             Dataset::default()
                 .marker(Marker::Braille)
                 .graph_type(GraphType::Line)
@@ -215,7 +390,7 @@ impl App {
                 Axis::default()
                     .bounds([0.0, 24.0])
                     .labels(["00", "06", "12", "18", "24"])
-                    .style(Style::default().fg(Color::DarkGray)),
+                    .style(Style::default().fg(DIM)),
             )
             .y_axis(
                 Axis::default()
@@ -224,10 +399,37 @@ impl App {
                         format!("{} K", status.night_temp),
                         format!("{} K", status.day_temp),
                     ])
-                    .style(Style::default().fg(Color::DarkGray)),
+                    .style(Style::default().fg(DIM)),
             );
         frame.render_widget(chart, area);
     }
+}
+
+/// A rounded, dim-bordered card with a bold warm title — the shared look.
+fn card(title: &str) -> Block<'_> {
+    Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(DIM))
+        .title(Span::styled(title, Style::default().fg(WARM).bold()))
+}
+
+/// The key hints, styled as chips: the key on a warm background, the label dim.
+fn footer_line() -> Paragraph<'static> {
+    fn chip(key: &str, label: &str) -> Vec<Span<'static>> {
+        vec![
+            Span::styled(
+                format!(" {key} "),
+                Style::default().fg(Color::Black).bg(WARM),
+            ),
+            Span::styled(format!(" {label}   "), Style::default().fg(DIM)),
+        ]
+    }
+    let mut spans = vec![Span::raw(" ")];
+    spans.extend(chip("t", "toggle"));
+    spans.extend(chip("a", "auto"));
+    spans.extend(chip("↑↓", "night temp"));
+    spans.extend(chip("q", "quit"));
+    Paragraph::new(Line::from(spans))
 }
 
 /// Names the part of the day for a solar elevation, matching the daemon's
