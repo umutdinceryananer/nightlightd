@@ -27,7 +27,8 @@ use ratatui::symbols::Marker;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::canvas::{Canvas, Map, MapResolution};
 use ratatui::widgets::{
-    Block, BorderType, Clear, LineGauge, Paragraph, RatatuiLogo, Row, Table, Tabs,
+    Axis, Block, BorderType, Chart, Clear, Dataset, GraphType, LineGauge, Paragraph, RatatuiLogo,
+    Row, Table, Tabs,
 };
 use ratatui::{DefaultTerminal, Frame};
 use tui_big_text::{BigText, PixelSize};
@@ -419,12 +420,16 @@ impl App {
     /// Tab 3: the world map — the resolved location marked on it, and a picker
     /// to pin a manual one. The map is ratatui's own braille world.
     fn draw_location_tab(&self, frame: &mut Frame<'_>, area: Rect, pal: &Palette) {
-        let block = card(" location ", pal);
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
-
-        let [map_area, info] =
-            Layout::vertical([Constraint::Min(8), Constraint::Length(2)]).areas(inner);
+        // Two framed cards like the other tabs: the position summary on top,
+        // the map below it.
+        let [info_area, map_zone] =
+            Layout::vertical([Constraint::Length(4), Constraint::Min(8)]).areas(area);
+        let info_card = card(" position ", pal);
+        let info = info_card.inner(info_area);
+        frame.render_widget(info_card, info_area);
+        let map_card = card(" map ", pal);
+        let map_area = map_card.inner(map_zone);
+        frame.render_widget(map_card, map_zone);
 
         let active = self
             .status
@@ -1061,11 +1066,10 @@ impl App {
         self.draw_chart(frame, inner, pal);
     }
 
-    /// The day/night curve as a gradient area: one solid column per cell,
-    /// tinted with the actual blackbody colour of that hour's temperature —
-    /// a white-gold plateau by day, deep orange ramps at dawn and dusk. The
-    /// "now" column carries a faint dotted line above the fill. Falls back to
-    /// a hint when no location is known.
+    /// The day/night curve: a braille line whose segments wear the sun's own
+    /// display tints — gold across the plateau, orange through dawn and dusk,
+    /// deep orange along the night floor — with a faint vertical line and a
+    /// dot marking "now". Falls back to a hint when no location is known.
     fn draw_chart(&self, frame: &mut Frame<'_>, area: Rect, pal: &Palette) {
         let Some(status) = self.status.as_ref().filter(|s| s.has_location) else {
             frame.render_widget(
@@ -1075,9 +1079,6 @@ impl App {
             );
             return;
         };
-        if area.width < 20 || area.height < 4 {
-            return;
-        }
 
         let (midnight, now_hour) = self.day_context();
         let kelvin_at = |hour: f64| -> f64 {
@@ -1090,77 +1091,93 @@ impl App {
             ))
         };
 
-        const GUTTER: u16 = 7;
-        const PARTIALS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
-        let plot_w = area.width - GUTTER;
-        let plot_h = area.height - 1;
-
         let night = f64::from(status.night_temp);
         let day = f64::from(status.day_temp);
         let pad = ((day - night) * 0.08).max(50.0);
-        let (low, high) = (night - pad, day + pad);
 
-        // Per column: the hour's kelvin and the fill height in eighth-blocks.
-        let columns: Vec<(u32, u32)> = (0..plot_w)
-            .map(|x| {
-                let hour = (f64::from(x) + 0.5) / f64::from(plot_w) * 24.0;
-                let kelvin = kelvin_at(hour);
-                let fraction = ((kelvin - low) / (high - low)).clamp(0.0, 1.0);
-                let eighths = (fraction * f64::from(plot_h) * 8.0).round().max(1.0) as u32;
-                (kelvin.round() as u32, eighths)
+        // The polyline, cut into contiguous phase runs so each stretch wears
+        // its own tint; every run starts with the previous run's last point,
+        // so the line never gaps at a phase boundary.
+        let points: Vec<(f64, f64)> = (0..=192)
+            .map(|i| {
+                let hour = f64::from(i) / 8.0;
+                (hour, kelvin_at(hour))
             })
             .collect();
-        let now_column = ((now_hour / 24.0 * f64::from(plot_w)) as u16).min(plot_w - 1);
-
-        // The same compressed tint the live theme uses — raw blackbody is pure
-        // white for the whole daytime plateau, which reads as a blank slab.
-        let tint = theme::display_tint;
-
-        let mut lines: Vec<Line<'_>> = Vec::with_capacity(usize::from(area.height));
-        for row in 0..plot_h {
-            // Eighth-blocks already covered by the rows below this one.
-            let floor = u32::from(plot_h - 1 - row) * 8;
-            let label = if row == 0 {
-                format!("{:>6} ", status.day_temp)
-            } else if row == plot_h - 1 {
-                format!("{:>6} ", status.night_temp)
+        let phase_of = |kelvin: f64| {
+            if kelvin >= day - 0.5 {
+                0
+            } else if kelvin <= night + 0.5 {
+                2
             } else {
-                " ".repeat(usize::from(GUTTER))
-            };
-            let mut spans = vec![Span::styled(label, Style::default().fg(pal.muted))];
-            for (x, (kelvin, eighths)) in columns.iter().enumerate() {
-                let (glyph, style) = if *eighths >= floor + 8 {
-                    ('█', Style::default().fg(tint(*kelvin)))
-                } else if *eighths > floor {
-                    (
-                        PARTIALS[(*eighths - floor - 1) as usize],
-                        Style::default().fg(tint(*kelvin)),
-                    )
-                } else if x as u16 == now_column {
-                    ('┊', Style::default().fg(pal.faint))
-                } else {
-                    (' ', Style::default())
-                };
-                spans.push(Span::styled(glyph.to_string(), style));
+                1
             }
-            lines.push(Line::from(spans));
+        };
+        let mut runs: Vec<(usize, Vec<(f64, f64)>)> = Vec::new();
+        for &point in &points {
+            let phase = phase_of(point.1);
+            match runs.last_mut() {
+                Some((previous, run)) if *previous == phase => run.push(point),
+                _ => {
+                    let mut run = Vec::new();
+                    if let Some(&bridge) = runs.last().and_then(|(_, r)| r.last()) {
+                        run.push(bridge);
+                    }
+                    run.push(point);
+                    runs.push((phase, run));
+                }
+            }
         }
 
-        // The hour axis, aligned under the plot columns.
-        let mut axis = vec![b' '; usize::from(plot_w)];
-        for hour in [0u16, 6, 12, 18, 24] {
-            let text = format!("{hour:02}");
-            let x = (usize::from(hour) * usize::from(plot_w) / 24)
-                .min(usize::from(plot_w).saturating_sub(2));
-            axis[x..x + 2].copy_from_slice(text.as_bytes());
-        }
-        let axis = String::from_utf8(axis).unwrap_or_default();
-        lines.push(Line::from(vec![
-            Span::raw(" ".repeat(usize::from(GUTTER))),
-            Span::styled(axis, Style::default().fg(pal.muted)),
-        ]));
+        let mid = ((day + night) / 2.0).round() as u32;
+        let tints = [
+            theme::display_tint(status.day_temp),
+            theme::display_tint(mid),
+            theme::display_tint(status.night_temp),
+        ];
 
-        frame.render_widget(Paragraph::new(lines), area);
+        let now_line = [(now_hour, night - pad), (now_hour, day + pad)];
+        let now_point = [(now_hour, kelvin_at(now_hour))];
+        let mut datasets = vec![
+            Dataset::default()
+                .marker(Marker::Braille)
+                .graph_type(GraphType::Line)
+                .style(Style::default().fg(pal.faint))
+                .data(&now_line),
+        ];
+        for (phase, run) in &runs {
+            datasets.push(
+                Dataset::default()
+                    .marker(Marker::Braille)
+                    .graph_type(GraphType::Line)
+                    .style(Style::default().fg(tints[*phase]))
+                    .data(run),
+            );
+        }
+        datasets.push(
+            Dataset::default()
+                .marker(Marker::Dot)
+                .style(Style::default().fg(pal.text))
+                .data(&now_point),
+        );
+
+        let chart = Chart::new(datasets)
+            .x_axis(
+                Axis::default()
+                    .bounds([0.0, 24.0])
+                    .labels(["00", "06", "12", "18", "24"])
+                    .style(Style::default().fg(pal.muted)),
+            )
+            .y_axis(
+                Axis::default()
+                    .bounds([night - pad, day + pad])
+                    .labels([
+                        format!("{} K", status.night_temp),
+                        format!("{} K", status.day_temp),
+                    ])
+                    .style(Style::default().fg(pal.muted)),
+            );
+        frame.render_widget(chart, area);
     }
 }
 
