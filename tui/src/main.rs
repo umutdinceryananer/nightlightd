@@ -28,10 +28,11 @@ use ratatui::symbols::Marker;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::canvas::{Canvas, Map, MapResolution};
 use ratatui::widgets::{
-    Axis, Block, BorderType, Chart, Clear, Dataset, GraphType, LineGauge, Paragraph, RatatuiLogo,
-    Row, Table, Tabs,
+    Axis, Block, BorderType, Chart, Clear, Dataset, GraphType, Paragraph, RatatuiLogo, Row, Table,
+    Tabs,
 };
 use ratatui::{DefaultTerminal, Frame};
+use ratatui_braille_bar::BrailleBar;
 use tui_big_text::{BigText, PixelSize};
 
 use crate::daemon::{Client, Status};
@@ -463,16 +464,37 @@ impl App {
     /// Tab 3: the world map — the resolved location marked on it, and a picker
     /// to pin a manual one. The map is ratatui's own braille world.
     fn draw_location_tab(&self, frame: &mut Frame<'_>, area: Rect, pal: &Palette) {
-        // Two framed cards like the other tabs: the position summary on top,
-        // the map below it.
+        // Two framed cards like the other tabs: the position summary on top
+        // (tall enough for the big city name), the map below it.
         let [info_area, map_zone] =
-            Layout::vertical([Constraint::Length(4), Constraint::Min(8)]).areas(area);
+            Layout::vertical([Constraint::Length(6), Constraint::Min(8)]).areas(area);
         let info_card = card(" position ", pal);
         let info = info_card.inner(info_area);
         frame.render_widget(info_card, info_area);
         let map_card = card(" map ", pal);
         let map_area = map_card.inner(map_zone);
         frame.render_widget(map_card, map_zone);
+
+        // The big city name: half the kelvin readout's size (octant pixels),
+        // fed by the picker cursor while picking, the pinned place otherwise.
+        let [name_area, text_area] =
+            Layout::vertical([Constraint::Length(2), Constraint::Min(2)]).areas(info);
+        let big_name = if self.picker.is_some() {
+            self.picker_place.clone()
+        } else {
+            self.place.as_ref().map(|(_, _, name)| name.clone())
+        };
+        if let Some(name) = big_name {
+            frame.render_widget(
+                BigText::builder()
+                    .pixel_size(PixelSize::Octant)
+                    .style(Style::default().fg(pal.accent))
+                    .lines(vec![Line::from(format!(" {name}"))])
+                    .build(),
+                name_area,
+            );
+        }
+        let info = text_area;
 
         let active = self
             .status
@@ -512,19 +534,10 @@ impl App {
 
         let lines = match (picker, &self.status) {
             (Some((lat, lon)), _) => vec![
-                Line::from(vec![
-                    Span::styled(
-                        format!(" ✛ picking {}", format_coords(lat, lon)),
-                        Style::default().fg(pal.accent).bold(),
-                    ),
-                    Span::styled(
-                        self.picker_place
-                            .as_ref()
-                            .map(|place| format!("  ·  {place}"))
-                            .unwrap_or_default(),
-                        Style::default().fg(pal.text).bold(),
-                    ),
-                ]),
+                Line::from(Span::styled(
+                    format!(" ✛ picking {}", format_coords(lat, lon)),
+                    Style::default().fg(pal.accent).bold(),
+                )),
                 Line::from(Span::styled(
                     "   arrows move · ⏎ pin it · esc cancel",
                     Style::default().fg(pal.muted),
@@ -533,13 +546,6 @@ impl App {
             (None, Some(status)) if status.has_location => vec![
                 Line::from(vec![
                     Span::styled(" ◉ ", Style::default().fg(pal.accent)),
-                    Span::styled(
-                        self.place
-                            .as_ref()
-                            .map(|(_, _, name)| format!("{name}  ·  "))
-                            .unwrap_or_default(),
-                        Style::default().fg(pal.text).bold(),
-                    ),
                     Span::styled(
                         format_coords(status.latitude, status.longitude),
                         Style::default().fg(pal.text),
@@ -1108,13 +1114,17 @@ impl App {
         );
 
         let ratio = ((status.elevation + 6.0) / 9.0).clamp(0.0, 1.0);
+        let [label_area, bar_area] =
+            Layout::horizontal([Constraint::Length(6), Constraint::Min(10)]).areas(gauge);
         frame.render_widget(
-            LineGauge::default()
-                .ratio(ratio)
-                .label(Span::styled("☾⟷☀", Style::default().fg(pal.muted)))
-                .filled_style(Style::default().fg(pal.accent))
-                .unfilled_style(Style::default().fg(pal.faint)),
-            gauge,
+            Paragraph::new(Span::styled(" ☾⟷☀ ", Style::default().fg(pal.muted))),
+            label_area,
+        );
+        frame.render_widget(
+            BrailleBar::new(ratio, 1.0)
+                .fill_color(pal.accent)
+                .empty_color(pal.faint),
+            bar_area,
         );
     }
 
