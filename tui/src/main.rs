@@ -28,8 +28,8 @@ use ratatui::symbols::Marker;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::canvas::{Canvas, Map, MapResolution};
 use ratatui::widgets::{
-    Axis, Block, BorderType, Chart, Clear, Dataset, GraphType, LineGauge, Paragraph, RatatuiLogo,
-    Row, Table, Tabs,
+    Axis, Block, BorderType, Cell, Chart, Clear, Dataset, GraphType, LineGauge, Paragraph,
+    RatatuiLogo, Row, Table, Tabs,
 };
 use ratatui::{DefaultTerminal, Frame};
 use tui_big_text::{BigText, PixelSize};
@@ -550,7 +550,7 @@ impl App {
                     Span::styled(" ◉ ", Style::default().fg(pal.accent)),
                     Span::styled(
                         format_coords(status.latitude, status.longitude),
-                        Style::default().fg(pal.text),
+                        Style::default().fg(pal.accent2),
                     ),
                     Span::styled(
                         format!("  ·  {}", status.source),
@@ -600,9 +600,15 @@ impl App {
             .iter()
             .map(|(crtc, ramp)| {
                 Row::new(vec![
-                    format!(" CRTC {crtc}"),
-                    format!("{ramp} steps"),
-                    applied.clone(),
+                    Cell::from(format!(" CRTC {crtc}")),
+                    Cell::from(Span::styled(
+                        format!("{ramp} steps"),
+                        Style::default().fg(pal.accent2),
+                    )),
+                    Cell::from(Span::styled(
+                        applied.clone(),
+                        Style::default().fg(pal.accent2),
+                    )),
                 ])
             })
             .collect();
@@ -837,18 +843,35 @@ impl App {
             .iter()
             .enumerate()
             .map(|(i, event)| {
-                let row = Row::new(vec![
-                    format!(" {}", event.name),
-                    event.hhmm(),
-                    format!("{} K", event.kelvin),
-                    relative(event.hour - now_hour),
-                ]);
                 if Some(i) == next {
-                    row.style(Style::default().fg(pal.bg).bg(pal.accent).bold())
+                    Row::new(vec![
+                        format!(" {}", event.name),
+                        event.hhmm(),
+                        format!("{} K", event.kelvin),
+                        relative(event.hour - now_hour),
+                    ])
+                    .style(Style::default().fg(pal.bg).bg(pal.accent).bold())
                 } else if event.hour < now_hour {
-                    row.style(Style::default().fg(pal.muted))
+                    Row::new(vec![
+                        format!(" {}", event.name),
+                        event.hhmm(),
+                        format!("{} K", event.kelvin),
+                        relative(event.hour - now_hour),
+                    ])
+                    .style(Style::default().fg(pal.muted))
                 } else {
-                    row
+                    Row::new(vec![
+                        Cell::from(format!(" {}", event.name)),
+                        Cell::from(Span::styled(event.hhmm(), Style::default().fg(pal.accent2))),
+                        Cell::from(Span::styled(
+                            format!("{} K", event.kelvin),
+                            Style::default().fg(pal.accent2),
+                        )),
+                        Cell::from(Span::styled(
+                            relative(event.hour - now_hour),
+                            Style::default().fg(pal.muted),
+                        )),
+                    ])
                 }
             })
             .collect();
@@ -905,7 +928,7 @@ impl App {
                 spans.push(Span::styled("  ·  ", Style::default().fg(pal.faint)));
                 spans.push(Span::styled(
                     self.local_hhmm(),
-                    Style::default().fg(pal.muted),
+                    Style::default().fg(pal.accent2),
                 ));
                 if status.has_location {
                     spans.push(Span::styled("  ·  ", Style::default().fg(pal.faint)));
@@ -1076,8 +1099,11 @@ impl App {
             return;
         };
 
+        // Text and gauge on the left, a little sky scene on the right.
+        let [content, art] =
+            Layout::horizontal([Constraint::Min(26), Constraint::Length(15)]).areas(inner);
         let [text, gauge] =
-            Layout::vertical([Constraint::Min(3), Constraint::Length(1)]).areas(inner);
+            Layout::vertical([Constraint::Min(3), Constraint::Length(1)]).areas(content);
 
         let phase = sun_phase(status.elevation);
         let icon = match phase {
@@ -1093,28 +1119,38 @@ impl App {
                     Span::styled(format!(" {icon} "), Style::default().fg(pal.accent)),
                     Span::styled(
                         format!("{:+.1}°", status.elevation),
-                        Style::default().bold(),
+                        Style::default().fg(pal.accent2).bold(),
                     ),
                     Span::styled(format!("  {phase}"), Style::default().fg(pal.muted)),
                 ]),
-                Line::from(Span::styled(
-                    format!(
-                        "   {:.1}°{lat_hemisphere} {:.1}°{lon_hemisphere} · from the timezone",
-                        status.latitude.abs(),
-                        status.longitude.abs(),
+                Line::from(vec![
+                    Span::styled("   ", Style::default()),
+                    Span::styled(
+                        format!(
+                            "{:.1}°{lat_hemisphere} {:.1}°{lon_hemisphere}",
+                            status.latitude.abs(),
+                            status.longitude.abs(),
+                        ),
+                        Style::default().fg(pal.accent2),
                     ),
-                    Style::default().fg(pal.muted),
-                )),
-                Line::from(Span::styled(
-                    format!(
-                        "   day {} K · night {} K",
-                        status.day_temp, status.night_temp
+                    Span::styled(" · from the timezone", Style::default().fg(pal.muted)),
+                ]),
+                Line::from(vec![
+                    Span::styled("   day ", Style::default().fg(pal.muted)),
+                    Span::styled(
+                        format!("{} K", status.day_temp),
+                        Style::default().fg(pal.accent2),
                     ),
-                    Style::default().fg(pal.muted),
-                )),
+                    Span::styled(" · night ", Style::default().fg(pal.muted)),
+                    Span::styled(
+                        format!("{} K", status.night_temp),
+                        Style::default().fg(pal.accent2),
+                    ),
+                ]),
             ]),
             text,
         );
+        frame.render_widget(sky_art(phase, pal), art);
 
         let ratio = ((status.elevation + 6.0) / 9.0).clamp(0.0, 1.0);
         frame.render_widget(
@@ -1247,6 +1283,51 @@ impl App {
             );
         frame.render_widget(chart, area);
     }
+}
+
+/// A little sky scene for the sun card: the sun by day, a setting half disc
+/// through the transition, a crescent and stars at night.
+fn sky_art(phase: &str, pal: &Palette) -> Paragraph<'static> {
+    let (art, colour): (&[&str], _) = match phase {
+        "day" => (
+            &[
+                r"   \  |  /   ",
+                r"    ▄███▄    ",
+                r"  ‒ █████ ‒  ",
+                r"    ▀███▀    ",
+                r"   /  |  \   ",
+            ],
+            pal.accent,
+        ),
+        "night" => (
+            &[
+                r"  ✦    ▄██▄  ",
+                r"     ▄██▀  · ",
+                r" ·   ███     ",
+                r"     ▀██▄  ✦ ",
+                r"  ·    ▀██▀  ",
+            ],
+            pal.accent2,
+        ),
+        _ => (
+            &[
+                r"      |      ",
+                r"    ▄███▄    ",
+                r"  ‒ █████ ‒  ",
+                r"  ▔▔▔▔▔▔▔▔▔  ",
+                r"      ·      ",
+            ],
+            pal.accent,
+        ),
+    };
+    let mut lines = vec![Line::from("")];
+    lines.extend(art.iter().map(|row| {
+        Line::from(Span::styled(
+            (*row).to_string(),
+            Style::default().fg(colour),
+        ))
+    }));
+    Paragraph::new(lines)
 }
 
 /// A rounded card with a bold accent title and muted borders — the shared look.

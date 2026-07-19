@@ -27,6 +27,9 @@ pub struct Palette {
     pub text: Color,
     /// Emphasis: titles, the curve, chips, gauge fill, the wordmark.
     pub accent: Color,
+    /// Data values: times, numbers, coordinates. A second hue where the theme
+    /// carries one; a lighter shade of the accent where it does not.
+    pub accent2: Color,
     /// Chrome: borders, labels, secondary text.
     pub muted: Color,
     /// Barely-there: gauge track, the now-line.
@@ -37,41 +40,54 @@ pub struct Palette {
     pub err: Color,
 }
 
-/// A named theme: a fixed accent, or `None` for the live screen tint.
+/// A named theme: a fixed accent (or `None` for the live screen tint) and an
+/// optional secondary hue for data values. `None` derives the secondary from
+/// the accent, which keeps deliberately monochrome themes monochrome.
 pub struct Theme {
     pub name: &'static str,
     accent: Option<(u8, u8, u8)>,
+    secondary: Option<(u8, u8, u8)>,
 }
 
 /// Cycle order for the `T` key; `live` first because it is the identity.
 pub const THEMES: &[Theme] = &[
     Theme {
+        // Warm accent from the screen, cool steel for data: the screen warms,
+        // the numbers stay calm.
         name: "live",
         accent: None,
+        secondary: Some((130, 170, 190)),
     },
     Theme {
         name: "ember",
         accent: Some((255, 170, 90)),
+        secondary: Some((108, 190, 180)),
     },
     Theme {
         name: "gruvbox",
         accent: Some((250, 189, 47)),
+        secondary: Some((142, 192, 124)),
     },
     Theme {
         name: "nord",
         accent: Some((136, 192, 208)),
+        secondary: Some((235, 203, 139)),
     },
     Theme {
         name: "tokyo-night",
         accent: Some((122, 162, 247)),
+        secondary: Some((187, 154, 247)),
     },
     Theme {
+        // Deliberately monochrome — a phosphor CRT has one colour.
         name: "phosphor",
         accent: Some((51, 255, 102)),
+        secondary: None,
     },
     Theme {
         name: "synthwave",
         accent: Some((255, 110, 199)),
+        secondary: Some((100, 220, 255)),
     },
 ];
 
@@ -109,10 +125,15 @@ impl Theme {
                 _ => (255, 170, 90),
             },
         };
+        let secondary = self.secondary.unwrap_or(accent);
         Palette {
             bg: mix((0, 0, 0), accent, 0.10),
             text: mix((255, 255, 255), accent, 0.16),
             accent: rgb(accent),
+            accent2: match self.secondary {
+                Some(_) => rgb(secondary),
+                None => mix((255, 255, 255), accent, 0.55),
+            },
             muted: mix((0, 0, 0), accent, 0.62),
             faint: mix((0, 0, 0), accent, 0.32),
             ok: Color::Rgb(90, 220, 120),
