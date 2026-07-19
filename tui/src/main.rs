@@ -375,17 +375,31 @@ impl App {
             return;
         }
 
-        let [wordmark, strip, tabs, content, footer] = Layout::vertical([
+        // Breathing room around the header: a pad above the wordmark, a gap
+        // before the strip, a gap before the framed tab bar.
+        let [_, wordmark, _, strip, _, tabs, content, footer] = Layout::vertical([
+            Constraint::Length(1),
             Constraint::Length(6),
-            Constraint::Length(2),
-            Constraint::Length(2),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(3),
             Constraint::Min(9),
             Constraint::Length(1),
         ])
         .areas(area);
 
+        // Centre the art by padding every line equally — per-line centering
+        // would break the glyph alignment.
+        let art: Vec<&str> = WORDMARK.trim_end_matches('\n').lines().collect();
+        let art_width = art.iter().map(|l| l.chars().count()).max().unwrap_or(0);
+        let pad = " ".repeat((usize::from(area.width).saturating_sub(art_width)) / 2);
+        let centered: Vec<Line<'_>> = art
+            .iter()
+            .map(|line| Line::from(format!("{pad}{line}")))
+            .collect();
         frame.render_widget(
-            Paragraph::new(WORDMARK.trim_end_matches('\n')).style(Style::default().fg(pal.accent)),
+            Paragraph::new(centered).style(Style::default().fg(pal.accent)),
             wordmark,
         );
         self.draw_strip(frame, strip, &pal);
@@ -652,8 +666,14 @@ impl App {
         frame.render_widget(Paragraph::new(lines), inner);
     }
 
-    /// The tab bar: numbered titles, the active one on an accent chip.
+    /// The tab bar: framed like the cards so it reads as a control, not as
+    /// stray text; numbered titles, the active one on an accent chip.
     fn draw_tabs(&self, frame: &mut Frame<'_>, area: Rect, pal: &Palette) {
+        let block = Block::bordered()
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(pal.muted));
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
         let titles: Vec<Line<'_>> = TABS
             .iter()
             .enumerate()
@@ -662,10 +682,10 @@ impl App {
         frame.render_widget(
             Tabs::new(titles)
                 .select(self.tab)
-                .style(Style::default().fg(pal.muted))
+                .style(Style::default().fg(pal.text))
                 .highlight_style(Style::default().fg(pal.bg).bg(pal.accent).bold())
-                .divider(Span::styled("·", Style::default().fg(pal.faint))),
-            area,
+                .divider(Span::styled("│", Style::default().fg(pal.faint))),
+            inner,
         );
     }
 
@@ -797,7 +817,11 @@ impl App {
                 ));
             }
         }
-        frame.render_widget(Paragraph::new(Line::from(spans)), area);
+        // Centred under the centred wordmark; the version keeps to the right.
+        frame.render_widget(
+            Paragraph::new(Line::from(spans)).alignment(Alignment::Center),
+            area,
+        );
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
                 format!(
