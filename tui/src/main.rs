@@ -18,6 +18,7 @@ use std::io;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use nightlightd_core::color::temperature_to_rgb;
+use nightlightd_core::location::nearest_zone;
 use nightlightd_core::solar::solar_elevation;
 use nightlightd_core::transition::target_temperature;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -67,8 +68,27 @@ struct App {
     start_at_login: bool,
     /// The map's location picker: `Some((lat, lon))` cursor while picking.
     picker: Option<(f64, f64)>,
+    /// The nearest zone city under the picker cursor, refreshed as it moves.
+    picker_place: Option<String>,
+    /// The nearest zone city for the pinned location, cached by coordinate so
+    /// zone.tab is only re-read when the location actually changes.
+    place: Option<(f64, f64, String)>,
     /// The active outputs, polled together with the status.
     outputs: Option<Vec<(u32, u16)>>,
+}
+
+/// A human label from a zone name and how close it sits: `Europe/Istanbul`
+/// right on the spot becomes "Istanbul"; a nearby match becomes "≈ Istanbul".
+fn place_label(zone: &str, exact: bool) -> String {
+    let city = zone.rsplit('/').next().unwrap_or(zone).replace('_', " ");
+    if exact { city } else { format!("≈ {city}") }
+}
+
+/// The nearest-city label for a coordinate, if the zone table is readable.
+fn place_for(lat: f64, lon: f64) -> Option<String> {
+    let (zone, zone_lat, zone_lon) = nearest_zone(lat, lon)?;
+    let exact = (zone_lat - lat).abs() < 0.5 && (zone_lon - lon).abs() < 0.5;
+    Some(place_label(&zone, exact))
 }
 
 fn main() -> io::Result<()> {
@@ -97,6 +117,8 @@ fn main() -> io::Result<()> {
         theme_popup: None,
         start_at_login: autostart::enabled(),
         picker: None,
+        picker_place: None,
+        place: None,
         outputs: None,
     };
 
@@ -166,6 +188,19 @@ impl App {
                 self.status = self.client.status();
                 self.outputs = self.client.outputs();
                 self.last_poll = Some(Instant::now());
+                // Refresh the place name only when the location itself moved.
+                if let Some(status) = self.status.as_ref().filter(|s| s.has_location) {
+                    let moved = self.place.as_ref().is_none_or(|(lat, lon, _)| {
+                        (lat - status.latitude).abs() > 1e-6
+                            || (lon - status.longitude).abs() > 1e-6
+                    });
+                    if moved {
+                        self.place = place_for(status.latitude, status.longitude)
+                            .map(|name| (status.latitude, status.longitude, name));
+                    }
+                } else {
+                    self.place = None;
+                }
             }
             terminal.draw(|frame| self.draw(frame))?;
             if event::poll(Duration::from_millis(250))?
@@ -332,11 +367,19 @@ impl App {
             KeyCode::Enter => {
                 self.client.set_location(lat, lon);
                 self.picker = None;
+                self.picker_place = None;
                 self.last_poll = None;
             }
-            KeyCode::Esc => self.picker = None,
+            KeyCode::Esc => {
+                self.picker = None;
+                self.picker_place = None;
+            }
             KeyCode::Char('q') => return true,
             _ => {}
+        }
+        // Keep the "what am I about to pin" label in step with the cursor.
+        if let Some((lat, lon)) = self.picker {
+            self.picker_place = place_for(lat, lon);
         }
         false
     }
@@ -469,10 +512,19 @@ impl App {
 
         let lines = match (picker, &self.status) {
             (Some((lat, lon)), _) => vec![
-                Line::from(Span::styled(
-                    format!(" ✛ picking {}", format_coords(lat, lon)),
-                    Style::default().fg(pal.accent).bold(),
-                )),
+                Line::from(vec![
+                    Span::styled(
+                        format!(" ✛ picking {}", format_coords(lat, lon)),
+                        Style::default().fg(pal.accent).bold(),
+                    ),
+                    Span::styled(
+                        self.picker_place
+                            .as_ref()
+                            .map(|place| format!("  ·  {place}"))
+                            .unwrap_or_default(),
+                        Style::default().fg(pal.text).bold(),
+                    ),
+                ]),
                 Line::from(Span::styled(
                     "   arrows move · ⏎ pin it · esc cancel",
                     Style::default().fg(pal.muted),
@@ -481,6 +533,13 @@ impl App {
             (None, Some(status)) if status.has_location => vec![
                 Line::from(vec![
                     Span::styled(" ◉ ", Style::default().fg(pal.accent)),
+                    Span::styled(
+                        self.place
+                            .as_ref()
+                            .map(|(_, _, name)| format!("{name}  ·  "))
+                            .unwrap_or_default(),
+                        Style::default().fg(pal.text).bold(),
+                    ),
                     Span::styled(
                         format_coords(status.latitude, status.longitude),
                         Style::default().fg(pal.text),
