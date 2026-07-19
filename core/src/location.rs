@@ -130,20 +130,56 @@ fn zone_from_etc_timezone() -> Option<String> {
     (!name.is_empty()).then(|| name.to_owned())
 }
 
-/// Reads the zoneinfo coordinate table and looks up `zone`. Tries `zone.tab`,
-/// then `zone1970.tab`, using whichever opens first.
-fn lookup_zone(zone: &str) -> Option<(f64, f64)> {
+/// Reads the zoneinfo coordinate table: `zone.tab`, then `zone1970.tab`,
+/// whichever opens first.
+fn read_zone_table() -> Option<String> {
     const PATHS: [&str; 2] = [
         "/usr/share/zoneinfo/zone.tab",
         "/usr/share/zoneinfo/zone1970.tab",
     ];
+    PATHS
+        .iter()
+        .find_map(|path| std::fs::read_to_string(path).ok())
+}
 
-    for path in PATHS {
-        if let Ok(contents) = std::fs::read_to_string(path) {
-            return coordinate_from_zone_tab(&contents, zone);
+/// Looks up `zone` in the zoneinfo coordinate table.
+fn lookup_zone(zone: &str) -> Option<(f64, f64)> {
+    coordinate_from_zone_tab(&read_zone_table()?, zone)
+}
+
+/// Finds the zone whose representative city sits nearest to `(lat, lon)` in a
+/// `zone.tab`-style text — the offline answer to "what is this place called".
+/// Longitude distance is scaled by the latitude's cosine, close enough for
+/// "nearest city" over a ~450-entry table.
+fn nearest_in_zone_tab(contents: &str, lat: f64, lon: f64) -> Option<(&str, f64, f64)> {
+    let mut best: Option<(f64, &str, f64, f64)> = None;
+    for line in contents.lines() {
+        if line.starts_with('#') {
+            continue;
+        }
+        let mut fields = line.split('\t');
+        let (Some(_codes), Some(coord), Some(name)) = (fields.next(), fields.next(), fields.next())
+        else {
+            continue;
+        };
+        let Some((zone_lat, zone_lon)) = parse_coordinates(coord) else {
+            continue;
+        };
+        let lon_scale = lat.to_radians().cos();
+        let distance = (zone_lat - lat).powi(2) + ((zone_lon - lon) * lon_scale).powi(2);
+        if best.is_none_or(|(b, ..)| distance < b) {
+            best = Some((distance, name, zone_lat, zone_lon));
         }
     }
-    None
+    best.map(|(_, name, zone_lat, zone_lon)| (name, zone_lat, zone_lon))
+}
+
+/// The IANA zone nearest to `(lat, lon)`, with its own coordinate, from the
+/// system's zoneinfo table. [`None`] when the table cannot be read.
+pub fn nearest_zone(lat: f64, lon: f64) -> Option<(String, f64, f64)> {
+    let contents = read_zone_table()?;
+    nearest_in_zone_tab(&contents, lat, lon)
+        .map(|(name, zone_lat, zone_lon)| (name.to_owned(), zone_lat, zone_lon))
 }
 
 /// Finds the canonical zone a backward-compatibility alias points to, in the
@@ -254,6 +290,18 @@ this line is malformed and has no tabs
     #[test]
     fn missing_zone_and_bad_lines_yield_none_not_panic() {
         assert_eq!(coordinate_from_zone_tab(SAMPLE, "Missing/Zone"), None);
+    }
+
+    #[test]
+    fn nearest_zone_finds_the_closest_city() {
+        // Right on Istanbul.
+        let (name, ..) = nearest_in_zone_tab(SAMPLE, 41.0, 28.9).unwrap();
+        assert_eq!(name, "Europe/Istanbul");
+        // Off the US east coast still lands on New York, not Andorra.
+        let (name, ..) = nearest_in_zone_tab(SAMPLE, 39.0, -70.0).unwrap();
+        assert_eq!(name, "America/New_York");
+        // An empty table has no answer.
+        assert!(nearest_in_zone_tab("", 0.0, 0.0).is_none());
     }
 
     #[test]
