@@ -85,19 +85,29 @@ pub fn index_of(name: &str) -> Option<usize> {
     THEMES.iter().position(|theme| theme.name == name)
 }
 
+/// The display tint for a temperature: the blackbody colour after compressing
+/// the working range into [`LIVE_DISPLAY_MIN`]–[`LIVE_DISPLAY_MAX`]. Raw
+/// 6500 K is pure white — honest, but on screen it reads as no colour at all;
+/// this keeps daytime a soft gold and night a deep orange. Shared by the live
+/// theme's accent and the curve's gradient fill, so the two always agree.
+pub fn display_tint(kelvin: u32) -> Color {
+    let kelvin = f64::from(kelvin.clamp(1500, 6500));
+    let display =
+        LIVE_DISPLAY_MIN + (kelvin - 1500.0) / 5000.0 * (LIVE_DISPLAY_MAX - LIVE_DISPLAY_MIN);
+    let (r, g, b) = temperature_to_rgb(display.round() as u32);
+    Color::Rgb(to_u8(r), to_u8(g), to_u8(b))
+}
+
 impl Theme {
     /// Resolves the palette. `applied_kelvin` feeds the live theme; fixed
     /// themes ignore it.
     pub fn palette(&self, applied_kelvin: Option<u32>) -> Palette {
         let accent = match self.accent {
             Some(rgb) => rgb,
-            None => {
-                let kelvin = f64::from(applied_kelvin.unwrap_or(6500).clamp(1500, 6500));
-                let display = LIVE_DISPLAY_MIN
-                    + (kelvin - 1500.0) / 5000.0 * (LIVE_DISPLAY_MAX - LIVE_DISPLAY_MIN);
-                let (r, g, b) = temperature_to_rgb(display.round() as u32);
-                (to_u8(r), to_u8(g), to_u8(b))
-            }
+            None => match display_tint(applied_kelvin.unwrap_or(6500)) {
+                Color::Rgb(r, g, b) => (r, g, b),
+                _ => (255, 170, 90),
+            },
         };
         Palette {
             bg: mix((0, 0, 0), accent, 0.10),

@@ -1112,14 +1112,9 @@ impl App {
             .collect();
         let now_column = ((now_hour / 24.0 * f64::from(plot_w)) as u16).min(plot_w - 1);
 
-        let tint = |kelvin: u32| {
-            let (r, g, b) = temperature_to_rgb(kelvin);
-            Color::Rgb(
-                (r * 255.0).round() as u8,
-                (g * 255.0).round() as u8,
-                (b * 255.0).round() as u8,
-            )
-        };
+        // The same compressed tint the live theme uses — raw blackbody is pure
+        // white for the whole daytime plateau, which reads as a blank slab.
+        let tint = theme::display_tint;
 
         let mut lines: Vec<Line<'_>> = Vec::with_capacity(usize::from(area.height));
         for row in 0..plot_h {
