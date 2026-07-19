@@ -463,10 +463,12 @@ impl App {
     /// Tab 3: the world map — the resolved location marked on it, and a picker
     /// to pin a manual one. The map is ratatui's own braille world.
     fn draw_location_tab(&self, frame: &mut Frame<'_>, area: Rect, pal: &Palette) {
-        // Two framed cards like the other tabs: the position summary on top
-        // (tall enough for the big city name), the map below it.
+        // Two framed cards like the other tabs: the position summary on top,
+        // the map below it. 10 tall to match the now tab's card row and the
+        // today tab's schedule card, so the lower edge never jumps between
+        // tabs.
         let [info_area, map_zone] =
-            Layout::vertical([Constraint::Length(8), Constraint::Min(8)]).areas(area);
+            Layout::vertical([Constraint::Length(10), Constraint::Min(8)]).areas(area);
         let info_card = card(" position ", pal);
         let info = info_card.inner(info_area);
         frame.render_widget(info_card, info_area);
