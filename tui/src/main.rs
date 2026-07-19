@@ -703,11 +703,10 @@ impl App {
     /// Tab 2: the day's solar milestones, derived from the real curve, with
     /// the next event highlighted — then the curve for context.
     fn draw_today_tab(&self, frame: &mut Frame<'_>, area: Rect, pal: &Palette) {
-        let block = card(" today ", pal);
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
-
         let Some(status) = self.status.as_ref().filter(|s| s.has_location) else {
+            let block = card(" today ", pal);
+            let inner = block.inner(area);
+            frame.render_widget(block, area);
             frame.render_widget(
                 Paragraph::new(" no location — the schedule needs one")
                     .style(Style::default().fg(pal.muted)),
@@ -726,9 +725,15 @@ impl App {
         );
         let next = events.iter().position(|e| e.hour > now_hour);
 
+        // Two framed cards, like the now tab: the schedule table and the
+        // curve each in their own border so they never bleed together.
         let table_height = (events.len() + 1) as u16;
-        let [table_area, chart_area] =
-            Layout::vertical([Constraint::Length(table_height), Constraint::Min(0)]).areas(inner);
+        let [schedule_area, curve_area] =
+            Layout::vertical([Constraint::Length(table_height + 2), Constraint::Min(0)])
+                .areas(area);
+        let schedule = card(" schedule ", pal);
+        let table_area = schedule.inner(schedule_area);
+        frame.render_widget(schedule, schedule_area);
 
         let rows: Vec<Row<'_>> = events
             .iter()
@@ -764,7 +769,10 @@ impl App {
         );
         frame.render_widget(table, table_area);
 
-        if chart_area.height >= 5 {
+        if curve_area.height >= 7 {
+            let curve = card(" curve ", pal);
+            let chart_area = curve.inner(curve_area);
+            frame.render_widget(curve, curve_area);
             self.draw_chart(frame, chart_area, pal);
         }
     }
