@@ -25,14 +25,14 @@ pub struct Palette {
     pub bg: Color,
     /// Default text: near-white, faintly tinted toward the accent.
     pub text: Color,
-    /// Emphasis: titles, the curve, chips, gauge fill, the wordmark.
+    /// Emphasis: titles, the curve, chips, the wordmark.
     pub accent: Color,
     /// Data values: times, numbers, coordinates. A second hue where the theme
     /// carries one; a lighter shade of the accent where it does not.
     pub accent2: Color,
     /// Chrome: borders, labels, secondary text.
     pub muted: Color,
-    /// Barely-there: gauge track, the now-line.
+    /// Barely-there: the world map, the now-line.
     pub faint: Color,
     /// State good — constant across themes.
     pub ok: Color,

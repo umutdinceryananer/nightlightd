@@ -28,7 +28,7 @@ use ratatui::symbols::Marker;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::canvas::{Canvas, Map, MapResolution};
 use ratatui::widgets::{
-    Axis, Block, BorderType, Cell, Chart, Clear, Dataset, GraphType, LineGauge, Paragraph,
+    Axis, Block, BorderType, Cell, Chart, Clear, Dataset, GraphType, Padding, Paragraph,
     RatatuiLogo, Row, Table, Tabs,
 };
 use ratatui::{DefaultTerminal, Frame};
@@ -54,6 +54,12 @@ const SETTINGS_ITEMS: usize = 4;
 /// Picker steps in degrees — coarse on purpose; braille map cells are chunky.
 const PICK_LAT_STEP: f64 = 3.0;
 const PICK_LON_STEP: f64 = 5.0;
+
+/// The map viewport. Antarctica is cropped away — nobody runs a night light
+/// there — which hands its rows to the latitudes people actually live at.
+/// The picker clamps to the same bounds so the pin can never leave the map.
+const MAP_LAT_MIN: f64 = -55.0;
+const MAP_LAT_MAX: f64 = 75.0;
 
 struct App {
     client: Client,
@@ -360,8 +366,8 @@ impl App {
             return false;
         };
         match code {
-            KeyCode::Up => self.picker = Some(((lat + PICK_LAT_STEP).min(85.0), lon)),
-            KeyCode::Down => self.picker = Some(((lat - PICK_LAT_STEP).max(-85.0), lon)),
+            KeyCode::Up => self.picker = Some(((lat + PICK_LAT_STEP).min(MAP_LAT_MAX), lon)),
+            KeyCode::Down => self.picker = Some(((lat - PICK_LAT_STEP).max(MAP_LAT_MIN), lon)),
             KeyCode::Right => self.picker = Some((lat, (lon + PICK_LON_STEP).min(179.0))),
             KeyCode::Left => self.picker = Some((lat, (lon - PICK_LON_STEP).max(-179.0))),
             KeyCode::Enter => {
@@ -469,7 +475,7 @@ impl App {
         // tabs.
         let [info_area, map_zone] =
             Layout::vertical([Constraint::Length(10), Constraint::Min(8)]).areas(area);
-        let info_card = card(" position ", pal);
+        let info_card = card(" position ", pal).padding(Padding::new(2, 1, 1, 0));
         let info = info_card.inner(info_area);
         frame.render_widget(info_card, info_area);
         let map_card = card(" map ", pal);
@@ -510,7 +516,7 @@ impl App {
         let canvas = Canvas::default()
             .marker(Marker::Braille)
             .x_bounds([-180.0, 180.0])
-            .y_bounds([-90.0, 90.0])
+            .y_bounds([MAP_LAT_MIN, MAP_LAT_MAX])
             .paint(move |ctx| {
                 ctx.draw(&Map {
                     resolution: MapResolution::High,
@@ -567,7 +573,10 @@ impl App {
                 Style::default().fg(pal.muted),
             ))],
         };
-        frame.render_widget(Paragraph::new(lines), info);
+        // A blank line between the big name and the details — air, not a wall.
+        let mut spaced = vec![Line::default()];
+        spaced.extend(lines);
+        frame.render_widget(Paragraph::new(spaced), info);
     }
 
     /// Tab 4: the outputs — every CRTC the daemon is writing gamma ramps to,
@@ -1023,7 +1032,7 @@ impl App {
     /// always wears the screen's own tint (semantic, theme-independent):
     /// white at 6500 K, candle-orange when warm, muted when off.
     fn draw_now_card(&self, frame: &mut Frame<'_>, area: Rect, pal: &Palette) {
-        let block = card(" now ", pal);
+        let block = card(" now ", pal).padding(Padding::new(2, 1, 1, 0));
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
@@ -1084,26 +1093,24 @@ impl App {
         );
     }
 
-    /// Right card: where the sun is, where we are, and how far into the night
-    /// the transition has come.
+    /// Right card: where the sun is, where we are, and the temperature band,
+    /// with a sky scene for the current phase on the right.
     fn draw_sun_card(&self, frame: &mut Frame<'_>, area: Rect, pal: &Palette) {
-        let block = card(" sun ", pal);
+        let block = card(" sun ", pal).padding(Padding::new(2, 1, 1, 0));
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
         let Some(status) = self.status.as_ref().filter(|s| s.has_location) else {
             frame.render_widget(
-                Paragraph::new("\n no location resolved").style(Style::default().fg(pal.muted)),
+                Paragraph::new("no location resolved").style(Style::default().fg(pal.muted)),
                 inner,
             );
             return;
         };
 
-        // Text and gauge on the left, a little sky scene on the right.
-        let [content, art] =
-            Layout::horizontal([Constraint::Min(26), Constraint::Length(15)]).areas(inner);
-        let [text, gauge] =
-            Layout::vertical([Constraint::Min(3), Constraint::Length(1)]).areas(content);
+        // Text on the left, the sky scene on the right.
+        let [text, art] =
+            Layout::horizontal([Constraint::Min(24), Constraint::Length(16)]).areas(inner);
 
         let phase = sun_phase(status.elevation);
         let icon = match phase {
@@ -1123,6 +1130,7 @@ impl App {
                     ),
                     Span::styled(format!("  {phase}"), Style::default().fg(pal.muted)),
                 ]),
+                Line::default(),
                 Line::from(vec![
                     Span::styled("   ", Style::default()),
                     Span::styled(
@@ -1135,6 +1143,7 @@ impl App {
                     ),
                     Span::styled(" · from the timezone", Style::default().fg(pal.muted)),
                 ]),
+                Line::default(),
                 Line::from(vec![
                     Span::styled("   day ", Style::default().fg(pal.muted)),
                     Span::styled(
@@ -1151,16 +1160,6 @@ impl App {
             text,
         );
         frame.render_widget(sky_art(phase, pal), art);
-
-        let ratio = ((status.elevation + 6.0) / 9.0).clamp(0.0, 1.0);
-        frame.render_widget(
-            LineGauge::default()
-                .ratio(ratio)
-                .label(Span::styled("☾⟷☀", Style::default().fg(pal.muted)))
-                .filled_style(Style::default().fg(pal.accent))
-                .unfilled_style(Style::default().fg(pal.faint)),
-            gauge,
-        );
     }
 
     fn draw_curve_card(&self, frame: &mut Frame<'_>, area: Rect, pal: &Palette) {
@@ -1285,48 +1284,71 @@ impl App {
     }
 }
 
-/// A little sky scene for the sun card: the sun by day, a setting half disc
-/// through the transition, a crescent and stars at night.
+/// A little sky scene for the sun card: a full sun disc with rays by day, the
+/// disc sinking into its own reflection through the transition, a crescent
+/// under stars at night. Two tones per scene, like the rest of the theme: the
+/// body wears one colour, the surroundings (rays, water, stars) the other.
 fn sky_art(phase: &str, pal: &Palette) -> Paragraph<'static> {
-    let (art, colour): (&[&str], _) = match phase {
+    /// Glyphs that belong to the surroundings, not the celestial body.
+    const AMBIENT: &str = "╲│╱─░▒·✦";
+    let (art, body, ambient): (&[&str], Color, Color) = match phase {
         "day" => (
             &[
-                r"   \  |  /   ",
-                r"    ▄███▄    ",
-                r"  ‒ █████ ‒  ",
-                r"    ▀███▀    ",
-                r"   /  |  \   ",
+                r"  ╲    │    ╱  ",
+                r"    ▗▄███▄▖    ",
+                r"   ▟███████▙   ",
+                r"── █████████ ──",
+                r"   ▜███████▛   ",
+                r"    ▝▀███▀▘    ",
+                r"  ╱    │    ╲  ",
             ],
             pal.accent,
+            pal.muted,
         ),
         "night" => (
             &[
-                r"  ✦    ▄██▄  ",
-                r"     ▄██▀  · ",
-                r" ·   ███     ",
-                r"     ▀██▄  ✦ ",
-                r"  ·    ▀██▀  ",
+                r"  ·            ",
+                r"        ▗▄██▀  ",
+                r"  ✦    ▗██▛▘   ",
+                r"       ▐██▌  · ",
+                r"       ▝██▙▖   ",
+                r"   ·    ▝▀██▄  ",
+                r"            ✦  ",
             ],
             pal.accent2,
+            pal.accent,
         ),
         _ => (
             &[
-                r"      |      ",
-                r"    ▄███▄    ",
-                r"  ‒ █████ ‒  ",
-                r"  ▔▔▔▔▔▔▔▔▔  ",
-                r"      ·      ",
+                r"       │       ",
+                r"    ▗▄███▄▖    ",
+                r"   ▟███████▙   ",
+                r"───█████████───",
+                r"    ░▒▒▒▒▒░    ",
+                r"      ░▒░      ",
+                r"       ░       ",
             ],
             pal.accent,
+            pal.muted,
         ),
     };
-    let mut lines = vec![Line::from("")];
-    lines.extend(art.iter().map(|row| {
-        Line::from(Span::styled(
-            (*row).to_string(),
-            Style::default().fg(colour),
-        ))
-    }));
+    let lines: Vec<Line<'static>> = art
+        .iter()
+        .map(|row| {
+            Line::from(
+                row.chars()
+                    .map(|glyph| {
+                        let colour = if AMBIENT.contains(glyph) {
+                            ambient
+                        } else {
+                            body
+                        };
+                        Span::styled(glyph.to_string(), Style::default().fg(colour))
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect();
     Paragraph::new(lines)
 }
 
