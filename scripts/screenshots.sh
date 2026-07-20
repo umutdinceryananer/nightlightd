@@ -23,11 +23,17 @@ done
 echo "building release binary…"
 cargo build --release -p nightlight-tui --manifest-path "$repo/Cargo.toml" -q
 
+# A compact window, not a maximised one: README shots should read like a
+# terminal — small, dense, characters with presence — not like a fullscreen
+# app floating in empty space. 118x34 cells fits every tab with no waste.
+geometry="${GEOMETRY:-118x34}"
+
 # shot <theme> <tab> <output-file>
 shot() {
     local theme="$1" tab="$2" file="$3"
-    echo "  $file  (theme $theme, tab $tab)"
-    xfce4-terminal --disable-server --hide-menubar --hide-toolbar --maximize \
+    echo "  $file  (theme $theme, tab $tab, $geometry)"
+    xfce4-terminal --disable-server --hide-menubar --hide-toolbar \
+        --geometry="$geometry" \
         --title="$title" --command="$bin --theme $theme --tab $tab" &
     sleep 4
     wmctrl -a "$title"; sleep 1

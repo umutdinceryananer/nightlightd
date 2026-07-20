@@ -57,12 +57,13 @@ depends = "$auto, libgl1, libegl1, libxkbcommon0, libxkbcommon-x11-0, libx11-6, 
 extended-description = """\
 Zero-config screen colour temperature daemon for X11. Reads your timezone to \
 find your location, warms the screen after sunset, refuses to run twice, and \
-survives suspend. Ships a system-tray icon and a settings panel with an \
-f.lux-style day/night curve."""
+survives suspend. Ships a system-tray icon, a settings panel with an \
+f.lux-style day/night curve, and a terminal dashboard."""
 assets = [
     ["target/release/nightlightd", "usr/bin/", "755"],
     ["target/release/nightlight-tray", "usr/bin/", "755"],
     ["target/release/nightlight-panel", "usr/bin/", "755"],
+    ["target/release/nightlight-tui", "usr/bin/", "755"],
     ["../dist/deb/nightlightd.service", "usr/lib/systemd/user/nightlightd.service", "644"],
     ["../dist/nightlight-tray.desktop", "etc/xdg/autostart/nightlight-tray.desktop", "644"],
     ["../README.md", "usr/share/doc/nightlightd/README.md", "644"],
