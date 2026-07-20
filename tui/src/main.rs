@@ -1317,11 +1317,14 @@ impl App {
                 .data(&now_point),
         );
 
+        // A label every two hours (00, 02, … 24), so "now" can be read off the
+        // axis to the hour instead of guessed between six-hour posts.
+        let hour_labels: Vec<String> = (0..=12).map(|h| format!("{:02}", h * 2)).collect();
         let chart = Chart::new(datasets)
             .x_axis(
                 Axis::default()
                     .bounds([0.0, 24.0])
-                    .labels(["00", "06", "12", "18", "24"])
+                    .labels(hour_labels)
                     .style(Style::default().fg(pal.muted)),
             )
             .y_axis(
