@@ -227,12 +227,70 @@ PR body: one sentence + a screenshot link.
 
 ---
 
+## ratatui Discord, #showcase channel
+
+(This is the most direct line to the ratatui maintainers; Orhun has
+written that he finds projects via GitHub, social media and the
+Discord servers. Short and visual, one message, attach 01-now.png.)
+
+Built my first Rust project with ratatui: nightlight-tui, the
+dashboard for a zero-config screen colour temperature daemon (X11).
+The default theme's accent is the actual colour the daemon is
+filtering the screen to, so the whole UI warms in step with your
+display as the evening comes on. Also: a solar schedule computed from
+real sun elevation, and a braille world map for pinning a location.
+
+https://github.com/umutdinceryananer/nightlightd
+
+---
+
+## r/rust (EN)
+
+**Title:** My first Rust project: a zero-config screen colour
+temperature daemon for X11, with a ratatui dashboard
+
+I set out to learn Rust with a real problem: I couldn't get a night
+light working reliably on Linux Mint Xfce. redshift is archived and
+gammastep inherited three measurable defects from it (silent hang
+without a location source, no protection against duplicate instances,
+no reaction to RandR events after suspend). All three are documented
+with commands and outputs in the repo's PRIOR-ART.md.
+
+The result is a workspace of five crates: a pure core (colour maths,
+solar elevation, timezone-to-location) with no dependencies, a daemon
+owning X11 and D-Bus, and three thin clients that hold no state: a
+tray icon (ksni), a settings panel (egui), and a ratatui dashboard.
+The TUI's default theme follows the actual colour the screen is
+filtered to; the schedule tab derives the day's milestones from real
+solar elevation rather than hand-set times.
+
+Things Rust made pleasant: the core crate is pure functions and tests;
+the wire format of the D-Bus status struct is pinned by a test in
+every client, so a signature drift fails CI instead of failing at
+runtime.
+
+Honest caveats: dogfooded on one machine (Mint Xfce, X11, one
+monitor), and my biggest worry is that something already does exactly
+this; if so, tell me and I'll point people there.
+
+https://github.com/umutdinceryananer/nightlightd
+
+It's my first Rust project, so unidiomatic corners are guaranteed.
+Reviews of the code are worth more to me than stars.
+
+---
+
 ## Order and pacing
 
-1. The GitLab comment on #111 first (quiet, useful, low key).
+0. GitHub repo topics (rust, tui, ratatui, x11, night-light,
+   color-temperature, daemon): two minutes, permanent discoverability;
+   Orhun trawls GitHub by exactly these.
+1. The GitLab comment on #111 first (quiet, useful, low key). DONE.
 2. r/xfce and the Mint forum (the audience with the actual problem).
-3. awesome-ratatui PR (small, fast to merge).
-4. r/linux once the first feedback is in (so the thread has answers).
+3. awesome-ratatui PR + ratatui Discord #showcase (the direct line to
+   the ratatui crowd).
+4. r/rust and then r/linux once the first feedback is in (so the
+   threads have answers).
 5. r/unixporn + LinkedIn last, with the best screenshot.
 
 Don't post everything the same hour. Spread over a few days; each
