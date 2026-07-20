@@ -511,16 +511,21 @@ impl App {
             .map(|s| (s.latitude, s.longitude));
         let picker = self.picker;
         let accent = pal.accent;
-        let faint = pal.faint;
+        // Muted, not faint — the coastlines have to read against the dark
+        // background rather than fade into it.
+        let map_color = pal.muted;
         let text = pal.text;
         let canvas = Canvas::default()
+            // Paint the canvas in the theme background, or ratatui fills it
+            // with the terminal default (a mid grey) and buries the map.
+            .background_color(pal.bg)
             .marker(Marker::Braille)
             .x_bounds([-180.0, 180.0])
             .y_bounds([MAP_LAT_MIN, MAP_LAT_MAX])
             .paint(move |ctx| {
                 ctx.draw(&Map {
                     resolution: MapResolution::High,
-                    color: faint,
+                    color: map_color,
                 });
                 if let Some((lat, lon)) = active {
                     ctx.print(
@@ -1330,6 +1335,9 @@ impl App {
             Layout::horizontal([Constraint::Length(7), Constraint::Min(10)]).areas(top);
 
         let chart = Chart::new(datasets)
+            // Same fix as the map: paint the plot in the theme background so it
+            // doesn't fall back to the terminal's grey and wash out the curve.
+            .style(Style::default().bg(pal.bg))
             .x_axis(Axis::default().bounds([0.0, 24.0]))
             .y_axis(Axis::default().bounds([night - pad, day + pad]));
         frame.render_widget(chart, plot);
