@@ -1317,26 +1317,70 @@ impl App {
                 .data(&now_point),
         );
 
-        // A label every two hours (00, 02, … 24), so "now" can be read off the
-        // axis to the hour instead of guessed between six-hour posts.
-        let hour_labels: Vec<String> = (0..=12).map(|h| format!("{:02}", h * 2)).collect();
+        // ratatui's built-in x labels sit at i·(width / label_count), which is
+        // an off-by-one — it divides by the label *count*, not the gaps — so
+        // they drift off their own values and "now" appears at the wrong hour.
+        // Draw the axes by hand instead: reserve a left gutter and a bottom
+        // row, render the plot label-free, and place every hour tick at the
+        // exact fraction of the width the chart maps that hour to. Ticks and
+        // the "now" dot then share one mapping and line up.
+        let [top, x_row] =
+            Layout::vertical([Constraint::Min(3), Constraint::Length(1)]).areas(area);
+        let [y_col, plot] =
+            Layout::horizontal([Constraint::Length(7), Constraint::Min(10)]).areas(top);
+
         let chart = Chart::new(datasets)
-            .x_axis(
-                Axis::default()
-                    .bounds([0.0, 24.0])
-                    .labels(hour_labels)
-                    .style(Style::default().fg(pal.muted)),
-            )
-            .y_axis(
-                Axis::default()
-                    .bounds([night - pad, day + pad])
-                    .labels([
-                        format!("{} K", status.night_temp),
-                        format!("{} K", status.day_temp),
-                    ])
-                    .style(Style::default().fg(pal.muted)),
+            .x_axis(Axis::default().bounds([0.0, 24.0]))
+            .y_axis(Axis::default().bounds([night - pad, day + pad]));
+        frame.render_widget(chart, plot);
+
+        // Y labels in the gutter: day at the plot's top, night at its floor.
+        let mut y_label = |kelvin: u32, y: u16| {
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    format!("{kelvin} K"),
+                    Style::default().fg(pal.muted),
+                )))
+                .alignment(Alignment::Right),
+                Rect {
+                    x: y_col.x,
+                    y,
+                    width: y_col.width.saturating_sub(1),
+                    height: 1,
+                },
             );
-        frame.render_widget(chart, area);
+        };
+        y_label(status.day_temp, plot.y);
+        y_label(status.night_temp, plot.y + plot.height.saturating_sub(1));
+
+        // X labels: an even hour every two hours, each centred on the column
+        // the plot maps that hour to — 00 at the left edge, 24 at the right —
+        // which is the same mapping the data uses, so they agree.
+        let width = plot.width as usize;
+        if width >= 2 {
+            let mut cells = vec![' '; width];
+            for hour in (0..=24).step_by(2) {
+                let col = (f64::from(hour) / 24.0 * (width - 1) as f64).round() as usize;
+                let text = format!("{hour:02}");
+                let start = col.saturating_sub(1).min(width - text.len());
+                for (offset, glyph) in text.chars().enumerate() {
+                    cells[start + offset] = glyph;
+                }
+            }
+            let line: String = cells.into_iter().collect();
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    line,
+                    Style::default().fg(pal.muted),
+                ))),
+                Rect {
+                    x: plot.x,
+                    y: x_row.y,
+                    width: plot.width,
+                    height: 1,
+                },
+            );
+        }
     }
 }
 
