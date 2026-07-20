@@ -13,7 +13,13 @@
 [![CI](https://github.com/umutdinceryananer/nightlightd/actions/workflows/ci.yml/badge.svg)](https://github.com/umutdinceryananer/nightlightd/actions/workflows/ci.yml)
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
 
-> **Status: v0.1-alpha.** The daemon works — timezone-based location, a single-instance D-Bus lock, gamma ramps over XRandR, re-apply on resume from suspend, a `--status` readout — and so does the interface: a tray icon and an f.lux-style settings panel with a day/night curve. Milestones M0–M5 are done and a `.deb` builds; packaging and release (M6) are in progress. There are no published releases yet, so if you need a night light you can lean on today, install [gammastep](https://gitlab.com/chinstrap/gammastep) — this is not that yet.
+> **Status: v0.1-alpha.** The daemon works — timezone-based location, a single-instance D-Bus lock, gamma ramps over XRandR, re-apply on resume from suspend, a `--status` readout — and so do the interfaces: a tray icon, an f.lux-style settings panel, and a full-screen terminal dashboard. Milestones M0–M5 are done and a `.deb` builds; packaging and release (M6) are in progress. There are no published releases yet, so if you need a night light you can lean on today, install [gammastep](https://gitlab.com/chinstrap/gammastep) — this is not that yet.
+
+<p align="center">
+  <img src="docs/screenshots/01-now.png" alt="nightlightd terminal dashboard: state cards, a live temperature readout, and the day's colour-temperature curve" width="820">
+</p>
+
+The interface warms with the screen. In the default `live` theme the accent colour *is* the tint the daemon is filtering to right now — soft gold by day, deep candle-orange at night — so the dashboard reads warmer as the evening comes on. Everything on screen is derived from that one colour.
 
 ---
 
@@ -50,16 +56,37 @@ Everything else — packaging, systemd units, solar-elevation scheduling — gam
 
 ---
 
+## The interface
+
+The daemon needs none — it runs headless. But three thin clients ship with it, each a separate process that holds no state and talks only over D-Bus, so if one crashes the filter keeps running:
+
+- **A tray icon** (`nightlight-tray`) — on/off, automatic/manual, current temperature, in the notification area.
+- **A settings panel** (`nightlight-panel`) — an f.lux-style day/night curve and sliders, for when you want to nudge the bounds.
+- **A terminal dashboard** (`nightlight-tui`) — the whole state on one glanceable screen, built with [ratatui](https://ratatui.rs).
+
+The dashboard is five tabs, each with something real to show — no filler:
+
+<p align="center">
+  <img src="docs/screenshots/02-today.png" alt="today tab: the day's solar milestones as a schedule, with the next event highlighted" width="270">
+  <img src="docs/screenshots/03-location.png" alt="location tab: the resolved city in big text over a braille world map" width="270">
+  <img src="docs/screenshots/05-now-synthwave.png" alt="the now tab in the synthwave theme, pink and cyan" width="270">
+</p>
+
+**today** derives the day's milestones — night's end, sunrise, full day, solar noon, sunset — from the same solar maths the daemon schedules on, not from hand-set times. **location** shows the city the timezone resolved to and lets you pin a manual spot on the map. And the theme is yours: `live` follows the screen, or pick from a set of two-hue palettes (`synthwave`, `gruvbox`, `nord`, `tokyo-night`, `ember`, `phosphor`) with `T`.
+
+---
+
 ## Design
 
 A daemon does the work; thin clients talk to it over DBus.
 
 ```
-tray icon  ─┐
-             ├─► DBus ─► nightlightd ─► gamma ramp
-CLI        ─┘              ▲    ▲
-                           │    └─ RandR events
-                           └────── timer
+tray icon   ─┐
+panel       ─┤
+dashboard   ─┼─► DBus ─► nightlightd ─► gamma ramp
+CLI         ─┘              ▲    ▲
+                            │    └─ RandR events
+                            └────── timer
 ```
 
 The daemon has no interface. If the tray icon dies, the filter lives. One brain, many remotes.
@@ -76,6 +103,7 @@ Not released yet — build from source (Rust toolchain required):
 cargo install --path cli     # the daemon + CLI: nightlightd
 cargo install --path tray    # tray icon: nightlight-tray
 cargo install --path panel   # settings panel: nightlight-panel
+cargo install --path tui     # terminal dashboard: nightlight-tui
 
 mkdir -p ~/.config/systemd/user
 cp dist/nightlightd.service ~/.config/systemd/user/
@@ -103,7 +131,7 @@ Tracked in [`docs/ISSUES.md`](docs/ISSUES.md).
 | M2 | X11 backend | ✅ done |
 | M3 | Daemon and event loop | ✅ done |
 | M4 | DBus, CLI, systemd, suspend | ✅ done |
-| M5 | Tray icon and settings | ✅ done |
+| M5 | Tray icon, settings panel, and terminal dashboard | ✅ done |
 | M6 | Packaging and release | 🔶 in progress (.deb builds) |
 
 Before writing a line of Rust here, the timezone fallback is going upstream to gammastep as a merge request. It helps far more people there, and the review will say whether defects 2 and 3 can be patched in place — in which case this repository should not exist. See [`docs/UPSTREAM-MR.md`](docs/UPSTREAM-MR.md).
