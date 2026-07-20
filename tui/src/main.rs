@@ -74,6 +74,9 @@ struct App {
     start_at_login: bool,
     /// The map's location picker: `Some((lat, lon))` cursor while picking.
     picker: Option<(f64, f64)>,
+    /// The close-up camera while picking on a small map: the viewport centre,
+    /// dragged along when the cursor nears an edge. Cleared with the picker.
+    map_cam: Option<(f64, f64)>,
     /// The nearest zone city under the picker cursor, refreshed as it moves.
     picker_place: Option<String>,
     /// The nearest zone city for the pinned location, cached by coordinate so
@@ -123,6 +126,7 @@ fn main() -> io::Result<()> {
         theme_popup: None,
         start_at_login: autostart::enabled(),
         picker: None,
+        map_cam: None,
         picker_place: None,
         place: None,
         outputs: None,
@@ -374,11 +378,13 @@ impl App {
                 self.client.set_location(lat, lon);
                 self.picker = None;
                 self.picker_place = None;
+                self.map_cam = None;
                 self.last_poll = None;
             }
             KeyCode::Esc => {
                 self.picker = None;
                 self.picker_place = None;
+                self.map_cam = None;
             }
             KeyCode::Char('q') => return true,
             _ => {}
@@ -410,7 +416,7 @@ impl App {
         THEMES[self.theme_index].palette(self.status.as_ref().map(|s| s.temperature))
     }
 
-    fn draw(&self, frame: &mut Frame<'_>) {
+    fn draw(&mut self, frame: &mut Frame<'_>) {
         let pal = self.palette();
         let area = frame.area();
         // Paint the whole screen in the theme's background and text tones —
@@ -467,8 +473,9 @@ impl App {
     }
 
     /// Tab 3: the world map — the resolved location marked on it, and a picker
-    /// to pin a manual one. The map is ratatui's own braille world.
-    fn draw_location_tab(&self, frame: &mut Frame<'_>, area: Rect, pal: &Palette) {
+    /// to pin a manual one. The map is ratatui's own braille world; `z` swaps
+    /// between the whole world and a close-up that follows the cursor.
+    fn draw_location_tab(&mut self, frame: &mut Frame<'_>, area: Rect, pal: &Palette) {
         // Two framed cards like the other tabs: the position summary on top,
         // the map below it. 10 tall to match the now tab's card row and the
         // today tab's schedule card, so the lower edge never jumps between
@@ -515,13 +522,53 @@ impl App {
         // background rather than fade into it.
         let map_color = pal.muted;
         let text = pal.text;
+        // The viewport. A card tall enough to hold the whole −55°..75° range
+        // without heavy squashing gets the whole world — the big-screen view,
+        // unchanged. A smaller card would smear that world flat, so it gets a
+        // close-up around the pin instead, at the same detail density as the
+        // big view (~0.75° per braille dot; dots are 2 across and 4 down per
+        // cell, hence 1.5°·cols by 3°·rows) and therefore undistorted. While
+        // picking, the close-up is a camera: it holds still while the cursor
+        // moves through the middle of the view, and drags along once the
+        // cursor crosses into the outer quarter, so with enough arrow presses
+        // everywhere on earth stays reachable.
+        let cols = f64::from(map_area.width.max(1));
+        let rows = f64::from(map_area.height);
+        let full_range = MAP_LAT_MAX - MAP_LAT_MIN;
+        let (x_bounds, y_bounds) = if 720.0 * rows / cols >= full_range {
+            ([-180.0, 180.0], [MAP_LAT_MIN, MAP_LAT_MAX])
+        } else {
+            let lon_span = (1.5 * cols).min(360.0);
+            let lat_span = (3.0 * rows).min(full_range);
+            let (half_lat, half_lon) = (lat_span / 2.0, lon_span / 2.0);
+            // The centre: the camera while picking, else the pin, else the
+            // mid-northern latitudes where most of the map's readers live.
+            let (mut lat_c, mut lon_c) = match (picker, self.map_cam) {
+                (Some(_), Some(camera)) => camera,
+                _ => picker.or(active).unwrap_or((30.0, 0.0)),
+            };
+            if let Some((cursor_lat, cursor_lon)) = picker {
+                let (m_lat, m_lon) = (lat_span * 0.25, lon_span * 0.25);
+                lat_c = lat_c.clamp(cursor_lat + m_lat - half_lat, cursor_lat - m_lat + half_lat);
+                lon_c = lon_c.clamp(cursor_lon + m_lon - half_lon, cursor_lon - m_lon + half_lon);
+            }
+            lat_c = lat_c.clamp(MAP_LAT_MIN + half_lat, MAP_LAT_MAX - half_lat);
+            lon_c = lon_c.clamp(-180.0 + half_lon, 180.0 - half_lon);
+            if picker.is_some() {
+                self.map_cam = Some((lat_c, lon_c));
+            }
+            (
+                [lon_c - half_lon, lon_c + half_lon],
+                [lat_c - half_lat, lat_c + half_lat],
+            )
+        };
         let canvas = Canvas::default()
             // Paint the canvas in the theme background, or ratatui fills it
             // with the terminal default (a mid grey) and buries the map.
             .background_color(pal.bg)
             .marker(Marker::Braille)
-            .x_bounds([-180.0, 180.0])
-            .y_bounds([MAP_LAT_MIN, MAP_LAT_MAX])
+            .x_bounds(x_bounds)
+            .y_bounds(y_bounds)
             .paint(move |ctx| {
                 ctx.draw(&Map {
                     resolution: MapResolution::High,
