@@ -418,7 +418,7 @@ Keep all of these **out of v0.1.** Scope creep is what kills projects like this.
 - **Why:** Someone will ask. But it is needless complexity for v0.1.
 - **Difficulty:** Medium
 
-### #35 Brightness control
+### #37 Brightness control
 
 - **What:** —
 - **Why:** **Don't.** This is exactly where Gammy drowned. Do colour. Leave brightness alone. This issue exists so it can be closed.
@@ -446,7 +446,7 @@ M4 (#18-22)   →  a few evenings    ← this is where it becomes usable
 M5 (#23-25)   →  unknown           ← Rust's weak spot
 M6 (#26-30)   →  three weeks       ← the real work
 ─────────────────────────────────── v0.1, announce
-M7 (#31-36)   →  don't (yet)
+M7 (#31-37)   →  don't (yet)
 ```
 
 **Do #0 before #1.** If gammastep's maintainer tells you defects 2 and 3 are patchable in place, this entire repository is unnecessary and you have saved yourself two months.
