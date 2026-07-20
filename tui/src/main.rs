@@ -28,7 +28,7 @@ use ratatui::symbols::Marker;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::canvas::{Canvas, Map, MapResolution};
 use ratatui::widgets::{
-    Axis, Block, BorderType, Cell, Chart, Clear, Dataset, GraphType, Padding, Paragraph,
+    Axis, Block, BorderType, Cell, Chart, Clear, Dataset, GraphType, LineGauge, Padding, Paragraph,
     RatatuiLogo, Row, Table, Tabs,
 };
 use ratatui::{DefaultTerminal, Frame};
@@ -1108,9 +1108,10 @@ impl App {
             return;
         };
 
-        // Text on the left, the sky scene on the right.
-        let [text, art] =
-            Layout::horizontal([Constraint::Min(24), Constraint::Length(16)]).areas(inner);
+        // Text and the daylight bar on the left, the sky scene on the right.
+        let [left, art] =
+            Layout::horizontal([Constraint::Min(22), Constraint::Length(16)]).areas(inner);
+        let [text, bar] = Layout::vertical([Constraint::Min(5), Constraint::Length(1)]).areas(left);
 
         let phase = sun_phase(status.elevation);
         let icon = match phase {
@@ -1120,6 +1121,7 @@ impl App {
         };
         let lat_hemisphere = if status.latitude >= 0.0 { "N" } else { "S" };
         let lon_hemisphere = if status.longitude >= 0.0 { "E" } else { "W" };
+        let (daylight_ratio, daylight_label) = self.daylight(status);
         frame.render_widget(
             Paragraph::new(vec![
                 Line::from(vec![
@@ -1141,9 +1143,7 @@ impl App {
                         ),
                         Style::default().fg(pal.accent2),
                     ),
-                    Span::styled(" · from the timezone", Style::default().fg(pal.muted)),
                 ]),
-                Line::default(),
                 Line::from(vec![
                     Span::styled("   day ", Style::default().fg(pal.muted)),
                     Span::styled(
@@ -1156,10 +1156,63 @@ impl App {
                         Style::default().fg(pal.accent2),
                     ),
                 ]),
+                Line::default(),
+                Line::from(Span::styled(
+                    format!("   {daylight_label}"),
+                    Style::default().fg(pal.accent2),
+                )),
             ]),
             text,
         );
         frame.render_widget(sky_art(phase, pal), art);
+        // The daylight bar: filled by how much of it is left, so it drains as
+        // the sun sinks. Accent for the remaining light, faint for the spent.
+        frame.render_widget(
+            LineGauge::default()
+                .ratio(daylight_ratio)
+                .filled_style(Style::default().fg(pal.accent))
+                .unfilled_style(Style::default().fg(pal.faint))
+                .label(""),
+            bar,
+        );
+    }
+
+    /// The daylight bar's fill (0..1) and its label. Reads today's real
+    /// sunrise/sunset crossings: during the day, how much daylight is left and
+    /// what fraction of it remains; at night, how long until sunrise; and the
+    /// honest polar cases when the sun does not cross at all.
+    fn daylight(&self, status: &Status) -> (f64, String) {
+        let (midnight, now) = self.day_context();
+        let events = today::milestones(
+            status.latitude,
+            status.longitude,
+            midnight,
+            status.day_temp,
+            status.night_temp,
+        );
+        let hour = |name: &str| events.iter().find(|e| e.name == name).map(|e| e.hour);
+        match (hour("sunrise"), hour("sunset")) {
+            (Some(sunrise), Some(sunset)) if now >= sunrise && now < sunset => {
+                let left = sunset - now;
+                let ratio = (left / (sunset - sunrise)).clamp(0.0, 1.0);
+                (ratio, format!("☀ {} of daylight left", hm(left)))
+            }
+            (Some(sunrise), _) if now < sunrise => {
+                (0.0, format!("☾ sunrise in {}", hm(sunrise - now)))
+            }
+            (Some(sunrise), Some(_)) => {
+                // After sunset: the next sunrise is tomorrow's, ~24 h on.
+                (0.0, format!("☾ sunrise in {}", hm(sunrise + 24.0 - now)))
+            }
+            _ => {
+                // No crossing today: polar day or polar night.
+                if status.elevation > 0.0 {
+                    (1.0, "☀ midnight sun · no sunset today".into())
+                } else {
+                    (0.0, "☾ polar night · no sunrise today".into())
+                }
+            }
+        }
     }
 
     fn draw_curve_card(&self, frame: &mut Frame<'_>, area: Rect, pal: &Palette) {
@@ -1284,49 +1337,49 @@ impl App {
     }
 }
 
-/// A little sky scene for the sun card: a full sun disc with rays by day, the
-/// disc sinking into its own reflection through the transition, a crescent
-/// under stars at night. Two tones per scene, like the rest of the theme: the
-/// body wears one colour, the surroundings (rays, water, stars) the other.
+/// A little sky scene for the sun card: a rayed sun by day, a sun sinking to
+/// the horizon through the transition, a shaded moon under stars at night.
+///
+/// The half-block shaded-disc idiom — a lit body (`█`), a shaded terminator
+/// (`▒░`), stars (`✦ · ✧`) scattered around it — is the visual language
+/// SunReactor uses for its weather orb (GPL-3.0, github.com/arcanorca). These
+/// discs are drawn fresh here, not copied: same technique, our own shapes.
+///
+/// Each glyph is coloured by what it is, so a scene reads in two tones like the
+/// rest of the theme: the body in one hue, the shade faint, the stars and rays
+/// in the other hue.
 fn sky_art(phase: &str, pal: &Palette) -> Paragraph<'static> {
-    /// Glyphs that belong to the surroundings, not the celestial body.
-    const AMBIENT: &str = "╲│╱─░▒·✦";
-    let (art, body, ambient): (&[&str], Color, Color) = match phase {
+    // (art, body colour, star/ray colour). The shaded side is always faint.
+    let (art, body, glow): (&[&str], Color, Color) = match phase {
         "day" => (
             &[
-                r"  ╲    │    ╱  ",
-                r"    ▗▄███▄▖    ",
-                r"   ▟███████▙   ",
-                r"── █████████ ──",
-                r"   ▜███████▛   ",
-                r"    ▝▀███▀▘    ",
-                r"  ╱    │    ╲  ",
+                r"   \   |   /   ",
+                r"     ▄███▄     ",
+                r"  ─ ███████ ─  ",
+                r"     ▀███▀     ",
+                r"   /   |   \   ",
             ],
             pal.accent,
             pal.muted,
         ),
         "night" => (
             &[
-                r"  ·            ",
-                r"        ▗▄██▀  ",
-                r"  ✦    ▗██▛▘   ",
-                r"       ▐██▌  · ",
-                r"       ▝██▙▖   ",
-                r"   ·    ▝▀██▄  ",
-                r"            ✦  ",
+                r" ✦    ▄▄▄▄     ",
+                r"    ▄██████▒   ",
+                r"   ███████▒▒  ·",
+                r"    ▀█████▒▒   ",
+                r" ·    ▀▀▀▀   ✦ ",
             ],
             pal.accent2,
             pal.accent,
         ),
         _ => (
             &[
-                r"       │       ",
-                r"    ▗▄███▄▖    ",
-                r"   ▟███████▙   ",
-                r"───█████████───",
-                r"    ░▒▒▒▒▒░    ",
+                r"       |       ",
+                r"     ▄███▄     ",
+                r"  ─ ███████ ─  ",
+                r"  ▁▁▁▀█▀▁▁▁▁▁  ",
                 r"      ░▒░      ",
-                r"       ░       ",
             ],
             pal.accent,
             pal.muted,
@@ -1338,10 +1391,11 @@ fn sky_art(phase: &str, pal: &Palette) -> Paragraph<'static> {
             Line::from(
                 row.chars()
                     .map(|glyph| {
-                        let colour = if AMBIENT.contains(glyph) {
-                            ambient
-                        } else {
-                            body
+                        let colour = match glyph {
+                            '█' | '▄' | '▀' => body,
+                            '▒' | '░' => pal.faint,
+                            '✦' | '✧' | '·' => glow,
+                            _ => pal.muted,
                         };
                         Span::styled(glyph.to_string(), Style::default().fg(colour))
                     })
@@ -1350,6 +1404,18 @@ fn sky_art(phase: &str, pal: &Palette) -> Paragraph<'static> {
         })
         .collect();
     Paragraph::new(lines)
+}
+
+/// A short "3h 20m" / "45m" span from a duration in hours, for the daylight
+/// label. Negative or sub-minute spans read as "0m".
+fn hm(hours: f64) -> String {
+    let minutes = (hours * 60.0).round().max(0.0) as i64;
+    let (h, m) = (minutes / 60, minutes % 60);
+    if h > 0 {
+        format!("{h}h {m:02}m")
+    } else {
+        format!("{m}m")
+    }
 }
 
 /// A rounded card with a bold accent title and muted borders — the shared look.
