@@ -13,7 +13,7 @@
 [![CI](https://github.com/umutdinceryananer/nightlightd/actions/workflows/ci.yml/badge.svg)](https://github.com/umutdinceryananer/nightlightd/actions/workflows/ci.yml)
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
 
-> **Status: v0.1.0.** The daemon works — timezone-based location, a single-instance D-Bus lock, gamma ramps over XRandR, re-apply on resume from suspend, a `--status` readout — and so do the interfaces: a tray icon, an f.lux-style settings panel, and a full-screen terminal dashboard. A [release with a `.deb`](https://github.com/umutdinceryananer/nightlightd/releases/latest) is out; AUR and Flatpak packaging are next. Young software, one machine's worth of dogfooding — expect rough edges, and please report them.
+> **Status: v0.1.0.** The daemon works — timezone-based location, a single-instance D-Bus lock, gamma ramps over XRandR, re-apply on resume from suspend, a `--status` readout — and so do the interfaces: a tray icon, an f.lux-style settings panel, and a full-screen terminal dashboard. A [release with a `.deb`](https://github.com/umutdinceryananer/nightlightd/releases/latest) is out and it is [on the AUR](https://aur.archlinux.org/packages/nightlightd); Flatpak is next. Young software, one machine's worth of dogfooding — expect rough edges, and please report them.
 
 <p align="center">
   <img src="docs/screenshots/01-now.png" alt="nightlightd terminal dashboard: state cards, a live temperature readout, and the day's colour-temperature curve" width="820">
@@ -111,6 +111,13 @@ autostart entry — but a *user* unit cannot be enabled for you at install time,
 so the daemon needs that one `systemctl --user` line (or a log-out/log-in plus
 the panel's "Start at login" box).
 
+### Arch (AUR)
+
+```
+yay -S nightlightd
+systemctl --user enable --now nightlightd
+```
+
 ### From source
 
 Rust toolchain required:
@@ -135,16 +142,16 @@ Tracked in [`docs/ISSUES.md`](docs/ISSUES.md).
 
 | | | |
 |---|---|---|
-| M-1 | Upstream fix to gammastep first | not started |
+| M-1 | Upstream fix to gammastep | 🔶 still owed — see below |
 | M0 | Skeleton | ✅ done |
 | M1 | Core library — colour, sun, timezone | ✅ done |
 | M2 | X11 backend | ✅ done |
 | M3 | Daemon and event loop | ✅ done |
 | M4 | DBus, CLI, systemd, suspend | ✅ done |
 | M5 | Tray icon, settings panel, and terminal dashboard | ✅ done |
-| M6 | Packaging and release | 🔶 v0.1.0 released · AUR, Flatpak, announce remain |
+| M6 | Packaging and release | 🔶 v0.1.0 released, on the AUR · Flatpak and announce remain |
 
-Before writing a line of Rust here, the timezone fallback is going upstream to gammastep as a merge request. It helps far more people there, and the review will say whether defects 2 and 3 can be patched in place — in which case this repository should not exist. See [`docs/UPSTREAM-MR.md`](docs/UPSTREAM-MR.md).
+One debt, stated plainly: the original plan was to send the timezone fallback upstream to gammastep *before* writing any Rust — it helps far more people there, and the review would have said whether the other two defects can be patched in place. The Rust got written first. The merge request is still owed and still planned ([`docs/UPSTREAM-MR.md`](docs/UPSTREAM-MR.md)); if it lands and the remaining defects prove fixable upstream, this repository becomes happily obsolete — which was always the acceptable outcome.
 
 ---
 
