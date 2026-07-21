@@ -119,6 +119,10 @@ yay -S nightlightd
 systemctl --user enable --now nightlightd
 ```
 
+### Any distro (static binaries)
+
+The [release](https://github.com/umutdinceryananer/nightlightd/releases/latest) also carries a musl tarball — fully static builds of the daemon and the terminal dashboard with no library dependencies at all, for x86_64 Linux of any age. Unpack and follow the bundled `INSTALL`.
+
 ### From source
 
 Rust toolchain required:
