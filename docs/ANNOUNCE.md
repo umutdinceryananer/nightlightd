@@ -107,32 +107,7 @@ First Rust project; happy to hear what's wrong with it.
 **Title:** I wrote a zero-config night light daemon for Xfce/X11:
 nightlightd
 
-A native night light was requested on the Xfce tracker back in 2017
-(xfce4-settings #111) and closed as Won't Fix in 2021: the
-maintainers' position was that redshift covers it and Xfce shouldn't
-carry the code. Fair call, except redshift has since been archived.
-So I wrote the third-party tool that position assumes exists: a
-standalone daemon that reads your timezone for location (no geoclue,
-no config),
-claims a D-Bus name so two copies can never fight over your gamma
-ramps, and re-applies the filter after suspend or monitor hotplug.
-Those are the three things that made redshift/gammastep unreliable on
-my Mint Xfce machine.
 
-Ships a tray icon (works with the Xfce panel's systray), a settings
-panel, and a terminal dashboard. Packaged as a .deb and on the AUR.
-
-Fair warning on both fronts: if something already does this properly
-on Xfce, tell me. I checked what I could find and wrote up why the
-existing tools fell short on my machine, but I'd rather link to a
-working tool than duplicate one. And it's only been tested on my own
-box (Mint Xfce, one monitor), so on other setups treat it as a beta
-and report what breaks.
-
-https://github.com/umutdinceryananer/nightlightd
-
-Until Xfce grows a native one, this is meant to be the thing you can
-actually install today.
 
 ---
 
@@ -151,8 +126,8 @@ Details comment:
 - The TUI: ratatui + tui-big-text. The default "live" theme's accent is
   the actual blackbody tint the daemon is applying to the screen, so
   the whole interface warms through the evening in step with your
-  display. Other themes: gruvbox, nord, tokyo-night, synthwave, ember,
-  phosphor.
+  display. Other themes: tokyo, catppuccin, nord, gruvbox, synthwave,
+  ember, phosphor.
 - The curve is computed from real solar elevation at your location
   (derived from your timezone; no config, no geoclue).
 - Terminal: xfce4-terminal.

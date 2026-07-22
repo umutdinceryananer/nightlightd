@@ -73,7 +73,7 @@ The dashboard is five tabs, each with something real to show — no filler:
   <img src="docs/screenshots/05-now-synthwave.png" alt="the now tab in the synthwave theme, pink and cyan" width="270">
 </p>
 
-**today** derives the day's milestones — night's end, sunrise, full day, solar noon, sunset — from the same solar maths the daemon schedules on, not from hand-set times. **location** shows the city the timezone resolved to and lets you pin a manual spot on the map. And the theme is yours: `live` follows the screen, or pick from a set of two-hue palettes (`synthwave`, `gruvbox`, `nord`, `tokyo-night`, `ember`, `phosphor`) with `T`.
+**today** derives the day's milestones — night's end, sunrise, full day, solar noon, sunset — from the same solar maths the daemon schedules on, not from hand-set times. **location** shows the city the timezone resolved to and lets you pin a manual spot on the map. And the theme is yours: `live` follows the screen, or pick from a set of editor palettes (`tokyo`, `catppuccin`, `nord`, `gruvbox`, `synthwave`, `ember`, `phosphor`) with `T`.
 
 ---
 

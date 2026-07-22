@@ -34,19 +34,29 @@ pub struct Palette {
     pub muted: Color,
     /// Barely-there: the world map, the now-line.
     pub faint: Color,
+    /// The card surface: one step lighter than the page, so content sits on
+    /// raised panels without needing borders.
+    pub surface: Color,
+    /// The elevated surface behind floating overlays (the theme popup): a
+    /// visibly lighter shade again, standing in for a border.
+    pub overlay: Color,
     /// State good — constant across themes.
     pub ok: Color,
     /// State bad — constant across themes.
     pub err: Color,
 }
 
-/// A named theme: a fixed accent (or `None` for the live screen tint) and an
-/// optional secondary hue for data values. `None` derives the secondary from
-/// the accent, which keeps deliberately monochrome themes monochrome.
+/// A named theme: a fixed accent (or `None` for the live screen tint), an
+/// optional secondary hue for data values, and an optional designed page
+/// base. `None` for the secondary keeps monochrome themes monochrome; `None`
+/// for the base derives a near-black shade of the accent (the warm original
+/// look), while `Some` pins the neutral dark ground the modern editor
+/// palettes are built on.
 pub struct Theme {
     pub name: &'static str,
     accent: Option<(u8, u8, u8)>,
     secondary: Option<(u8, u8, u8)>,
+    base: Option<(u8, u8, u8)>,
 }
 
 /// Cycle order for the `T` key; `live` first because it is the identity.
@@ -57,37 +67,55 @@ pub const THEMES: &[Theme] = &[
         name: "live",
         accent: None,
         secondary: Some((130, 170, 190)),
+        base: None,
+    },
+    Theme {
+        // The real Tokyo Night ground (#1a1b26), storm blue and purple.
+        name: "tokyo",
+        accent: Some((122, 162, 247)),
+        secondary: Some((187, 154, 247)),
+        base: Some((26, 27, 38)),
+    },
+    Theme {
+        // Catppuccin mocha: mauve on the classic deep mantle, teal data.
+        name: "catppuccin",
+        accent: Some((203, 166, 247)),
+        secondary: Some((148, 226, 213)),
+        base: Some((30, 30, 46)),
+    },
+    Theme {
+        // Polar night ground, frost accent, aurora-yellow data.
+        name: "nord",
+        accent: Some((136, 192, 208)),
+        secondary: Some((235, 203, 139)),
+        base: Some((46, 52, 64)),
+    },
+    Theme {
+        // Gruvbox dark on its true grey ground, not a yellowed black.
+        name: "gruvbox",
+        accent: Some((250, 189, 47)),
+        secondary: Some((142, 192, 124)),
+        base: Some((40, 40, 40)),
+    },
+    Theme {
+        // Hot pink and cyan over a deep violet night.
+        name: "synthwave",
+        accent: Some((255, 110, 199)),
+        secondary: Some((100, 220, 255)),
+        base: Some((36, 23, 54)),
     },
     Theme {
         name: "ember",
         accent: Some((255, 170, 90)),
         secondary: Some((108, 190, 180)),
-    },
-    Theme {
-        name: "gruvbox",
-        accent: Some((250, 189, 47)),
-        secondary: Some((142, 192, 124)),
-    },
-    Theme {
-        name: "nord",
-        accent: Some((136, 192, 208)),
-        secondary: Some((235, 203, 139)),
-    },
-    Theme {
-        name: "tokyo-night",
-        accent: Some((122, 162, 247)),
-        secondary: Some((187, 154, 247)),
+        base: None,
     },
     Theme {
         // Deliberately monochrome — a phosphor CRT has one colour.
         name: "phosphor",
         accent: Some((51, 255, 102)),
         secondary: None,
-    },
-    Theme {
-        name: "synthwave",
-        accent: Some((255, 110, 199)),
-        secondary: Some((100, 220, 255)),
+        base: None,
     },
 ];
 
@@ -126,16 +154,39 @@ impl Theme {
             },
         };
         let secondary = self.secondary.unwrap_or(accent);
+        // A designed base lightens toward white for elevation and pulls the
+        // chrome tones from accent-over-base; a derived base shades everything
+        // from the accent alone, as the original look did.
+        let (bg, surface, overlay, muted, faint) = match self.base {
+            Some(base) => (
+                rgb(base),
+                mix(base, (255, 255, 255), 0.06),
+                mix(base, (255, 255, 255), 0.14),
+                // As bright over the base as the derived branch is over black,
+                // or secondary text turns illegible on the designed grounds.
+                mix(base, accent, 0.62),
+                mix(base, accent, 0.34),
+            ),
+            None => (
+                mix((0, 0, 0), accent, 0.10),
+                mix((0, 0, 0), accent, 0.15),
+                mix((0, 0, 0), accent, 0.21),
+                mix((0, 0, 0), accent, 0.62),
+                mix((0, 0, 0), accent, 0.32),
+            ),
+        };
         Palette {
-            bg: mix((0, 0, 0), accent, 0.10),
+            bg,
             text: mix((255, 255, 255), accent, 0.16),
             accent: rgb(accent),
             accent2: match self.secondary {
                 Some(_) => rgb(secondary),
                 None => mix((255, 255, 255), accent, 0.55),
             },
-            muted: mix((0, 0, 0), accent, 0.62),
-            faint: mix((0, 0, 0), accent, 0.32),
+            muted,
+            faint,
+            surface,
+            overlay,
             ok: Color::Rgb(90, 220, 120),
             err: Color::Rgb(240, 90, 90),
         }
@@ -199,15 +250,18 @@ mod tests {
     }
 
     #[test]
-    fn the_background_is_a_dark_shade_of_the_accent() {
+    fn every_background_stays_dark() {
+        // Derived bases are near-black; designed bases (nord is the palest)
+        // must still read as a dark ground, never a mid grey.
         for theme in THEMES {
             let palette = theme.palette(Some(3000));
             let Color::Rgb(r, g, b) = palette.bg else {
                 panic!("bg must be rgb");
             };
             assert!(
-                u16::from(r) + u16::from(g) + u16::from(b) < 120,
-                "bg must stay near-black, got {r},{g},{b}"
+                u16::from(r) + u16::from(g) + u16::from(b) < 180,
+                "{} bg must stay dark, got {r},{g},{b}",
+                theme.name
             );
         }
     }

@@ -25,8 +25,10 @@ cargo build --release -p nightlight-tui --manifest-path "$repo/Cargo.toml" -q
 
 # A compact window, not a maximised one: README shots should read like a
 # terminal — small, dense, characters with presence — not like a fullscreen
-# app floating in empty space. 118x34 cells fits every tab with no waste.
-geometry="${GEOMETRY:-118x34}"
+# app floating in empty space. 90x30 lands near 1000px wide, which is the
+# sweet spot for GitHub and the ratatui showcase (1200px is the hard max
+# before compression makes it mush).
+geometry="${GEOMETRY:-90x30}"
 
 # shot <theme> <tab> <output-file>
 shot() {

@@ -28,10 +28,11 @@ use ratatui::symbols::Marker;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::canvas::{Canvas, Map, MapResolution};
 use ratatui::widgets::{
-    Axis, Block, BorderType, Cell, Chart, Clear, Dataset, GraphType, LineGauge, Padding, Paragraph,
-    RatatuiLogo, Row, Table, Tabs,
+    Axis, Block, Cell, Chart, Clear, Dataset, GraphType, Padding, Paragraph, RatatuiLogo, Row,
+    Table,
 };
 use ratatui::{DefaultTerminal, Frame};
+use ratatui_braille_bar::BrailleBar;
 use tui_big_text::{BigText, PixelSize};
 
 use crate::daemon::{Client, Status};
@@ -40,9 +41,6 @@ use crate::theme::{Palette, THEMES};
 /// Bounds and step for the night-temperature keys, mirroring the panel.
 const NIGHT_MIN: u32 = 1500;
 const NIGHT_STEP: u32 = 100;
-
-/// The figlet "slant" wordmark, the same one the README and the panel use.
-const WORDMARK: &str = include_str!("wordmark.txt");
 
 /// The tab bar, in order. Each holds real content or it does not exist.
 const TABS: &[&str] = &["now", "today", "location", "outputs", "settings"];
@@ -425,40 +423,46 @@ impl App {
             Block::default().style(Style::default().bg(pal.bg).fg(pal.text)),
             area,
         );
-        if area.width < 66 || area.height < 26 {
+        if area.width < 84 || area.height < 26 {
             self.draw_compact(frame, area, &pal);
             return;
         }
 
-        // Breathing room around the header: a pad above the wordmark, a gap
-        // before the strip, a gap before the framed tab bar.
-        let [_, wordmark, _, strip, _, tabs, content, footer] = Layout::vertical([
+        // Cap the frame like a page with a max-width: past 110 columns the
+        // cards would just smear across the glass, so centre the app instead
+        // and let the painted background own the margins.
+        let width = area.width.min(110);
+        let area = Rect {
+            x: area.x + (area.width - width) / 2,
+            y: area.y,
+            width,
+            height: area.height,
+        };
+
+        // The app frame: a sidebar owning identity, navigation and the live
+        // summary; the content pane to the right of a hairline rule; the key
+        // hints along the bottom.
+        let [_, main, footer] = Layout::vertical([
             Constraint::Length(1),
-            Constraint::Length(6),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(3),
             Constraint::Min(9),
             Constraint::Length(1),
         ])
         .areas(area);
-
-        // Centre the art by padding every line equally — per-line centering
-        // would break the glyph alignment.
-        let art: Vec<&str> = WORDMARK.trim_end_matches('\n').lines().collect();
-        let art_width = art.iter().map(|l| l.chars().count()).max().unwrap_or(0);
-        let pad = " ".repeat((usize::from(area.width).saturating_sub(art_width)) / 2);
-        let centered: Vec<Line<'_>> = art
-            .iter()
-            .map(|line| Line::from(format!("{pad}{line}")))
-            .collect();
+        // The sidebar is a raised panel like the cards; the page-coloured
+        // gutter between the patches is the separator — no hairline needed.
+        let [_, sidebar, _, content, _] = Layout::horizontal([
+            Constraint::Length(1),
+            Constraint::Length(20),
+            Constraint::Length(2),
+            Constraint::Min(40),
+            Constraint::Length(1),
+        ])
+        .areas(main);
         frame.render_widget(
-            Paragraph::new(centered).style(Style::default().fg(pal.accent)),
-            wordmark,
+            Block::new().style(Style::default().bg(pal.surface)),
+            sidebar,
         );
-        self.draw_strip(frame, strip, &pal);
-        self.draw_tabs(frame, tabs, &pal);
+        self.draw_sidebar(frame, sidebar, &pal);
         match self.tab {
             1 => self.draw_today_tab(frame, content, &pal),
             2 => self.draw_location_tab(frame, content, &pal),
@@ -466,7 +470,7 @@ impl App {
             4 => self.draw_settings_tab(frame, content, &pal),
             _ => self.draw_now_tab(frame, content, &pal),
         }
-        frame.render_widget(footer_line(self.tab, &pal), footer);
+        self.draw_footer(frame, footer, &pal);
         if self.theme_popup.is_some() {
             self.draw_theme_popup(frame, area, &pal);
         }
@@ -480,8 +484,12 @@ impl App {
         // the map below it. 10 tall to match the now tab's card row and the
         // today tab's schedule card, so the lower edge never jumps between
         // tabs.
-        let [info_area, map_zone] =
-            Layout::vertical([Constraint::Length(10), Constraint::Min(8)]).areas(area);
+        let [info_area, _, map_zone] = Layout::vertical([
+            Constraint::Length(10),
+            Constraint::Length(1),
+            Constraint::Min(7),
+        ])
+        .areas(area);
         let info_card = card(" position ", pal).padding(Padding::new(2, 1, 1, 0));
         let info = info_card.inner(info_area);
         frame.render_widget(info_card, info_area);
@@ -499,6 +507,11 @@ impl App {
             self.place.as_ref().map(|(_, _, name)| name.clone())
         };
         if let Some(name) = big_name {
+            // The clock answers the city in the same big type: the place in
+            // the accent on the left, its local time in the data hue on the
+            // right.
+            let [name_col, clock_col] =
+                Layout::horizontal([Constraint::Min(20), Constraint::Length(22)]).areas(name_area);
             frame.render_widget(
                 BigText::builder()
                     .pixel_size(PixelSize::Quadrant)
@@ -506,7 +519,16 @@ impl App {
                     .left_aligned()
                     .lines(vec![Line::from(name)])
                     .build(),
-                name_area,
+                name_col,
+            );
+            frame.render_widget(
+                BigText::builder()
+                    .pixel_size(PixelSize::Quadrant)
+                    .style(Style::default().fg(pal.accent2))
+                    .right_aligned()
+                    .lines(vec![Line::from(self.local_hhmm())])
+                    .build(),
+                clock_col,
             );
         }
         let info = text_area;
@@ -565,7 +587,7 @@ impl App {
         let canvas = Canvas::default()
             // Paint the canvas in the theme background, or ratatui fills it
             // with the terminal default (a mid grey) and buries the map.
-            .background_color(pal.bg)
+            .background_color(pal.surface)
             .marker(Marker::Braille)
             .x_bounds(x_bounds)
             .y_bounds(y_bounds)
@@ -635,15 +657,15 @@ impl App {
     /// with its ramp size and the shared applied temperature. Per-output
     /// temperatures are #34 (v0.2); this tab is their future home.
     fn draw_outputs_tab(&self, frame: &mut Frame<'_>, area: Rect, pal: &Palette) {
-        let block = card(" outputs ", pal);
+        let block = card(" outputs ", pal).padding(Padding::new(2, 1, 1, 0));
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
         let Some(outputs) = self.outputs.as_ref().filter(|list| !list.is_empty()) else {
             let message = if self.status.is_some() {
-                " no active outputs reported yet"
+                "no active outputs reported yet"
             } else {
-                " daemon not running"
+                "daemon not running"
             };
             frame.render_widget(
                 Paragraph::new(message).style(Style::default().fg(pal.muted)),
@@ -661,7 +683,7 @@ impl App {
             .iter()
             .map(|(crtc, ramp)| {
                 Row::new(vec![
-                    Cell::from(format!(" CRTC {crtc}")),
+                    Cell::from(format!("CRTC {crtc}")),
                     Cell::from(Span::styled(
                         format!("{ramp} steps"),
                         Style::default().fg(pal.accent2),
@@ -687,7 +709,7 @@ impl App {
                 ],
             )
             .header(
-                Row::new(vec![" output", "gamma ramp", "applied"])
+                Row::new(vec!["output", "gamma ramp", "applied"])
                     .style(Style::default().fg(pal.faint)),
             ),
             table_area,
@@ -695,11 +717,11 @@ impl App {
         frame.render_widget(
             Paragraph::new(vec![
                 Line::from(Span::styled(
-                    " every output wears the same temperature today",
+                    "every output wears the same temperature today",
                     Style::default().fg(pal.muted),
                 )),
                 Line::from(Span::styled(
-                    " per-output control is #34, planned for v0.2 — this is its home",
+                    "per-output control is #34, planned for v0.2 — this is its home",
                     Style::default().fg(pal.faint),
                 )),
             ]),
@@ -710,15 +732,16 @@ impl App {
     /// Tab 5: the settings — the two bounds, the theme, autostart, and where
     /// the config lives. Row-based: arrows select and adjust, enter acts.
     fn draw_settings_tab(&self, frame: &mut Frame<'_>, area: Rect, pal: &Palette) {
-        let block = card(" settings ", pal);
+        let block = card(" settings ", pal).padding(Padding::new(2, 1, 1, 0));
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
-        // Credit where credit is due: the official logo, bottom-right.
+        // Credit where credit is due: the official logo, bottom-right, with
+        // air between it and the card's edge.
         if inner.width > 40 && inner.height > 8 {
             let logo_area = Rect {
-                x: inner.right().saturating_sub(16),
-                y: inner.bottom().saturating_sub(2),
+                x: inner.right().saturating_sub(18),
+                y: inner.bottom().saturating_sub(3),
                 width: 15,
                 height: 2,
             };
@@ -731,8 +754,8 @@ impl App {
                 .alignment(Alignment::Right),
                 Rect {
                     x: inner.x,
-                    y: inner.bottom().saturating_sub(3),
-                    width: inner.width.saturating_sub(1),
+                    y: inner.bottom().saturating_sub(4),
+                    width: inner.width.saturating_sub(3),
                     height: 1,
                 },
             );
@@ -760,9 +783,9 @@ impl App {
             ),
         ];
 
-        let mut lines: Vec<Line<'_>> = vec![Line::default()];
+        let mut lines: Vec<Line<'_>> = Vec::new();
         for (index, (label, val, hint)) in rows.into_iter().enumerate() {
-            let body = format!("  {label:<16} {val:<14}");
+            let body = format!(" {label:<16} {val:<14}");
             if index == self.settings_selected {
                 lines.push(Line::from(vec![
                     Span::styled(body, Style::default().fg(pal.bg).bg(pal.accent).bold()),
@@ -770,30 +793,106 @@ impl App {
                 ]));
             } else {
                 lines.push(Line::from(vec![
-                    Span::styled(format!("  {label:<16} "), Style::default().fg(pal.muted)),
+                    Span::styled(format!(" {label:<16} "), Style::default().fg(pal.muted)),
                     Span::styled(format!("{val:<14}"), Style::default().fg(pal.text)),
                 ]));
             }
             lines.push(Line::default());
         }
         lines.push(Line::from(Span::styled(
-            format!("  config  {}", config_path_display()),
+            format!(" config  {}", config_path_display()),
             Style::default().fg(pal.faint),
         )));
         lines.push(Line::from(Span::styled(
-            "          day & night changes persist there automatically",
+            "         day & night changes persist there automatically",
             Style::default().fg(pal.faint),
         )));
         frame.render_widget(Paragraph::new(lines), inner);
     }
 
-    /// The theme picker, as a centered modal over everything.
+    /// The footer: the mode as a status lamp bottom-left, the key hints
+    /// tucked to the right — the quietest layer of the screen: accent keys,
+    /// muted labels, faint dots, no fills.
+    fn draw_footer(&self, frame: &mut Frame<'_>, area: Rect, pal: &Palette) {
+        let lamp = match &self.status {
+            Some(status) => {
+                let (dot, colour) = if status.enabled {
+                    ("●", pal.ok)
+                } else {
+                    ("○", pal.err)
+                };
+                let mode = if !status.enabled {
+                    "OFF"
+                } else if status.following {
+                    "AUTO"
+                } else {
+                    "MANUAL"
+                };
+                Line::from(vec![
+                    Span::styled(format!(" {dot} "), Style::default().fg(colour)),
+                    Span::styled(mode, Style::default().fg(pal.accent).bold()),
+                ])
+            }
+            None => Line::from(Span::styled(" ○ offline", Style::default().fg(pal.err))),
+        };
+        frame.render_widget(Paragraph::new(lamp), area);
+
+        let pairs: Vec<(&str, &str)> = if self.tab == SETTINGS_TAB {
+            vec![
+                ("⇥", "tab"),
+                ("↑↓", "select"),
+                ("‹›", "adjust"),
+                ("⏎", "apply"),
+                ("q", "quit"),
+            ]
+        } else if self.tab == LOCATION_TAB {
+            vec![
+                ("⇥", "tab"),
+                ("⏎", "pick"),
+                ("c", "timezone"),
+                ("T", "theme"),
+                ("q", "quit"),
+            ]
+        } else {
+            vec![
+                ("⇥", "tab"),
+                ("t", "toggle"),
+                ("a", "auto"),
+                ("↑↓", "night temp"),
+                ("T", "theme"),
+                ("q", "quit"),
+            ]
+        };
+        let mut spans = Vec::new();
+        for (index, (key, label)) in pairs.into_iter().enumerate() {
+            if index > 0 {
+                spans.push(Span::styled(" · ", Style::default().fg(pal.faint)));
+            }
+            spans.push(Span::styled(
+                key.to_string(),
+                Style::default().fg(pal.accent).bold(),
+            ));
+            spans.push(Span::styled(
+                format!(" {label}"),
+                Style::default().fg(pal.muted),
+            ));
+        }
+        spans.push(Span::raw(" "));
+        frame.render_widget(
+            Paragraph::new(Line::from(spans)).alignment(Alignment::Right),
+            area,
+        );
+    }
+
+    /// The theme picker: a floating overlay in the noodle idiom — no border,
+    /// a visibly lighter surface doing the lifting, a title row with the key
+    /// hint opposite it, and full-width selection bars.
     fn draw_theme_popup(&self, frame: &mut Frame<'_>, area: Rect, pal: &Palette) {
         let Some(selected) = self.theme_popup else {
             return;
         };
-        let width = 28.min(area.width);
-        let height = (THEMES.len() as u16 + 2).min(area.height);
+        let width = 32.min(area.width);
+        let height = (THEMES.len() as u16 + 4).min(area.height);
         let popup = Rect {
             x: area.x + (area.width.saturating_sub(width)) / 2,
             y: area.y + (area.height.saturating_sub(height)) / 2,
@@ -801,54 +900,170 @@ impl App {
             height,
         };
         frame.render_widget(Clear, popup);
-        let block = card(" theme — ⏎ apply ", pal).style(Style::default().bg(pal.bg));
-        let inner = block.inner(popup);
-        frame.render_widget(block, popup);
+        frame.render_widget(
+            Block::new().style(Style::default().bg(pal.overlay).fg(pal.text)),
+            popup,
+        );
+        let inner = Rect {
+            x: popup.x + 2,
+            y: popup.y + 1,
+            width: popup.width.saturating_sub(4),
+            height: popup.height.saturating_sub(2),
+        };
 
-        let lines: Vec<Line<'_>> = THEMES
+        let mut lines: Vec<Line<'_>> = vec![
+            Line::from(Span::styled(
+                "theme",
+                Style::default().fg(pal.accent).bold(),
+            )),
+            Line::default(),
+        ];
+        let row_width = usize::from(inner.width);
+        lines.extend(THEMES.iter().enumerate().map(|(index, theme)| {
+            let current = if index == self.theme_index {
+                "•"
+            } else {
+                " "
+            };
+            let body = format!(" {current} {:<width$}", theme.name, width = row_width - 3);
+            if index == selected {
+                Line::from(Span::styled(
+                    body,
+                    Style::default().fg(pal.bg).bg(pal.accent).bold(),
+                ))
+            } else {
+                Line::from(Span::styled(body, Style::default().fg(pal.text)))
+            }
+        }));
+        frame.render_widget(Paragraph::new(lines), inner);
+        // The hint, opposite the title on the same row.
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                "⏎ apply · esc",
+                Style::default().fg(pal.muted),
+            )))
+            .alignment(Alignment::Right),
+            Rect {
+                x: inner.x,
+                y: inner.y,
+                width: inner.width,
+                height: 1,
+            },
+        );
+    }
+
+    /// The sidebar: brand and daemon state up top, the tab list, and a live
+    /// summary pinned to the bottom — the glance that works from every tab.
+    fn draw_sidebar(&self, frame: &mut Frame<'_>, area: Rect, pal: &Palette) {
+        let [_, brand, _, nav, _, summary] = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(TABS.len() as u16),
+            Constraint::Min(1),
+            Constraint::Length(9),
+        ])
+        .areas(area);
+
+        // The brand: a moon, then the name in two tones — "night" quiet,
+        // "lightd" lit. Reads as a wordmark without needing figlet rows.
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled("  ☾ ", Style::default().fg(pal.accent)),
+                Span::styled("night", Style::default().fg(pal.text).bold()),
+                Span::styled("lightd", Style::default().fg(pal.accent).bold()),
+            ])),
+            brand,
+        );
+
+        // Navigation: numbered rows, the digits being the shortcut hint; the
+        // active tab is a full-width accent bar across the panel.
+        let bar_width = usize::from(area.width).saturating_sub(5);
+        let items: Vec<Line<'_>> = TABS
             .iter()
             .enumerate()
-            .map(|(index, theme)| {
-                let current = if index == self.theme_index {
-                    "•"
-                } else {
-                    " "
-                };
-                let body = format!(" {current} {:<20}", theme.name);
-                if index == selected {
+            .map(|(index, name)| {
+                if index == self.tab {
                     Line::from(Span::styled(
-                        body,
+                        format!(" {}  {:<bar_width$}", index + 1, name),
                         Style::default().fg(pal.bg).bg(pal.accent).bold(),
                     ))
                 } else {
-                    Line::from(Span::styled(body, Style::default().fg(pal.text)))
+                    Line::from(vec![
+                        Span::styled(format!(" {}  ", index + 1), Style::default().fg(pal.faint)),
+                        Span::styled(*name, Style::default().fg(pal.muted)),
+                    ])
                 }
             })
             .collect();
-        frame.render_widget(Paragraph::new(lines), inner);
-    }
+        frame.render_widget(Paragraph::new(items), nav);
 
-    /// The tab bar: framed like the cards so it reads as a control, not as
-    /// stray text; numbered titles, the active one on an accent chip.
-    fn draw_tabs(&self, frame: &mut Frame<'_>, area: Rect, pal: &Palette) {
-        let block = Block::bordered()
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(pal.muted));
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
-        let titles: Vec<Line<'_>> = TABS
-            .iter()
-            .enumerate()
-            .map(|(i, name)| Line::from(format!(" {} {name} ", i + 1)))
-            .collect();
-        frame.render_widget(
-            Tabs::new(titles)
-                .select(self.tab)
-                .style(Style::default().fg(pal.text))
-                .highlight_style(Style::default().fg(pal.bg).bg(pal.accent).bold())
-                .divider(Span::styled("│", Style::default().fg(pal.faint))),
-            inner,
-        );
+        // The live summary, kept to three plain lines with air between them:
+        // the phase, the next sun event, the place and clock. The bar lives
+        // on the now tab; here it was one element too many.
+        let width = usize::from(area.width).saturating_sub(4);
+        let mut lines: Vec<Line<'_>> = Vec::new();
+        if let Some(status) = self.status.as_ref().filter(|s| s.has_location) {
+            let phase = sun_phase(status.elevation);
+            let icon = match phase {
+                "day" => "☀",
+                "night" => "☾",
+                _ => "◐",
+            };
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {icon} "), Style::default().fg(pal.accent)),
+                Span::styled(phase, Style::default().fg(pal.text)),
+                Span::styled(" · ", Style::default().fg(pal.faint)),
+                Span::styled(
+                    format!("{:+.1}°", status.elevation),
+                    Style::default().fg(pal.accent2),
+                ),
+            ]));
+            lines.push(Line::default());
+            let (_, short, _) = self.daylight(status);
+            let label = if short.starts_with("in ") {
+                format!("sunrise {short}")
+            } else if short.starts_with("polar") {
+                short
+            } else {
+                format!("{short} of light")
+            };
+            lines.push(Line::from(Span::styled(
+                format!("  {label}"),
+                Style::default().fg(pal.muted),
+            )));
+            lines.push(Line::default());
+            let place = self
+                .place
+                .as_ref()
+                .map(|(_, _, name)| name.as_str())
+                .unwrap_or("resolved");
+            let mut where_line = format!("{place} · {}", self.local_hhmm());
+            if where_line.chars().count() > width {
+                where_line = where_line.chars().take(width).collect();
+            }
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(where_line, Style::default().fg(pal.muted)),
+            ]));
+        } else {
+            lines.push(Line::from(Span::styled(
+                "  no location",
+                Style::default().fg(pal.muted),
+            )));
+        }
+        while lines.len() < 7 {
+            lines.push(Line::default());
+        }
+        lines.push(Line::from(Span::styled(
+            format!(
+                "  v{} · {}",
+                env!("CARGO_PKG_VERSION"),
+                THEMES[self.theme_index].name
+            ),
+            Style::default().fg(pal.faint),
+        )));
+        frame.render_widget(Paragraph::new(lines), summary);
     }
 
     /// Tab 1: the dashboard — state cards on top, the curve below. The cards
@@ -856,10 +1071,20 @@ impl App {
     /// header plus borders), so the curve sits at the same height on both tabs
     /// and does not jump when switching.
     fn draw_now_tab(&self, frame: &mut Frame<'_>, area: Rect, pal: &Palette) {
-        let [cards, curve] =
-            Layout::vertical([Constraint::Length(10), Constraint::Min(5)]).areas(area);
-        let [now_card, sun_card] =
-            Layout::horizontal([Constraint::Length(32), Constraint::Min(32)]).areas(cards);
+        // One-cell gutters between the raised cards, or their surfaces fuse
+        // into a single slab.
+        let [cards, _, curve] = Layout::vertical([
+            Constraint::Length(10),
+            Constraint::Length(1),
+            Constraint::Min(4),
+        ])
+        .areas(area);
+        let [now_card, _, sun_card] = Layout::horizontal([
+            Constraint::Length(32),
+            Constraint::Length(2),
+            Constraint::Min(30),
+        ])
+        .areas(cards);
         self.draw_now_card(frame, now_card, pal);
         self.draw_sun_card(frame, sun_card, pal);
         self.draw_curve_card(frame, curve, pal);
@@ -869,11 +1094,11 @@ impl App {
     /// the next event highlighted — then the curve for context.
     fn draw_today_tab(&self, frame: &mut Frame<'_>, area: Rect, pal: &Palette) {
         let Some(status) = self.status.as_ref().filter(|s| s.has_location) else {
-            let block = card(" today ", pal);
+            let block = card(" today ", pal).padding(Padding::new(2, 1, 1, 0));
             let inner = block.inner(area);
             frame.render_widget(block, area);
             frame.render_widget(
-                Paragraph::new(" no location — the schedule needs one")
+                Paragraph::new("no location — the schedule needs one")
                     .style(Style::default().fg(pal.muted)),
                 inner,
             );
@@ -890,13 +1115,16 @@ impl App {
         );
         let next = events.iter().position(|e| e.hour > now_hour);
 
-        // Two framed cards, like the now tab: the schedule table and the
-        // curve each in their own border so they never bleed together.
+        // Two raised cards, like the now tab: the schedule table and the
+        // curve, a gutter between them so the surfaces stay distinct.
         let table_height = (events.len() + 1) as u16;
-        let [schedule_area, curve_area] =
-            Layout::vertical([Constraint::Length(table_height + 2), Constraint::Min(0)])
-                .areas(area);
-        let schedule = card(" schedule ", pal);
+        let [schedule_area, _, curve_area] = Layout::vertical([
+            Constraint::Length(table_height + 2),
+            Constraint::Length(1),
+            Constraint::Min(0),
+        ])
+        .areas(area);
+        let schedule = card(" schedule ", pal).padding(Padding::new(2, 1, 1, 0));
         let table_area = schedule.inner(schedule_area);
         frame.render_widget(schedule, schedule_area);
 
@@ -906,7 +1134,7 @@ impl App {
             .map(|(i, event)| {
                 if Some(i) == next {
                     Row::new(vec![
-                        format!(" {}", event.name),
+                        event.name.to_string(),
                         event.hhmm(),
                         format!("{} K", event.kelvin),
                         relative(event.hour - now_hour),
@@ -914,7 +1142,7 @@ impl App {
                     .style(Style::default().fg(pal.bg).bg(pal.accent).bold())
                 } else if event.hour < now_hour {
                     Row::new(vec![
-                        format!(" {}", event.name),
+                        event.name.to_string(),
                         event.hhmm(),
                         format!("{} K", event.kelvin),
                         relative(event.hour - now_hour),
@@ -922,7 +1150,7 @@ impl App {
                     .style(Style::default().fg(pal.muted))
                 } else {
                     Row::new(vec![
-                        Cell::from(format!(" {}", event.name)),
+                        Cell::from(event.name.to_string()),
                         Cell::from(Span::styled(event.hhmm(), Style::default().fg(pal.accent2))),
                         Cell::from(Span::styled(
                             format!("{} K", event.kelvin),
@@ -946,13 +1174,12 @@ impl App {
             ],
         )
         .header(
-            Row::new(vec![" event", "time", "kelvin", "when"])
-                .style(Style::default().fg(pal.faint)),
+            Row::new(vec!["event", "time", "kelvin", "when"]).style(Style::default().fg(pal.faint)),
         );
         frame.render_widget(table, table_area);
 
         if curve_area.height >= 7 {
-            let curve = card(" curve ", pal);
+            let curve = card(" curve ", pal).padding(Padding::new(1, 1, 0, 0));
             let chart_area = curve.inner(curve_area);
             frame.render_widget(curve, curve_area);
             self.draw_chart(frame, chart_area, pal);
@@ -969,63 +1196,6 @@ impl App {
         (now - secs_into_day, secs_into_day / 3600.0)
     }
 
-    /// The status strip under the wordmark: liveness, mode, local time, sun —
-    /// and, right-aligned, the version and the active theme.
-    fn draw_strip(&self, frame: &mut Frame<'_>, area: Rect, pal: &Palette) {
-        let mut spans = vec![Span::raw(" ")];
-        match &self.status {
-            Some(status) => {
-                spans.push(Span::styled("● ", Style::default().fg(pal.ok)));
-                spans.push(Span::styled("daemon", Style::default().fg(pal.muted)));
-                spans.push(Span::styled("  ·  ", Style::default().fg(pal.faint)));
-                let mode = if !status.enabled {
-                    "OFF"
-                } else if status.following {
-                    "AUTO"
-                } else {
-                    "MANUAL"
-                };
-                spans.push(Span::styled(mode, Style::default().fg(pal.accent).bold()));
-                spans.push(Span::styled("  ·  ", Style::default().fg(pal.faint)));
-                spans.push(Span::styled(
-                    self.local_hhmm(),
-                    Style::default().fg(pal.accent2),
-                ));
-                if status.has_location {
-                    spans.push(Span::styled("  ·  ", Style::default().fg(pal.faint)));
-                    spans.push(Span::styled(
-                        format!("sun {:+.1}°", status.elevation),
-                        Style::default().fg(pal.muted),
-                    ));
-                }
-            }
-            None => {
-                spans.push(Span::styled("○ ", Style::default().fg(pal.err)));
-                spans.push(Span::styled(
-                    "daemon not running",
-                    Style::default().fg(pal.err),
-                ));
-            }
-        }
-        // Centred under the centred wordmark; the version keeps to the right.
-        frame.render_widget(
-            Paragraph::new(Line::from(spans)).alignment(Alignment::Center),
-            area,
-        );
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                format!(
-                    "v{} · theme {} ",
-                    env!("CARGO_PKG_VERSION"),
-                    THEMES[self.theme_index].name
-                ),
-                Style::default().fg(pal.faint),
-            )))
-            .alignment(Alignment::Right),
-            area,
-        );
-    }
-
     fn local_hhmm(&self) -> String {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -1038,7 +1208,7 @@ impl App {
     /// The fallback for small terminals: no wordmark, no cards — just the
     /// status lines, the curve, and the keys.
     fn draw_compact(&self, frame: &mut Frame<'_>, area: Rect, pal: &Palette) {
-        let outer = card(" nightlightd ", pal);
+        let outer = card(" nightlightd ", pal).padding(Padding::new(1, 1, 0, 0));
         let inner = outer.inner(area);
         frame.render_widget(outer, area);
         let [header, chart, footer] = Layout::vertical([
@@ -1049,7 +1219,7 @@ impl App {
         .areas(inner);
         frame.render_widget(Paragraph::new(self.compact_header(pal)), header);
         self.draw_chart(frame, chart, pal);
-        frame.render_widget(footer_line(0, pal), footer);
+        self.draw_footer(frame, footer, pal);
     }
 
     fn compact_header(&self, pal: &Palette) -> Vec<Line<'_>> {
@@ -1090,7 +1260,7 @@ impl App {
 
         let Some(status) = &self.status else {
             frame.render_widget(
-                Paragraph::new("\n daemon not running").style(Style::default().fg(pal.err)),
+                Paragraph::new("daemon not running").style(Style::default().fg(pal.err)),
                 inner,
             );
             return;
@@ -1160,10 +1330,21 @@ impl App {
             return;
         };
 
-        // Text and the daylight bar on the left, the sky scene on the right.
+        // One story, three beats: where the sun is, how much light is left
+        // (the braille bar under its own label), and the temperature band.
+        // The coordinates live on the location tab; repeating them here was
+        // noise. Sky scene on the right.
         let [left, art] =
             Layout::horizontal([Constraint::Min(22), Constraint::Length(16)]).areas(inner);
-        let [text, bar] = Layout::vertical([Constraint::Min(5), Constraint::Length(1)]).areas(left);
+        let [phase_row, _, label_row, bar_row, _, band_row] = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .areas(left);
 
         let phase = sun_phase(status.elevation);
         let icon = match phase {
@@ -1171,69 +1352,66 @@ impl App {
             "night" => "☾",
             _ => "◐",
         };
-        let lat_hemisphere = if status.latitude >= 0.0 { "N" } else { "S" };
-        let lon_hemisphere = if status.longitude >= 0.0 { "E" } else { "W" };
-        let (daylight_ratio, daylight_label) = self.daylight(status);
+        let (daylight_ratio, daylight_short, daylight_label) = self.daylight(status);
         frame.render_widget(
-            Paragraph::new(vec![
-                Line::from(vec![
-                    Span::styled(format!(" {icon} "), Style::default().fg(pal.accent)),
-                    Span::styled(
-                        format!("{:+.1}°", status.elevation),
-                        Style::default().fg(pal.accent2).bold(),
-                    ),
-                    Span::styled(format!("  {phase}"), Style::default().fg(pal.muted)),
-                ]),
-                Line::default(),
-                Line::from(vec![
-                    Span::styled("   ", Style::default()),
-                    Span::styled(
-                        format!(
-                            "{:.1}°{lat_hemisphere} {:.1}°{lon_hemisphere}",
-                            status.latitude.abs(),
-                            status.longitude.abs(),
-                        ),
-                        Style::default().fg(pal.accent2),
-                    ),
-                ]),
-                Line::from(vec![
-                    Span::styled("   day ", Style::default().fg(pal.muted)),
-                    Span::styled(
-                        format!("{} K", status.day_temp),
-                        Style::default().fg(pal.accent2),
-                    ),
-                    Span::styled(" · night ", Style::default().fg(pal.muted)),
-                    Span::styled(
-                        format!("{} K", status.night_temp),
-                        Style::default().fg(pal.accent2),
-                    ),
-                ]),
-                Line::default(),
-                Line::from(Span::styled(
-                    format!("   {daylight_label}"),
+            Paragraph::new(Line::from(vec![
+                Span::styled(format!("{icon} "), Style::default().fg(pal.accent)),
+                Span::styled(phase, Style::default().fg(pal.text).bold()),
+                Span::styled(" · ", Style::default().fg(pal.faint)),
+                Span::styled(
+                    format!("{:+.1}°", status.elevation),
                     Style::default().fg(pal.accent2),
-                )),
-            ]),
-            text,
+                ),
+            ])),
+            phase_row,
+        );
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                daylight_label,
+                Style::default().fg(pal.muted),
+            ))),
+            label_row,
+        );
+        // The braille bar under its label: by day it drains with the warm
+        // accent as the light runs out; by night it fills with the cool data
+        // hue as the night climbs toward sunrise.
+        let towards_sunrise = daylight_short.starts_with("in ") || daylight_short == "polar night";
+        let bar_colour = if towards_sunrise {
+            pal.accent2
+        } else {
+            pal.accent
+        };
+        frame.render_widget(
+            BrailleBar::new(daylight_ratio, 1.0).fill_color(bar_colour),
+            Rect {
+                width: bar_row.width.saturating_sub(2),
+                ..bar_row
+            },
+        );
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled("day ", Style::default().fg(pal.muted)),
+                Span::styled(
+                    format!("{} K", status.day_temp),
+                    Style::default().fg(pal.accent2),
+                ),
+                Span::styled(" · night ", Style::default().fg(pal.muted)),
+                Span::styled(
+                    format!("{} K", status.night_temp),
+                    Style::default().fg(pal.accent2),
+                ),
+            ])),
+            band_row,
         );
         frame.render_widget(sky_art(phase, pal), art);
-        // The daylight bar: filled by how much of it is left, so it drains as
-        // the sun sinks. Accent for the remaining light, faint for the spent.
-        frame.render_widget(
-            LineGauge::default()
-                .ratio(daylight_ratio)
-                .filled_style(Style::default().fg(pal.accent))
-                .unfilled_style(Style::default().fg(pal.faint))
-                .label(""),
-            bar,
-        );
     }
 
-    /// The daylight bar's fill (0..1) and its label. Reads today's real
-    /// sunrise/sunset crossings: during the day, how much daylight is left and
-    /// what fraction of it remains; at night, how long until sunrise; and the
-    /// honest polar cases when the sun does not cross at all.
-    fn daylight(&self, status: &Status) -> (f64, String) {
+    /// The daylight bar's fill (0..1) plus a short label and a long one (for
+    /// the sun card). Reads today's real sunrise/sunset crossings. By day the
+    /// fill is the daylight remaining; at night it is how far the night has
+    /// come toward sunrise, so the bar is alive around the clock instead of
+    /// lying dead at zero all evening. Honest polar cases included.
+    fn daylight(&self, status: &Status) -> (f64, String, String) {
         let (midnight, now) = self.day_context();
         let events = today::milestones(
             status.latitude,
@@ -1247,28 +1425,53 @@ impl App {
             (Some(sunrise), Some(sunset)) if now >= sunrise && now < sunset => {
                 let left = sunset - now;
                 let ratio = (left / (sunset - sunrise)).clamp(0.0, 1.0);
-                (ratio, format!("☀ {} of daylight left", hm(left)))
+                (ratio, hm(left), format!("☀ {} of daylight left", hm(left)))
             }
-            (Some(sunrise), _) if now < sunrise => {
-                (0.0, format!("☾ sunrise in {}", hm(sunrise - now)))
+            (Some(sunrise), sunset) if now < sunrise => {
+                // Pre-dawn: the night began at (roughly) yesterday's sunset.
+                let until = sunrise - now;
+                let ratio = sunset.map_or(0.0, |set| {
+                    let began = set - 24.0;
+                    ((now - began) / (sunrise - began)).clamp(0.0, 1.0)
+                });
+                (
+                    ratio,
+                    format!("in {}", hm(until)),
+                    format!("☾ sunrise in {}", hm(until)),
+                )
             }
-            (Some(sunrise), Some(_)) => {
+            (Some(sunrise), Some(sunset)) => {
                 // After sunset: the next sunrise is tomorrow's, ~24 h on.
-                (0.0, format!("☾ sunrise in {}", hm(sunrise + 24.0 - now)))
+                let next = sunrise + 24.0;
+                let until = next - now;
+                let ratio = ((now - sunset) / (next - sunset)).clamp(0.0, 1.0);
+                (
+                    ratio,
+                    format!("in {}", hm(until)),
+                    format!("☾ sunrise in {}", hm(until)),
+                )
             }
             _ => {
                 // No crossing today: polar day or polar night.
                 if status.elevation > 0.0 {
-                    (1.0, "☀ midnight sun · no sunset today".into())
+                    (
+                        1.0,
+                        "polar day".into(),
+                        "☀ midnight sun · no sunset today".into(),
+                    )
                 } else {
-                    (0.0, "☾ polar night · no sunrise today".into())
+                    (
+                        0.0,
+                        "polar night".into(),
+                        "☾ polar night · no sunrise today".into(),
+                    )
                 }
             }
         }
     }
 
     fn draw_curve_card(&self, frame: &mut Frame<'_>, area: Rect, pal: &Palette) {
-        let block = card(" curve ", pal);
+        let block = card(" curve ", pal).padding(Padding::new(1, 1, 0, 0));
         let inner = block.inner(area);
         frame.render_widget(block, area);
         self.draw_chart(frame, inner, pal);
@@ -1281,7 +1484,7 @@ impl App {
     fn draw_chart(&self, frame: &mut Frame<'_>, area: Rect, pal: &Palette) {
         let Some(status) = self.status.as_ref().filter(|s| s.has_location) else {
             frame.render_widget(
-                Paragraph::new(" no location — the curve needs one")
+                Paragraph::new("no location — the curve needs one")
                     .style(Style::default().fg(pal.muted)),
                 area,
             );
@@ -1382,9 +1585,9 @@ impl App {
             Layout::horizontal([Constraint::Length(7), Constraint::Min(10)]).areas(top);
 
         let chart = Chart::new(datasets)
-            // Same fix as the map: paint the plot in the theme background so it
-            // doesn't fall back to the terminal's grey and wash out the curve.
-            .style(Style::default().bg(pal.bg))
+            // Same fix as the map: paint the plot ourselves so it doesn't fall
+            // back to the terminal's grey; the card surface is the canvas.
+            .style(Style::default().bg(pal.surface))
             .x_axis(Axis::default().bounds([0.0, 24.0]))
             .y_axis(Axis::default().bounds([night - pad, day + pad]));
         frame.render_widget(chart, plot);
@@ -1520,44 +1723,13 @@ fn hm(hours: f64) -> String {
     }
 }
 
-/// A rounded card with a bold accent title and muted borders — the shared look.
+/// A borderless card: a bold accent title floating over the content, and a
+/// surface one shade lighter than the page underneath it — raised panels
+/// instead of boxes; the elevation does what frames used to do.
 fn card<'a>(title: &'a str, pal: &Palette) -> Block<'a> {
-    Block::bordered()
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(pal.muted))
+    Block::new()
+        .style(Style::default().bg(pal.surface))
         .title(Span::styled(title, Style::default().fg(pal.accent).bold()))
-}
-
-/// The key hints, styled as chips: the key on an accent background, the label
-/// muted. The set follows the active tab.
-fn footer_line(tab: usize, pal: &Palette) -> Paragraph<'static> {
-    let chip = |key: &str, label: &str| {
-        vec![
-            Span::styled(
-                format!(" {key} "),
-                Style::default().fg(pal.bg).bg(pal.accent),
-            ),
-            Span::styled(format!(" {label}   "), Style::default().fg(pal.muted)),
-        ]
-    };
-    let mut spans = vec![Span::raw(" ")];
-    spans.extend(chip("⇥", "tab"));
-    if tab == SETTINGS_TAB {
-        spans.extend(chip("↑↓", "select"));
-        spans.extend(chip("‹›", "adjust"));
-        spans.extend(chip("⏎", "apply"));
-    } else if tab == LOCATION_TAB {
-        spans.extend(chip("⏎", "pick"));
-        spans.extend(chip("c", "timezone"));
-        spans.extend(chip("T", "theme"));
-    } else {
-        spans.extend(chip("t", "toggle"));
-        spans.extend(chip("a", "auto"));
-        spans.extend(chip("↑↓", "night temp"));
-        spans.extend(chip("T", "theme"));
-    }
-    spans.extend(chip("q", "quit"));
-    Paragraph::new(Line::from(spans))
 }
 
 /// Where the daemon's config lives, for the settings tab's info line — the
