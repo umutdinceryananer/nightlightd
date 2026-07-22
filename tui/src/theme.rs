@@ -78,7 +78,7 @@ pub const THEMES: &[Theme] = &[
     },
     Theme {
         // Catppuccin mocha: mauve on the classic deep mantle, teal data.
-        name: "catppuccin",
+        name: "mocha",
         accent: Some((203, 166, 247)),
         secondary: Some((148, 226, 213)),
         base: Some((30, 30, 46)),
@@ -99,7 +99,7 @@ pub const THEMES: &[Theme] = &[
     },
     Theme {
         // Hot pink and cyan over a deep violet night.
-        name: "synthwave",
+        name: "synth",
         accent: Some((255, 110, 199)),
         secondary: Some((100, 220, 255)),
         base: Some((36, 23, 54)),

@@ -126,8 +126,8 @@ Details comment:
 - The TUI: ratatui + tui-big-text. The default "live" theme's accent is
   the actual blackbody tint the daemon is applying to the screen, so
   the whole interface warms through the evening in step with your
-  display. Other themes: tokyo, catppuccin, nord, gruvbox, synthwave,
-  ember, phosphor.
+  display. Other themes: tokyo, mocha, nord, gruvbox, synth, ember,
+  phosphor.
 - The curve is computed from real solar elevation at your location
   (derived from your timezone; no config, no geoclue).
 - Terminal: xfce4-terminal.

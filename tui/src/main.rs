@@ -69,6 +69,12 @@ struct App {
     settings_selected: usize,
     /// The theme picker popup: `Some(highlighted index)` while open.
     theme_popup: Option<usize>,
+    /// The `?` overlay: every key in one place.
+    help_popup: bool,
+    /// The `s` overlay: the solar facts behind the dashboard's summaries.
+    sun_popup: bool,
+    /// The `m` overlay: the world map at full size.
+    map_popup: bool,
     start_at_login: bool,
     /// The map's location picker: `Some((lat, lon))` cursor while picking.
     picker: Option<(f64, f64)>,
@@ -122,6 +128,9 @@ fn main() -> io::Result<()> {
         tab,
         settings_selected: 0,
         theme_popup: None,
+        help_popup: false,
+        sun_popup: false,
+        map_popup: false,
         start_at_login: autostart::enabled(),
         picker: None,
         map_cam: None,
@@ -229,6 +238,49 @@ impl App {
             self.popup_key(code);
             return false;
         }
+        // The big map is a working surface, not just a view: the picker runs
+        // inside it. `m` always closes; the rest belongs to the pick.
+        if self.map_popup {
+            if code == KeyCode::Char('m') {
+                self.map_popup = false;
+                return false;
+            }
+            if self.picker.is_some() {
+                return self.picker_key(code);
+            }
+            match code {
+                KeyCode::Enter => {
+                    let start = self
+                        .status
+                        .as_ref()
+                        .filter(|s| s.has_location)
+                        .map(|s| (s.latitude, s.longitude))
+                        .unwrap_or((0.0, 0.0));
+                    self.picker = Some(start);
+                }
+                KeyCode::Char('c') => {
+                    self.client.clear_location();
+                    self.last_poll = None;
+                }
+                KeyCode::Esc | KeyCode::Char('q') => self.map_popup = false,
+                _ => {}
+            }
+            return false;
+        }
+        if self.help_popup || self.sun_popup {
+            if matches!(
+                code,
+                KeyCode::Esc
+                    | KeyCode::Enter
+                    | KeyCode::Char('q')
+                    | KeyCode::Char('?')
+                    | KeyCode::Char('s')
+            ) {
+                self.help_popup = false;
+                self.sun_popup = false;
+            }
+            return false;
+        }
         // So does the map picker (esc cancels the pick, q still quits).
         if self.picker.is_some() && self.tab == LOCATION_TAB {
             return self.picker_key(code);
@@ -247,6 +299,8 @@ impl App {
             KeyCode::Char('T') => {
                 self.theme_index = (self.theme_index + 1) % THEMES.len();
             }
+            KeyCode::Char('?') => self.help_popup = true,
+            KeyCode::Char('s') => self.sun_popup = true,
             KeyCode::Tab => {
                 self.tab = (self.tab + 1) % TABS.len();
             }
@@ -358,6 +412,7 @@ impl App {
                 self.client.clear_location();
                 self.last_poll = None;
             }
+            KeyCode::Char('m') => self.map_popup = true,
             _ => {}
         }
     }
@@ -473,6 +528,15 @@ impl App {
         self.draw_footer(frame, footer, &pal);
         if self.theme_popup.is_some() {
             self.draw_theme_popup(frame, area, &pal);
+        }
+        if self.help_popup {
+            self.draw_help_popup(frame, area, &pal);
+        }
+        if self.sun_popup {
+            self.draw_sun_popup(frame, area, &pal);
+        }
+        if self.map_popup {
+            self.draw_map_popup(frame, area, &pal);
         }
     }
 
@@ -843,14 +907,18 @@ impl App {
                 ("↑↓", "select"),
                 ("‹›", "adjust"),
                 ("⏎", "apply"),
+                ("s", "sun"),
+                ("?", "help"),
                 ("q", "quit"),
             ]
         } else if self.tab == LOCATION_TAB {
             vec![
                 ("⇥", "tab"),
                 ("⏎", "pick"),
+                ("m", "map"),
                 ("c", "timezone"),
-                ("T", "theme"),
+                ("s", "sun"),
+                ("?", "help"),
                 ("q", "quit"),
             ]
         } else {
@@ -860,6 +928,8 @@ impl App {
                 ("a", "auto"),
                 ("↑↓", "night temp"),
                 ("T", "theme"),
+                ("s", "sun"),
+                ("?", "help"),
                 ("q", "quit"),
             ]
         };
@@ -882,6 +952,310 @@ impl App {
             Paragraph::new(Line::from(spans)).alignment(Alignment::Right),
             area,
         );
+    }
+
+    /// Clears and paints a centred overlay surface — the shared chrome of
+    /// every popup: the lighter shade does the lifting, no border. Returns
+    /// the padded inner area.
+    fn overlay(frame: &mut Frame<'_>, area: Rect, width: u16, height: u16, pal: &Palette) -> Rect {
+        let width = width.min(area.width);
+        let height = height.min(area.height);
+        let popup = Rect {
+            x: area.x + (area.width.saturating_sub(width)) / 2,
+            y: area.y + (area.height.saturating_sub(height)) / 2,
+            width,
+            height,
+        };
+        frame.render_widget(Clear, popup);
+        frame.render_widget(
+            Block::new().style(Style::default().bg(pal.overlay).fg(pal.text)),
+            popup,
+        );
+        Rect {
+            x: popup.x + 2,
+            y: popup.y + 1,
+            width: popup.width.saturating_sub(4),
+            height: popup.height.saturating_sub(2),
+        }
+    }
+
+    /// A popup's first row: the title in the accent, the closing hint tucked
+    /// against the opposite edge.
+    fn overlay_title(frame: &mut Frame<'_>, inner: Rect, title: &str, hint: &str, pal: &Palette) {
+        let row = Rect { height: 1, ..inner };
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                title.to_string(),
+                Style::default().fg(pal.accent).bold(),
+            ))),
+            row,
+        );
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                hint.to_string(),
+                Style::default().fg(pal.muted),
+            )))
+            .alignment(Alignment::Right),
+            row,
+        );
+    }
+
+    /// `?`: every key in one place, grouped by where it works.
+    fn draw_help_popup(&self, frame: &mut Frame<'_>, area: Rect, pal: &Palette) {
+        let key = |k: &str, label: &str| {
+            Line::from(vec![
+                Span::styled(format!("{k:<8}"), Style::default().fg(pal.accent).bold()),
+                Span::styled(label.to_string(), Style::default().fg(pal.muted)),
+            ])
+        };
+        let section = |name: &str| {
+            Line::from(Span::styled(
+                name.to_string(),
+                Style::default().fg(pal.accent2),
+            ))
+        };
+        let mut lines = vec![Line::default(), Line::default(), section("everywhere")];
+        lines.push(key("⇥ · 1-5", "switch tab"));
+        lines.push(key("t", "toggle the filter"));
+        lines.push(key("a", "back to automatic"));
+        lines.push(key("↑↓", "nudge the night temperature"));
+        lines.push(key("T", "cycle the theme"));
+        lines.push(key("s", "sun details"));
+        lines.push(key("?", "this help"));
+        lines.push(key("q", "quit"));
+        lines.push(Line::default());
+        lines.push(section("location"));
+        lines.push(key("⏎", "pick a spot · pin it"));
+        lines.push(key("m", "the map, full size"));
+        lines.push(key("c", "back to the timezone"));
+        lines.push(Line::default());
+        lines.push(section("settings"));
+        lines.push(key("↑↓ ‹›", "select · adjust"));
+        lines.push(key("⏎", "apply the row"));
+        lines.push(Line::default());
+        lines.push(Line::from(Span::styled(
+            format!(
+                "v{} · github.com/umutdinceryananer/nightlightd",
+                env!("CARGO_PKG_VERSION")
+            ),
+            Style::default().fg(pal.faint),
+        )));
+        let inner = Self::overlay(frame, area, 52, lines.len() as u16 + 2, pal);
+        Self::overlay_title(frame, inner, "keys", "esc", pal);
+        frame.render_widget(Paragraph::new(lines), inner);
+    }
+
+    /// `s`: the solar facts behind the dashboard's summaries — day length and
+    /// how it drifts, solar noon, the day's frame, tomorrow's sunrise. All
+    /// pure maths from the same milestones the schedule uses.
+    fn draw_sun_popup(&self, frame: &mut Frame<'_>, area: Rect, pal: &Palette) {
+        let Some(status) = self.status.as_ref().filter(|s| s.has_location) else {
+            let inner = Self::overlay(frame, area, 36, 5, pal);
+            Self::overlay_title(frame, inner, "sun", "esc", pal);
+            frame.render_widget(
+                Paragraph::new(vec![
+                    Line::default(),
+                    Line::default(),
+                    Line::from(Span::styled(
+                        "no location resolved",
+                        Style::default().fg(pal.muted),
+                    )),
+                ]),
+                inner,
+            );
+            return;
+        };
+
+        let (midnight, _) = self.day_context();
+        let compute = |offset_days: f64| {
+            today::milestones(
+                status.latitude,
+                status.longitude,
+                midnight + offset_days * 86_400.0,
+                status.day_temp,
+                status.night_temp,
+            )
+        };
+        let today_events = compute(0.0);
+        let yesterday = compute(-1.0);
+        let tomorrow = compute(1.0);
+        let hour_of = |events: &[today::Milestone], name: &str| {
+            events.iter().find(|e| e.name == name).map(|e| e.hour)
+        };
+        let hhmm_of = |events: &[today::Milestone], name: &str| {
+            events.iter().find(|e| e.name == name).map(|e| e.hhmm())
+        };
+
+        let mut rows: Vec<(String, String)> = Vec::new();
+        match (
+            hour_of(&today_events, "sunrise"),
+            hour_of(&today_events, "sunset"),
+        ) {
+            (Some(rise), Some(set)) => {
+                let length = set - rise;
+                rows.push(("day length".into(), hm(length)));
+                if let (Some(y_rise), Some(y_set)) = (
+                    hour_of(&yesterday, "sunrise"),
+                    hour_of(&yesterday, "sunset"),
+                ) {
+                    let delta = length - (y_set - y_rise);
+                    let seconds = (delta.abs() * 3600.0).round() as i64;
+                    let word = if delta >= 0.0 { "longer" } else { "shorter" };
+                    rows.push((
+                        "vs yesterday".into(),
+                        format!("{}m {:02}s {word}", seconds / 60, seconds % 60),
+                    ));
+                }
+                rows.push((
+                    "sunrise → sunset".into(),
+                    format!(
+                        "{} → {}",
+                        hhmm_of(&today_events, "sunrise").unwrap_or_default(),
+                        hhmm_of(&today_events, "sunset").unwrap_or_default()
+                    ),
+                ));
+            }
+            _ => {
+                let which = if status.elevation > 0.0 {
+                    "polar day — the sun does not set"
+                } else {
+                    "polar night — the sun does not rise"
+                };
+                rows.push(("today".into(), which.into()));
+            }
+        }
+        if let Some(noon) = today_events.iter().find(|e| e.name == "solar noon") {
+            let elevation = solar_elevation(
+                status.latitude,
+                status.longitude,
+                midnight + noon.hour * 3600.0,
+            );
+            rows.push((
+                "solar noon".into(),
+                format!("{} · {:+.1}°", noon.hhmm(), elevation),
+            ));
+        }
+        if let (Some(rise), Some(t_rise)) = (
+            hour_of(&today_events, "sunrise"),
+            hhmm_of(&tomorrow, "sunrise"),
+        ) {
+            let t_hour = hour_of(&tomorrow, "sunrise").unwrap_or(rise);
+            let minutes = ((t_hour - rise) * 60.0).round() as i64;
+            rows.push((
+                "tomorrow's sunrise".into(),
+                format!("{t_rise} ({minutes:+}m)"),
+            ));
+        }
+        rows.push(("sun right now".into(), format!("{:+.1}°", status.elevation)));
+
+        let mut lines = vec![Line::default(), Line::default()];
+        for (label, value) in rows {
+            lines.push(Line::from(vec![
+                Span::styled(format!("{label:<20}"), Style::default().fg(pal.muted)),
+                Span::styled(value, Style::default().fg(pal.accent2)),
+            ]));
+            lines.push(Line::default());
+        }
+        lines.pop();
+        let inner = Self::overlay(frame, area, 48, lines.len() as u16 + 2, pal);
+        Self::overlay_title(frame, inner, "sun", "esc", pal);
+        frame.render_widget(Paragraph::new(lines), inner);
+    }
+
+    /// `m` on the location tab: the world at full size, with the picker live
+    /// inside it. The lower card gives the map a strip; this gives it the
+    /// screen, which on most terminals is enough rows to show the whole
+    /// −55°..75° range undistorted.
+    fn draw_map_popup(&self, frame: &mut Frame<'_>, area: Rect, pal: &Palette) {
+        let inner = Self::overlay(
+            frame,
+            area,
+            area.width.saturating_sub(4),
+            area.height.saturating_sub(2),
+            pal,
+        );
+        // The title row carries the context: where the cursor (or the pin)
+        // sits, and the local clock; the hint follows the picking state.
+        let (spot, spot_place) = match self.picker {
+            Some((lat, lon)) => (Some((lat, lon)), self.picker_place.clone()),
+            None => (
+                self.status
+                    .as_ref()
+                    .filter(|s| s.has_location)
+                    .map(|s| (s.latitude, s.longitude)),
+                self.place.as_ref().map(|(_, _, name)| name.clone()),
+            ),
+        };
+        let mut title = vec![Span::styled("map", Style::default().fg(pal.accent).bold())];
+        if let Some((lat, lon)) = spot {
+            let place = spot_place.unwrap_or_else(|| "somewhere".into());
+            title.push(Span::styled(
+                format!("  {place} · {}", format_coords(lat, lon)),
+                Style::default().fg(pal.muted),
+            ));
+            title.push(Span::styled(" · ", Style::default().fg(pal.faint)));
+            title.push(Span::styled(
+                self.local_hhmm(),
+                Style::default().fg(pal.accent2),
+            ));
+        }
+        let title_row = Rect { height: 1, ..inner };
+        frame.render_widget(Paragraph::new(Line::from(title)), title_row);
+        let hint = if self.picker.is_some() {
+            "←↑↓→ move · ⏎ pin · esc"
+        } else {
+            "⏎ pick · c timezone · esc"
+        };
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                hint,
+                Style::default().fg(pal.muted),
+            )))
+            .alignment(Alignment::Right),
+            title_row,
+        );
+        let map_area = Rect {
+            x: inner.x,
+            y: inner.y + 2,
+            width: inner.width,
+            height: inner.height.saturating_sub(2),
+        };
+        let active = self
+            .status
+            .as_ref()
+            .filter(|s| s.has_location)
+            .map(|s| (s.latitude, s.longitude));
+        let picker = self.picker;
+        let accent = pal.accent;
+        let map_color = pal.muted;
+        let text = pal.text;
+        let canvas = Canvas::default()
+            .background_color(pal.overlay)
+            .marker(Marker::Braille)
+            .x_bounds([-180.0, 180.0])
+            .y_bounds([MAP_LAT_MIN, MAP_LAT_MAX])
+            .paint(move |ctx| {
+                ctx.draw(&Map {
+                    resolution: MapResolution::High,
+                    color: map_color,
+                });
+                if let Some((lat, lon)) = active {
+                    ctx.print(
+                        lon,
+                        lat,
+                        Span::styled("◉", Style::default().fg(accent).bold()),
+                    );
+                }
+                if let Some((lat, lon)) = picker {
+                    ctx.layer();
+                    ctx.print(
+                        lon,
+                        lat,
+                        Span::styled("✛", Style::default().fg(text).bold()),
+                    );
+                }
+            });
+        frame.render_widget(canvas, map_area);
     }
 
     /// The theme picker: a floating overlay in the noodle idiom — no border,
@@ -1020,7 +1394,7 @@ impl App {
                 ),
             ]));
             lines.push(Line::default());
-            let (_, short, _) = self.daylight(status);
+            let (_, short, _, _) = self.daylight(status);
             let label = if short.starts_with("in ") {
                 format!("sunrise {short}")
             } else if short.starts_with("polar") {
@@ -1119,12 +1493,12 @@ impl App {
         // curve, a gutter between them so the surfaces stay distinct.
         let table_height = (events.len() + 1) as u16;
         let [schedule_area, _, curve_area] = Layout::vertical([
-            Constraint::Length(table_height + 2),
+            Constraint::Length(table_height + 3),
             Constraint::Length(1),
             Constraint::Min(0),
         ])
         .areas(area);
-        let schedule = card(" schedule ", pal).padding(Padding::new(2, 1, 1, 0));
+        let schedule = card(" schedule ", pal).padding(Padding::new(2, 1, 1, 1));
         let table_area = schedule.inner(schedule_area);
         frame.render_widget(schedule, schedule_area);
 
@@ -1330,14 +1704,13 @@ impl App {
             return;
         };
 
-        // One story, three beats: where the sun is, how much light is left
-        // (the braille bar under its own label), and the temperature band.
-        // The coordinates live on the location tab; repeating them here was
-        // noise. Sky scene on the right.
+        // One story: the headline says what is coming ("sunrise in 5h 05m"),
+        // the timeline bar under it shows the period's endpoints and where
+        // "now" sits between them, and the temperature band closes the card.
+        // Sky scene on the right.
         let [left, art] =
             Layout::horizontal([Constraint::Min(22), Constraint::Length(16)]).areas(inner);
-        let [phase_row, _, label_row, bar_row, _, band_row] = Layout::vertical([
-            Constraint::Length(1),
+        let [headline_row, _, bar_row, _, band_row] = Layout::vertical([
             Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Length(1),
@@ -1347,47 +1720,68 @@ impl App {
         .areas(left);
 
         let phase = sun_phase(status.elevation);
-        let icon = match phase {
-            "day" => "☀",
-            "night" => "☾",
-            _ => "◐",
-        };
-        let (daylight_ratio, daylight_short, daylight_label) = self.daylight(status);
+        let (daylight_ratio, daylight_short, daylight_label, endpoints) = self.daylight(status);
+        // The long label leads with its own icon; give the icon the accent
+        // and the words the text tone.
+        let mut label_chars = daylight_label.chars();
+        let label_icon: String = label_chars.by_ref().take(1).collect();
+        let label_rest: String = label_chars.collect();
         frame.render_widget(
             Paragraph::new(Line::from(vec![
-                Span::styled(format!("{icon} "), Style::default().fg(pal.accent)),
-                Span::styled(phase, Style::default().fg(pal.text).bold()),
-                Span::styled(" · ", Style::default().fg(pal.faint)),
-                Span::styled(
-                    format!("{:+.1}°", status.elevation),
-                    Style::default().fg(pal.accent2),
-                ),
+                Span::styled(label_icon, Style::default().fg(pal.accent)),
+                Span::styled(label_rest, Style::default().fg(pal.text).bold()),
             ])),
-            phase_row,
+            headline_row,
         );
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                daylight_label,
-                Style::default().fg(pal.muted),
-            ))),
-            label_row,
-        );
-        // The braille bar under its label: by day it drains with the warm
-        // accent as the light runs out; by night it fills with the cool data
-        // hue as the night climbs toward sunrise.
+        // The timeline bar, bracketed by the clock times it runs between; the
+        // fill colour is warm across the day, cool across the night.
         let towards_sunrise = daylight_short.starts_with("in ") || daylight_short == "polar night";
         let bar_colour = if towards_sunrise {
             pal.accent2
         } else {
             pal.accent
         };
-        frame.render_widget(
-            BrailleBar::new(daylight_ratio, 1.0).fill_color(bar_colour),
-            Rect {
-                width: bar_row.width.saturating_sub(2),
-                ..bar_row
-            },
-        );
+        if let Some((starts, ends)) = endpoints {
+            let [start_col, bar_col, end_col] = Layout::horizontal([
+                Constraint::Length(6),
+                Constraint::Min(4),
+                Constraint::Length(6),
+            ])
+            .areas(bar_row);
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    starts,
+                    Style::default().fg(pal.muted),
+                ))),
+                start_col,
+            );
+            frame.render_widget(
+                BrailleBar::new(daylight_ratio, 1.0).fill_color(bar_colour),
+                Rect {
+                    x: bar_col.x,
+                    y: bar_col.y,
+                    width: bar_col.width.saturating_sub(1),
+                    height: bar_col.height,
+                },
+            );
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    ends,
+                    Style::default().fg(pal.muted),
+                )))
+                .alignment(Alignment::Right),
+                end_col,
+            );
+        } else {
+            // Polar day or night: no endpoints to bracket the bar with.
+            frame.render_widget(
+                BrailleBar::new(daylight_ratio, 1.0).fill_color(bar_colour),
+                Rect {
+                    width: bar_row.width.saturating_sub(2),
+                    ..bar_row
+                },
+            );
+        }
         frame.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::styled("day ", Style::default().fg(pal.muted)),
@@ -1406,12 +1800,13 @@ impl App {
         frame.render_widget(sky_art(phase, pal), art);
     }
 
-    /// The daylight bar's fill (0..1) plus a short label and a long one (for
-    /// the sun card). Reads today's real sunrise/sunset crossings. By day the
-    /// fill is the daylight remaining; at night it is how far the night has
-    /// come toward sunrise, so the bar is alive around the clock instead of
-    /// lying dead at zero all evening. Honest polar cases included.
-    fn daylight(&self, status: &Status) -> (f64, String, String) {
+    /// The sun-card bar data: how far the current period has run (0..1), a
+    /// short label, a long label, and the period's endpoints as clock times.
+    /// The bar is a timeline — by day it runs sunrise → sunset, by night
+    /// sunset → sunrise, the fill marking where "now" sits between the two.
+    /// The honest polar cases carry no endpoints.
+    #[allow(clippy::type_complexity)]
+    fn daylight(&self, status: &Status) -> (f64, String, String, Option<(String, String)>) {
         let (midnight, now) = self.day_context();
         let events = today::milestones(
             status.latitude,
@@ -1420,35 +1815,42 @@ impl App {
             status.day_temp,
             status.night_temp,
         );
-        let hour = |name: &str| events.iter().find(|e| e.name == name).map(|e| e.hour);
-        match (hour("sunrise"), hour("sunset")) {
-            (Some(sunrise), Some(sunset)) if now >= sunrise && now < sunset => {
-                let left = sunset - now;
-                let ratio = (left / (sunset - sunrise)).clamp(0.0, 1.0);
-                (ratio, hm(left), format!("☀ {} of daylight left", hm(left)))
+        let find = |name: &str| events.iter().find(|e| e.name == name);
+        match (find("sunrise"), find("sunset")) {
+            (Some(rise), Some(set)) if now >= rise.hour && now < set.hour => {
+                let left = set.hour - now;
+                let ratio = ((now - rise.hour) / (set.hour - rise.hour)).clamp(0.0, 1.0);
+                (
+                    ratio,
+                    hm(left),
+                    format!("☀ {} of daylight left", hm(left)),
+                    Some((rise.hhmm(), set.hhmm())),
+                )
             }
-            (Some(sunrise), sunset) if now < sunrise => {
+            (Some(rise), set) if now < rise.hour => {
                 // Pre-dawn: the night began at (roughly) yesterday's sunset.
-                let until = sunrise - now;
-                let ratio = sunset.map_or(0.0, |set| {
-                    let began = set - 24.0;
-                    ((now - began) / (sunrise - began)).clamp(0.0, 1.0)
+                let until = rise.hour - now;
+                let ratio = set.map_or(0.0, |set| {
+                    let began = set.hour - 24.0;
+                    ((now - began) / (rise.hour - began)).clamp(0.0, 1.0)
                 });
                 (
                     ratio,
                     format!("in {}", hm(until)),
                     format!("☾ sunrise in {}", hm(until)),
+                    set.map(|set| (set.hhmm(), rise.hhmm())),
                 )
             }
-            (Some(sunrise), Some(sunset)) => {
+            (Some(rise), Some(set)) => {
                 // After sunset: the next sunrise is tomorrow's, ~24 h on.
-                let next = sunrise + 24.0;
+                let next = rise.hour + 24.0;
                 let until = next - now;
-                let ratio = ((now - sunset) / (next - sunset)).clamp(0.0, 1.0);
+                let ratio = ((now - set.hour) / (next - set.hour)).clamp(0.0, 1.0);
                 (
                     ratio,
                     format!("in {}", hm(until)),
                     format!("☾ sunrise in {}", hm(until)),
+                    Some((set.hhmm(), rise.hhmm())),
                 )
             }
             _ => {
@@ -1458,12 +1860,14 @@ impl App {
                         1.0,
                         "polar day".into(),
                         "☀ midnight sun · no sunset today".into(),
+                        None,
                     )
                 } else {
                     (
                         0.0,
                         "polar night".into(),
                         "☾ polar night · no sunrise today".into(),
+                        None,
                     )
                 }
             }
