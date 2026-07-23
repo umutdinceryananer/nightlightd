@@ -478,7 +478,11 @@ impl App {
             Block::default().style(Style::default().bg(pal.bg).fg(pal.text)),
             area,
         );
-        if area.width < 84 || area.height < 26 {
+        // The full frame degrades piece by piece down to 76 columns (the sky
+        // art, endpoint times and long wordings step back on the way); below
+        // that, or on very short terminals, the compact view takes over. A
+        // stock 80x24 terminal gets the full frame.
+        if area.width < 76 || area.height < 22 {
             self.draw_compact(frame, area, &pal);
             return;
         }
@@ -573,9 +577,11 @@ impl App {
         if let Some(name) = big_name {
             // The clock answers the city in the same big type: the place in
             // the accent on the left, its local time in the data hue on the
-            // right.
+            // right. On a narrow card the city keeps the room to itself.
+            let clock_width = if name_area.width >= 46 { 22 } else { 0 };
             let [name_col, clock_col] =
-                Layout::horizontal([Constraint::Min(20), Constraint::Length(22)]).areas(name_area);
+                Layout::horizontal([Constraint::Min(20), Constraint::Length(clock_width)])
+                    .areas(name_area);
             frame.render_widget(
                 BigText::builder()
                     .pixel_size(PixelSize::Quadrant)
@@ -585,15 +591,17 @@ impl App {
                     .build(),
                 name_col,
             );
-            frame.render_widget(
-                BigText::builder()
-                    .pixel_size(PixelSize::Quadrant)
-                    .style(Style::default().fg(pal.accent2))
-                    .right_aligned()
-                    .lines(vec![Line::from(self.local_hhmm())])
-                    .build(),
-                clock_col,
-            );
+            if clock_width > 0 {
+                frame.render_widget(
+                    BigText::builder()
+                        .pixel_size(PixelSize::Quadrant)
+                        .style(Style::default().fg(pal.accent2))
+                        .right_aligned()
+                        .lines(vec![Line::from(self.local_hhmm())])
+                        .build(),
+                    clock_col,
+                );
+            }
         }
         let info = text_area;
 
@@ -1373,8 +1381,10 @@ impl App {
         frame.render_widget(Paragraph::new(items), nav);
 
         // The live summary, kept to three plain lines with air between them:
-        // the phase, the next sun event, the place and clock. The bar lives
-        // on the now tab; here it was one element too many.
+        // the phase, the next sun event, the place and clock. Every line is
+        // written to fit the panel's fixed 18 usable columns — "transition"
+        // is the yardstick — so nothing ever clips; the elevation itself
+        // lives on the now tab and in the `s` overlay.
         let width = usize::from(area.width).saturating_sub(4);
         let mut lines: Vec<Line<'_>> = Vec::new();
         if let Some(status) = self.status.as_ref().filter(|s| s.has_location) {
@@ -1387,16 +1397,11 @@ impl App {
             lines.push(Line::from(vec![
                 Span::styled(format!("  {icon} "), Style::default().fg(pal.accent)),
                 Span::styled(phase, Style::default().fg(pal.text)),
-                Span::styled(" · ", Style::default().fg(pal.faint)),
-                Span::styled(
-                    format!("{:+.1}°", status.elevation),
-                    Style::default().fg(pal.accent2),
-                ),
             ]));
             lines.push(Line::default());
             let (_, short, _, _) = self.daylight(status);
-            let label = if short.starts_with("in ") {
-                format!("sunrise {short}")
+            let label = if let Some(rest) = short.strip_prefix("in ") {
+                format!("sunrise {rest}")
             } else if short.starts_with("polar") {
                 short
             } else {
@@ -1454,7 +1459,7 @@ impl App {
         ])
         .areas(area);
         let [now_card, _, sun_card] = Layout::horizontal([
-            Constraint::Length(32),
+            Constraint::Length(28),
             Constraint::Length(2),
             Constraint::Min(30),
         ])
@@ -1707,9 +1712,11 @@ impl App {
         // One story: the headline says what is coming ("sunrise in 5h 05m"),
         // the timeline bar under it shows the period's endpoints and where
         // "now" sits between them, and the temperature band closes the card.
-        // Sky scene on the right.
+        // Each piece steps back gracefully as the card narrows: first the sky
+        // scene goes, then the endpoint times, then the long wordings.
+        let art_width = if inner.width >= 40 { 16 } else { 0 };
         let [left, art] =
-            Layout::horizontal([Constraint::Min(22), Constraint::Length(16)]).areas(inner);
+            Layout::horizontal([Constraint::Min(22), Constraint::Length(art_width)]).areas(inner);
         let [headline_row, _, bar_row, _, band_row] = Layout::vertical([
             Constraint::Length(1),
             Constraint::Length(1),
@@ -1722,10 +1729,14 @@ impl App {
         let phase = sun_phase(status.elevation);
         let (daylight_ratio, daylight_short, daylight_label, endpoints) = self.daylight(status);
         // The long label leads with its own icon; give the icon the accent
-        // and the words the text tone.
+        // and the words the text tone. Narrow cards get the short wording.
         let mut label_chars = daylight_label.chars();
         let label_icon: String = label_chars.by_ref().take(1).collect();
-        let label_rest: String = label_chars.collect();
+        let label_rest: String = if usize::from(left.width) >= daylight_label.chars().count() {
+            label_chars.collect()
+        } else {
+            format!(" {daylight_short}")
+        };
         frame.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::styled(label_icon, Style::default().fg(pal.accent)),
@@ -1741,49 +1752,55 @@ impl App {
         } else {
             pal.accent
         };
-        if let Some((starts, ends)) = endpoints {
-            let [start_col, bar_col, end_col] = Layout::horizontal([
-                Constraint::Length(6),
-                Constraint::Min(4),
-                Constraint::Length(6),
-            ])
-            .areas(bar_row);
-            frame.render_widget(
-                Paragraph::new(Line::from(Span::styled(
-                    starts,
-                    Style::default().fg(pal.muted),
-                ))),
-                start_col,
-            );
-            frame.render_widget(
-                BrailleBar::new(daylight_ratio, 1.0).fill_color(bar_colour),
-                Rect {
-                    x: bar_col.x,
-                    y: bar_col.y,
-                    width: bar_col.width.saturating_sub(1),
-                    height: bar_col.height,
-                },
-            );
-            frame.render_widget(
-                Paragraph::new(Line::from(Span::styled(
-                    ends,
-                    Style::default().fg(pal.muted),
-                )))
-                .alignment(Alignment::Right),
-                end_col,
-            );
-        } else {
-            // Polar day or night: no endpoints to bracket the bar with.
-            frame.render_widget(
-                BrailleBar::new(daylight_ratio, 1.0).fill_color(bar_colour),
-                Rect {
-                    width: bar_row.width.saturating_sub(2),
-                    ..bar_row
-                },
-            );
+        match endpoints {
+            Some((starts, ends)) if bar_row.width >= 20 => {
+                let [start_col, bar_col, end_col] = Layout::horizontal([
+                    Constraint::Length(6),
+                    Constraint::Min(4),
+                    Constraint::Length(6),
+                ])
+                .areas(bar_row);
+                frame.render_widget(
+                    Paragraph::new(Line::from(Span::styled(
+                        starts,
+                        Style::default().fg(pal.muted),
+                    ))),
+                    start_col,
+                );
+                frame.render_widget(
+                    BrailleBar::new(daylight_ratio, 1.0).fill_color(bar_colour),
+                    Rect {
+                        x: bar_col.x,
+                        y: bar_col.y,
+                        width: bar_col.width.saturating_sub(1),
+                        height: bar_col.height,
+                    },
+                );
+                frame.render_widget(
+                    Paragraph::new(Line::from(Span::styled(
+                        ends,
+                        Style::default().fg(pal.muted),
+                    )))
+                    .alignment(Alignment::Right),
+                    end_col,
+                );
+            }
+            // Polar day or night (no endpoints), or a card too narrow to
+            // bracket the bar with times: the bar runs the full width.
+            _ => {
+                frame.render_widget(
+                    BrailleBar::new(daylight_ratio, 1.0).fill_color(bar_colour),
+                    Rect {
+                        width: bar_row.width.saturating_sub(2),
+                        ..bar_row
+                    },
+                );
+            }
         }
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
+        // The temperature band, folding to "6500 → 3400 K" when the long
+        // wording would clip.
+        let band = if band_row.width >= 26 {
+            Line::from(vec![
                 Span::styled("day ", Style::default().fg(pal.muted)),
                 Span::styled(
                     format!("{} K", status.day_temp),
@@ -1794,10 +1811,24 @@ impl App {
                     format!("{} K", status.night_temp),
                     Style::default().fg(pal.accent2),
                 ),
-            ])),
-            band_row,
-        );
-        frame.render_widget(sky_art(phase, pal), art);
+            ])
+        } else {
+            Line::from(vec![
+                Span::styled(
+                    format!("{}", status.day_temp),
+                    Style::default().fg(pal.accent2),
+                ),
+                Span::styled(" → ", Style::default().fg(pal.muted)),
+                Span::styled(
+                    format!("{} K", status.night_temp),
+                    Style::default().fg(pal.accent2),
+                ),
+            ])
+        };
+        frame.render_widget(Paragraph::new(band), band_row);
+        if art_width > 0 {
+            frame.render_widget(sky_art(phase, pal), art);
+        }
     }
 
     /// The sun-card bar data: how far the current period has run (0..1), a
