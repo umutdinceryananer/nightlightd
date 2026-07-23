@@ -17,7 +17,7 @@
 > **Status: v0.1.0.** The daemon works — timezone-based location, a single-instance D-Bus lock, gamma ramps over XRandR, re-apply on resume from suspend, a `--status` readout — and so do the interfaces: a tray icon, an f.lux-style settings panel, and a full-screen terminal dashboard. A [release with a `.deb`](https://github.com/umutdinceryananer/nightlightd/releases/latest) is out and it is [on the AUR](https://aur.archlinux.org/packages/nightlightd); Flatpak is next. Young software, one machine's worth of dogfooding — expect rough edges, and please report them.
 
 <p align="center">
-  <img src="docs/screenshots/01-now.png" alt="nightlightd terminal dashboard: state cards, a live temperature readout, and the day's colour-temperature curve" width="820">
+  <img src="docs/screenshots/nightlight-tui.gif" alt="the nightlightd terminal dashboard cycling through its five tabs: the live readout and curve, the day's schedule, the world map, outputs and settings" width="820">
 </p>
 
 The interface warms with the screen. In the default `live` theme the accent colour *is* the tint the daemon is filtering to right now — soft gold by day, deep candle-orange at night — so the dashboard reads warmer as the evening comes on. Everything on screen is derived from that one colour.
