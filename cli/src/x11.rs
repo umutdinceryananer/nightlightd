@@ -31,6 +31,16 @@ use crate::waker::Waker;
 /// the config lands (#17) this stays a minute; for now it is fixed.
 const TICK_INTERVAL: Duration = Duration::from_secs(60);
 
+/// After a screen change or a resume, the layout is "settling": another actor
+/// (a display/colour helper) may re-assert its own gamma ramp a beat later,
+/// with no RandR event to wake us. For a short window we poll every
+/// [`SETTLE_INTERVAL`] instead of waiting out the full tick, so such a silent
+/// reset is overwritten within about a second rather than up to a minute (#13).
+/// Steady state is untouched: once the window passes, the loop is back to the
+/// 60 s tick and idle CPU stays ~0%.
+const SETTLE_WINDOW: Duration = Duration::from_secs(15);
+const SETTLE_INTERVAL: Duration = Duration::from_secs(1);
+
 /// The neutral temperature whose ramp is the identity — a normal screen.
 pub const NEUTRAL_KELVIN: u32 = 6500;
 
@@ -74,6 +84,7 @@ pub fn apply_temperature(kelvin: u32) -> Result<usize, Box<dyn Error>> {
 pub fn daemon_loop(
     state: &Shared,
     waker: &Waker,
+    resumed: &AtomicBool,
     terminate: &AtomicBool,
 ) -> Result<(), Box<dyn Error>> {
     let (conn, screen_num) = x11rb::connect(None)?;
@@ -85,10 +96,15 @@ pub fn daemon_loop(
     try_apply(&conn, root, state)?;
 
     let mut last_tick = Instant::now();
+    // While `Some(deadline)` and not yet past it, poll fast to overwrite a
+    // silent gamma reset that emits no event (see [`SETTLE_WINDOW`]).
+    let mut settle_until: Option<Instant> = None;
     while !terminate.load(Ordering::Relaxed) {
+        let tick_remaining = TICK_INTERVAL.saturating_sub(last_tick.elapsed());
+        let settling = settle_until.is_some_and(|deadline| Instant::now() < deadline);
         if !wait_for_change(
             &[conn.stream().as_fd(), waker.as_fd()],
-            TICK_INTERVAL.saturating_sub(last_tick.elapsed()),
+            poll_timeout(tick_remaining, settling),
         )? {
             continue;
         }
@@ -96,19 +112,39 @@ pub fn daemon_loop(
         // A D-Bus request, a screen change, or the tick all mean the same
         // thing: drain both wake sources and re-apply what the state now wants.
         waker.drain();
-        drain_screen_changes(&conn)?;
+        // A resume emits no RandR event (the waker fires instead), so record it
+        // before it is lost; it arms settling just like a screen change does.
+        let woke_on_resume = resumed.swap(false, Ordering::Relaxed);
+        let mut layout_changed = drain_screen_changes(&conn)?;
         try_apply(&conn, root, state)?;
         // Events that raced in during our own round trips would otherwise wake
         // the loop again at once for a full extra pass; absorb them with one
         // bounded re-apply instead (never a loop — a storm settles on the tick).
         if drain_screen_changes(&conn)? {
+            layout_changed = true;
             try_apply(&conn, root, state)?;
+        }
+        // Arm (or re-arm) the settling window on any layout change or resume, so
+        // a gamma reset landing seconds later is healed within ~1 s, not ~60 s.
+        if layout_changed || woke_on_resume {
+            settle_until = Some(Instant::now() + SETTLE_WINDOW);
         }
         if last_tick.elapsed() >= TICK_INTERVAL {
             last_tick = Instant::now();
         }
     }
     Ok(())
+}
+
+/// The poll timeout: the time left until the next tick, but capped at
+/// [`SETTLE_INTERVAL`] while the layout is settling so a silent, eventless
+/// gamma reset is overwritten within a second.
+fn poll_timeout(tick_remaining: Duration, settling: bool) -> Duration {
+    if settling {
+        tick_remaining.min(SETTLE_INTERVAL)
+    } else {
+        tick_remaining
+    }
 }
 
 /// Applies, degrading quietly on per-request X errors: a CRTC can vanish
@@ -314,6 +350,19 @@ mod tests {
         assert!(is_connection_error(&ReplyError::ConnectionError(
             ConnectionError::UnknownError
         )));
+    }
+
+    #[test]
+    fn settling_caps_the_poll_timeout_but_never_extends_it() {
+        let tick_remaining = Duration::from_secs(42);
+        // Not settling: wait the full time left until the tick.
+        assert_eq!(poll_timeout(tick_remaining, false), tick_remaining);
+        // Settling: poll fast, capped at the settle interval.
+        assert_eq!(poll_timeout(tick_remaining, true), SETTLE_INTERVAL);
+        // Settling never lengthens a wait already shorter than the interval
+        // (e.g. the tick is about to fire).
+        let almost_due = Duration::from_millis(200);
+        assert_eq!(poll_timeout(almost_due, true), almost_due);
     }
 
     #[test]

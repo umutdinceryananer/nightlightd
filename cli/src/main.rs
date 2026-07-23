@@ -130,11 +130,16 @@ fn run_daemon(no_reset: bool) {
 
     let terminate = install_termination();
 
+    // Shared with the suspend watcher: set on resume so the loop can tell a
+    // resume (no RandR event) from an ordinary D-Bus wake and heal fast (#13).
+    let resumed = Arc::new(AtomicBool::new(false));
+
     // Watch for resume from suspend on the system bus; wake the loop so the ramp
     // is re-applied at once instead of on the next tick (#16).
     let sleep_waker = waker.clone();
+    let sleep_resumed = Arc::clone(&resumed);
     std::thread::spawn(move || {
-        if let Err(error) = suspend::watch(sleep_waker) {
+        if let Err(error) = suspend::watch(sleep_waker, sleep_resumed) {
             tracing::warn!("suspend watcher unavailable: {error}");
         }
     });
@@ -144,7 +149,7 @@ fn run_daemon(no_reset: bool) {
         config.day_temp,
         config.night_temp
     );
-    if let Err(error) = x11::daemon_loop(&shared, &waker, &terminate) {
+    if let Err(error) = x11::daemon_loop(&shared, &waker, &resumed, &terminate) {
         fail("daemon failed", error);
     }
     if !no_reset {

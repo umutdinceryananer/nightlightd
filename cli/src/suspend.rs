@@ -5,6 +5,9 @@
 //! neutral screen. This is the safety belt: logind emits `PrepareForSleep(false)`
 //! on resume, and we wake the poll loop at once. logind lives on the system bus.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use zbus::blocking::Connection;
 use zbus::proxy;
 
@@ -22,15 +25,18 @@ trait Login1Manager {
 }
 
 /// Blocks watching for resume events, waking `waker` each time the system wakes
-/// from sleep so the poll loop re-applies the ramp at once. Meant to run on its
-/// own thread; returns only if the system bus or the subscription fails.
-pub fn watch(waker: Waker) -> zbus::Result<()> {
+/// from sleep so the poll loop re-applies the ramp at once. It also sets
+/// `resumed` first, so the loop can tell a resume (which emits no RandR event)
+/// from an ordinary D-Bus wake and arm its settling window (#13). Meant to run
+/// on its own thread; returns only if the system bus or the subscription fails.
+pub fn watch(waker: Waker, resumed: Arc<AtomicBool>) -> zbus::Result<()> {
     let connection = Connection::system()?;
     let proxy = Login1ManagerProxyBlocking::new(&connection)?;
     for signal in proxy.receive_prepare_for_sleep()? {
         // `start == true` means going to sleep; `false` means resuming.
         let going_to_sleep = *signal.args()?.start();
         if !going_to_sleep {
+            resumed.store(true, Ordering::Relaxed);
             waker.wake();
         }
     }
