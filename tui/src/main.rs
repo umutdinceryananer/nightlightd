@@ -59,12 +59,12 @@ const DEMO_SCRIPT: &[(f64, KeyCode, &str)] = &[
     (19.0, KeyCode::Char('T'), "T"),
     (19.8, KeyCode::Char('T'), "T"),
     (20.6, KeyCode::Char('T'), "T"),
-    (22.6, KeyCode::Char('T'), "T"),
-    (23.0, KeyCode::Char('T'), "T"),
+    (22.2, KeyCode::Char('T'), "T"),
+    (22.8, KeyCode::Char('T'), "T"),
     (23.4, KeyCode::Char('T'), "T"),
-    (23.8, KeyCode::Char('T'), "T"),
-    (24.2, KeyCode::Char('T'), "T"),
-    (25.5, KeyCode::Char('1'), "1"),
+    (24.0, KeyCode::Char('T'), "T"),
+    (24.6, KeyCode::Char('T'), "T"),
+    (25.6, KeyCode::Char('1'), "1"),
 ];
 
 /// The tab bar, in order. Each holds real content or it does not exist.
