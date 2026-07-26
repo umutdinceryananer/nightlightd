@@ -43,6 +43,30 @@ use crate::theme::{Palette, THEMES};
 const NIGHT_MIN: u32 = 1500;
 const NIGHT_STEP: u32 = 100;
 
+/// One full day in the `--demo` compressed clock, in real seconds (#30).
+const DEMO_DAY_SECONDS: f64 = 28.0;
+
+/// The demo's scripted tour (#30): (second, key, chip label). Starts at noon
+/// on the now tab; dwells through sunset while the interface warms, walks the
+/// tabs, rolls `T` through every theme back to `live` (sunrise lands during
+/// the roll, so the return to `live` opens on morning gold), then jumps home.
+/// One pass is exactly one compressed day, so a recording loops seamlessly.
+const DEMO_SCRIPT: &[(f64, KeyCode, &str)] = &[
+    (11.0, KeyCode::Tab, "⇥"),
+    (14.0, KeyCode::Tab, "⇥"),
+    (16.5, KeyCode::Tab, "⇥"),
+    (18.0, KeyCode::Tab, "⇥"),
+    (19.0, KeyCode::Char('T'), "T"),
+    (19.8, KeyCode::Char('T'), "T"),
+    (20.6, KeyCode::Char('T'), "T"),
+    (22.6, KeyCode::Char('T'), "T"),
+    (23.0, KeyCode::Char('T'), "T"),
+    (23.4, KeyCode::Char('T'), "T"),
+    (23.8, KeyCode::Char('T'), "T"),
+    (24.2, KeyCode::Char('T'), "T"),
+    (25.5, KeyCode::Char('1'), "1"),
+];
+
 /// The tab bar, in order. Each holds real content or it does not exist.
 const TABS: &[&str] = &["now", "today", "location", "outputs", "settings"];
 const LOCATION_TAB: usize = 2;
@@ -89,6 +113,29 @@ struct App {
     place: Option<(f64, f64, String)>,
     /// The active outputs, polled together with the status.
     outputs: Option<Vec<(u32, u16)>>,
+    /// `--demo`: when the compressed day started; `None` in normal use.
+    demo: Option<Instant>,
+    /// How many scripted demo keys have fired, across loops.
+    demo_cursor: usize,
+    /// The last scripted key and when it fired, for the on-screen chip.
+    demo_key: Option<(&'static str, Instant)>,
+}
+
+/// The stand-in snapshot for `--demo` without a daemon: Istanbul, the
+/// defaults, following the sun. Honest about itself in the source field.
+fn demo_status() -> Status {
+    Status {
+        enabled: true,
+        temperature: 6500,
+        source: "demo".into(),
+        elevation: 0.0,
+        has_location: true,
+        latitude: 41.01,
+        longitude: 28.98,
+        following: true,
+        day_temp: 6500,
+        night_temp: 2600,
+    }
 }
 
 /// A human label from a zone name and how close it sits: `Europe/Istanbul`
@@ -106,7 +153,7 @@ fn place_for(lat: f64, lon: f64) -> Option<String> {
 }
 
 fn main() -> io::Result<()> {
-    let (theme_index, tab) = match parse_args() {
+    let (theme_index, tab, demo) = match parse_args() {
         Ok(parsed) => parsed,
         Err(message) => {
             eprintln!("{message}");
@@ -138,6 +185,9 @@ fn main() -> io::Result<()> {
         picker_place: None,
         place: None,
         outputs: None,
+        demo: demo.then(Instant::now),
+        demo_cursor: 0,
+        demo_key: None,
     };
 
     let mut terminal = ratatui::init();
@@ -146,9 +196,9 @@ fn main() -> io::Result<()> {
     result
 }
 
-/// Minimal argument parsing: `--theme <name>` and `--tab <name|number>`.
-/// No clap — two flags do not justify a dependency.
-fn parse_args() -> Result<(usize, usize), String> {
+/// Minimal argument parsing: `--theme <name>`, `--tab <name|number>` and
+/// `--demo`. No clap — three flags do not justify a dependency.
+fn parse_args() -> Result<(usize, usize, bool), String> {
     let theme_names = || {
         THEMES
             .iter()
@@ -158,12 +208,12 @@ fn parse_args() -> Result<(usize, usize), String> {
     };
     let usage = || {
         format!(
-            "usage: nightlight-tui [--theme <{}>] [--tab <{}>]",
+            "usage: nightlight-tui [--theme <{}>] [--tab <{}>] [--demo]",
             theme_names(),
             TABS.join(", ")
         )
     };
-    let (mut theme_index, mut tab) = (0, 0);
+    let (mut theme_index, mut tab, mut demo) = (0, 0, false);
     let mut args = std::env::args().skip(1);
     while let Some(argument) = args.next() {
         match argument.as_str() {
@@ -188,10 +238,11 @@ fn parse_args() -> Result<(usize, usize), String> {
                         format!("unknown tab {name:?} — available: {}", TABS.join(", "))
                     })?;
             }
+            "--demo" => demo = true,
             _ => return Err(usage()),
         }
     }
-    Ok((theme_index, tab))
+    Ok((theme_index, tab, demo))
 }
 
 impl App {
@@ -199,13 +250,20 @@ impl App {
     /// pace; the status itself is re-read at most once a second.
     fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
         loop {
-            if self
+            let poll_due = self
                 .last_poll
-                .is_none_or(|t| t.elapsed() >= Duration::from_secs(1))
-            {
+                .is_none_or(|t| t.elapsed() >= Duration::from_secs(1));
+            if poll_due {
                 self.status = self.client.status();
                 self.outputs = self.client.outputs();
                 self.last_poll = Some(Instant::now());
+            }
+            // The demo clock rewrites the snapshot every frame, so it runs
+            // after the poll (which would overwrite it) and before the place
+            // lookup (which should see the demo's synthesised location).
+            self.apply_demo();
+            self.run_demo_script();
+            if poll_due {
                 // Refresh the place name only when the location itself moved.
                 if let Some(status) = self.status.as_ref().filter(|s| s.has_location) {
                     let moved = self.place.as_ref().is_none_or(|(lat, lon, _)| {
@@ -221,7 +279,10 @@ impl App {
                 }
             }
             terminal.draw(|frame| self.draw(frame))?;
-            if event::poll(Duration::from_millis(250))?
+            // The demo redraws briskly so the sweep reads as motion; normal
+            // use keeps the relaxed pace.
+            let frame_wait = if self.demo.is_some() { 100 } else { 250 };
+            if event::poll(Duration::from_millis(frame_wait))?
                 && let Event::Key(key) = event::read()?
                 && key.kind == KeyEventKind::Press
                 && self.handle_key(key.code, key.modifiers)
@@ -542,6 +603,29 @@ impl App {
         }
         if self.map_popup {
             self.draw_map_popup(frame, area, &pal);
+        }
+
+        // The demo's key chip: the scripted keypress, bottom-right for a
+        // beat — a viewer must see the cause of every change on screen.
+        if self.demo.is_some()
+            && let Some((label, at)) = self.demo_key
+            && at.elapsed() < Duration::from_millis(1100)
+        {
+            let text = format!(" {label} ");
+            let width = text.chars().count() as u16;
+            let chip = Rect {
+                x: area.right().saturating_sub(width + 2),
+                y: area.bottom().saturating_sub(2),
+                width,
+                height: 1,
+            };
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    text,
+                    Style::default().fg(pal.bg).bg(pal.accent).bold(),
+                ))),
+                chip,
+            );
         }
     }
 
@@ -1606,22 +1690,76 @@ impl App {
     }
 
     /// Local midnight (unix) and the fractional local hour of "now".
+    /// Under `--demo` the hour comes from the compressed clock instead.
     fn day_context(&self) -> (f64, f64) {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs_f64())
             .unwrap_or(0.0);
         let secs_into_day = (now as i64 + i64::from(self.offset_secs)).rem_euclid(86_400) as f64;
-        (now - secs_into_day, secs_into_day / 3600.0)
+        let hour = self.demo_hour().unwrap_or(secs_into_day / 3600.0);
+        (now - secs_into_day, hour)
     }
 
     fn local_hhmm(&self) -> String {
+        if let Some(hour) = self.demo_hour() {
+            let minutes = (hour * 60.0) as u32;
+            return format!("{:02}:{:02}", minutes / 60, minutes % 60);
+        }
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
         let day_secs = (now + i64::from(self.offset_secs)).rem_euclid(86_400);
         format!("{:02}:{:02}", day_secs / 3600, (day_secs % 3600) / 60)
+    }
+
+    /// The compressed clock: noon at launch, a whole day every
+    /// [`DEMO_DAY_SECONDS`], so a recording is the same run every time.
+    fn demo_hour(&self) -> Option<f64> {
+        self.demo
+            .map(|start| (12.0 + start.elapsed().as_secs_f64() / DEMO_DAY_SECONDS * 24.0) % 24.0)
+    }
+
+    /// Rewrites the polled snapshot with the demo clock's sun (#30): the
+    /// temperature and elevation the daemon would report at the demo hour.
+    /// Without a daemon (or a location) a stand-in snapshot is synthesised,
+    /// so the demo runs on a machine that has never seen the daemon.
+    fn apply_demo(&mut self) {
+        let Some(hour) = self.demo_hour() else {
+            return;
+        };
+        let mut status = self
+            .status
+            .take()
+            .filter(|s| s.has_location)
+            .unwrap_or_else(demo_status);
+        let (midnight, _) = self.day_context();
+        let elevation =
+            solar_elevation(status.latitude, status.longitude, midnight + hour * 3600.0);
+        status.elevation = elevation;
+        status.temperature = target_temperature(elevation, status.day_temp, status.night_temp);
+        self.status = Some(status);
+    }
+
+    /// Feeds the scripted tour (#30): each due keypress goes through the real
+    /// key handler, so the demo can only do what a hand on the keyboard could
+    /// — and the chip shows the viewer the cause of every change.
+    fn run_demo_script(&mut self) {
+        let Some(start) = self.demo else {
+            return;
+        };
+        let elapsed = start.elapsed().as_secs_f64();
+        loop {
+            let lap = (self.demo_cursor / DEMO_SCRIPT.len()) as f64;
+            let (at, code, label) = DEMO_SCRIPT[self.demo_cursor % DEMO_SCRIPT.len()];
+            if elapsed < lap * DEMO_DAY_SECONDS + at {
+                break;
+            }
+            let _ = self.handle_key(code, KeyModifiers::NONE);
+            self.demo_key = Some((label, Instant::now()));
+            self.demo_cursor += 1;
+        }
     }
 
     /// The fallback for small terminals: no wordmark, no cards — just the

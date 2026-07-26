@@ -17,10 +17,12 @@
 > **Status: v0.1.0.** The daemon works — timezone-based location, a single-instance D-Bus lock, gamma ramps over XRandR, re-apply on resume from suspend, a `--status` readout — and so do the interfaces: a tray icon, an f.lux-style settings panel, and a full-screen terminal dashboard. A [release with a `.deb`](https://github.com/umutdinceryananer/nightlightd/releases/latest) is out and it is [on the AUR](https://aur.archlinux.org/packages/nightlightd); Flatpak is next. Young software, one machine's worth of dogfooding — expect rough edges, and please report them.
 
 <p align="center">
-  <img src="docs/screenshots/nightlight-tui.gif" alt="the nightlightd terminal dashboard cycling through its five tabs: the live readout and curve, the day's schedule, the world map, outputs and settings" width="820">
+  <img src="docs/screenshots/nightlight-tui.gif" alt="the terminal dashboard's demo reel: a compressed day warms the interface through sunset into night, walks the five tabs, rolls through the themes and loops at dawn" width="820">
 </p>
 
 The interface warms with the screen. In the default `live` theme the accent colour *is* the tint the daemon is filtering to right now — soft gold by day, deep candle-orange at night — so the dashboard reads warmer as the evening comes on. Everything on screen is derived from that one colour.
+
+The reel above is `nightlight-tui --demo`: a whole day compressed into twenty-eight seconds, no daemon required. Every keypress the tour makes is shown in the corner as it happens — nothing on screen changes without a visible cause.
 
 ---
 
@@ -68,12 +70,12 @@ The daemon needs none — it runs headless. But three thin clients ship with it,
 The dashboard is five tabs, each with something real to show — no filler:
 
 <p align="center">
-  <img src="docs/screenshots/02-today.png" alt="today tab: the day's solar milestones as a schedule, with the next event highlighted" width="270">
+  <img src="docs/screenshots/02-today.png" alt="today tab: the day's solar milestones as a schedule over the sun's phase-tinted arc" width="270">
   <img src="docs/screenshots/03-location.png" alt="location tab: the resolved city in big text over a braille world map" width="270">
   <img src="docs/screenshots/05-now-synthwave.png" alt="the now tab in the synthwave theme, pink and cyan" width="270">
 </p>
 
-**today** derives the day's milestones — night's end, sunrise, full day, solar noon, sunset — from the same solar maths the daemon schedules on, not from hand-set times. **location** shows the city the timezone resolved to and lets you pin a manual spot on the map. And the theme is yours: `live` follows the screen, or pick from a set of editor palettes (`tokyo`, `mocha`, `nord`, `gruvbox`, `synth`, `ember`, `phosphor`) with `T`.
+**now** draws the schedule the way f.lux draws it — the day as a square wave over faint crossing sun-arcs, with a strip along the floor wearing the screen's colour at every hour. **today** derives the day's milestones — night's end, sunrise, full day, solar noon, sunset — from the same solar maths the daemon schedules on, and plots the sun's arc they fall on. **location** shows the city the timezone resolved to and lets you pin a manual spot on the map. **settings** nudges the day and night bounds on sliders. And the theme is yours: `live` follows the screen, or pick from a set of editor palettes (`tokyo`, `mocha`, `nord`, `gruvbox`, `synth`, `ember`, `phosphor`) with `T`.
 
 ---
 

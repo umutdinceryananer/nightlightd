@@ -64,13 +64,13 @@ case "${1:-all}" in
         shot live      today    02-today.png
         shot live      location 03-location.png
         shot live      settings 04-settings.png
-        shot synthwave now      05-now-synthwave.png
+        shot synth     now      05-now-synthwave.png
         ;;
     now)      shot live      now      01-now.png ;;
     today)    shot live      today    02-today.png ;;
     location) shot live      location 03-location.png ;;
     settings) shot live      settings 04-settings.png ;;
-    synthwave) shot synthwave now     05-now-synthwave.png ;;
+    synthwave) shot synth     now     05-now-synthwave.png ;;
     *) echo "usage: $0 [all|now|today|location|settings|synthwave]" >&2; exit 2 ;;
 esac
 
