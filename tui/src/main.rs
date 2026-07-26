@@ -22,7 +22,7 @@ use nightlightd_core::location::nearest_zone;
 use nightlightd_core::solar::solar_elevation;
 use nightlightd_core::transition::target_temperature;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
-use ratatui::layout::{Alignment, Constraint, Layout, Rect};
+use ratatui::layout::{Alignment, Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::symbols::Marker;
 use ratatui::text::{Line, Span};
@@ -34,6 +34,7 @@ use ratatui::widgets::{
 use ratatui::{DefaultTerminal, Frame};
 use ratatui_braille_bar::BrailleBar;
 use tui_big_text::{BigText, PixelSize};
+use tui_slider::Slider;
 
 use crate::daemon::{Client, Status};
 use crate::theme::{Palette, THEMES};
@@ -836,13 +837,16 @@ impl App {
         let value = |v: Option<String>| v.unwrap_or_else(|| "—".into());
         let day = value(self.status.as_ref().map(|s| format!("{} K", s.day_temp)));
         let night = value(self.status.as_ref().map(|s| format!("{} K", s.night_temp)));
-        let rows: [(&str, String, &str); SETTINGS_ITEMS] = [
-            ("daytime", day, "‹ › adjust"),
-            ("nighttime", night, "‹ › adjust"),
+        let day_k = self.status.as_ref().map(|s| s.day_temp);
+        let night_k = self.status.as_ref().map(|s| s.night_temp);
+        let rows: [(&str, String, &str, Option<u32>); SETTINGS_ITEMS] = [
+            ("daytime", day, "‹ › adjust", day_k),
+            ("nighttime", night, "‹ › adjust", night_k),
             (
                 "theme",
                 THEMES[self.theme_index].name.to_string(),
                 "⏎ choose · ‹ › cycle",
+                None,
             ),
             (
                 "start at login",
@@ -852,13 +856,16 @@ impl App {
                     "[ ] disabled".to_string()
                 },
                 "⏎ toggle",
+                None,
             ),
         ];
 
         let mut lines: Vec<Line<'_>> = Vec::new();
-        for (index, (label, val, hint)) in rows.into_iter().enumerate() {
+        let mut sliders: Vec<(u16, u32, bool)> = Vec::new();
+        for (index, (label, val, hint, slider)) in rows.into_iter().enumerate() {
+            let selected = index == self.settings_selected;
             let body = format!(" {label:<16} {val:<14}");
-            if index == self.settings_selected {
+            if selected {
                 lines.push(Line::from(vec![
                     Span::styled(body, Style::default().fg(pal.bg).bg(pal.accent).bold()),
                     Span::styled(format!("  {hint}"), Style::default().fg(pal.muted)),
@@ -868,6 +875,10 @@ impl App {
                     Span::styled(format!(" {label:<16} "), Style::default().fg(pal.muted)),
                     Span::styled(format!("{val:<14}"), Style::default().fg(pal.text)),
                 ]));
+            }
+            if let Some(kelvin) = slider {
+                sliders.push((inner.y + lines.len() as u16, kelvin, selected));
+                lines.push(Line::default());
             }
             lines.push(Line::default());
         }
@@ -880,6 +891,35 @@ impl App {
             Style::default().fg(pal.faint),
         )));
         frame.render_widget(Paragraph::new(lines), inner);
+
+        // The temperature rows carry a real slider (tui-slider) on the row
+        // reserved beneath each — the segmented ▰▱ style, no thumb: filled to
+        // where the bound sits in the shared NIGHT_MIN..=6500 K range, ticks in
+        // the accent so they track the live tint; the empty ticks brighten when
+        // their row is selected.
+        for (y, kelvin, selected) in sliders {
+            let width = inner.width.saturating_sub(6).min(28);
+            if width < 2 {
+                continue;
+            }
+            let rail = if selected { pal.muted } else { pal.faint };
+            let slider = Slider::new(f64::from(kelvin), f64::from(NIGHT_MIN), 6500.0)
+                .show_value(false)
+                .show_handle(false)
+                .filled_symbol("▰")
+                .empty_symbol("▱")
+                .filled_color(pal.accent)
+                .empty_color(rail);
+            frame.render_widget(
+                slider,
+                Rect {
+                    x: inner.x + 3,
+                    y,
+                    width,
+                    height: 1,
+                },
+            );
+        }
     }
 
     /// The footer: the mode as a status lamp bottom-left, the key hints
@@ -1558,10 +1598,10 @@ impl App {
         frame.render_widget(table, table_area);
 
         if curve_area.height >= 7 {
-            let curve = card(" curve ", pal).padding(Padding::new(1, 1, 0, 0));
-            let chart_area = curve.inner(curve_area);
-            frame.render_widget(curve, curve_area);
-            self.draw_chart(frame, chart_area, pal);
+            let arc = card(" sun arc ", pal).padding(Padding::new(1, 1, 0, 0));
+            let chart_area = arc.inner(curve_area);
+            frame.render_widget(arc, curve_area);
+            self.draw_sun_arc(frame, chart_area, pal);
         }
     }
 
@@ -1912,10 +1952,12 @@ impl App {
         self.draw_chart(frame, inner, pal);
     }
 
-    /// The day/night curve: a braille line whose segments wear the sun's own
-    /// display tints — gold across the plateau, orange through dawn and dusk,
-    /// deep orange along the night floor — with a faint vertical line and a
-    /// dot marking "now". Falls back to a hint when no location is known.
+    /// The day/night curve, read the f.lux way (#35): a square-wave step in
+    /// box characters — the transition really is one or two columns wide at
+    /// this scale, so it is drawn as the square wave it is — over a pair of
+    /// faint crossing sun-arcs, a per-hour tint strip along the floor carrying
+    /// what f.lux's coloured fill carries, a sunlight-hours caption, and a dot
+    /// riding the line at "now". Falls back to a hint without a location.
     fn draw_chart(&self, frame: &mut Frame<'_>, area: Rect, pal: &Palette) {
         let Some(status) = self.status.as_ref().filter(|s| s.has_location) else {
             frame.render_widget(
@@ -1927,29 +1969,220 @@ impl App {
         };
 
         let (midnight, now_hour) = self.day_context();
+        let elev_at = |hour: f64| -> f64 {
+            solar_elevation(status.latitude, status.longitude, midnight + hour * 3600.0)
+        };
         let kelvin_at = |hour: f64| -> f64 {
-            let elevation =
-                solar_elevation(status.latitude, status.longitude, midnight + hour * 3600.0);
             f64::from(target_temperature(
-                elevation,
+                elev_at(hour),
                 status.day_temp,
                 status.night_temp,
             ))
         };
 
-        let night = f64::from(status.night_temp);
-        let day = f64::from(status.day_temp);
-        let pad = ((day - night) * 0.08).max(50.0);
+        // Hand-drawn axes as before: a left gutter for the kelvin labels, a
+        // bottom row for the hours (ratatui's built-in x labels sit off by
+        // one — they divide by the label count, not the gaps).
+        let [top, x_row] =
+            Layout::vertical([Constraint::Min(3), Constraint::Length(1)]).areas(area);
+        let [y_col, plot] =
+            Layout::horizontal([Constraint::Length(7), Constraint::Min(10)]).areas(top);
+        let w = plot.width as usize;
+        if w < 8 || plot.height < 3 {
+            return;
+        }
+        let strip_y = plot.y + plot.height - 1;
+        let night_row = strip_y - 1;
+        let day_row = plot.y;
 
-        // The polyline, cut into contiguous phase runs so each stretch wears
-        // its own tint; every run starts with the previous run's last point,
-        // so the line never gaps at a phase boundary.
-        let points: Vec<(f64, f64)> = (0..=192)
+        // Layer 1: two crossing sun-arcs behind everything, barely there —
+        // f.lux's backdrop. Skipped when the card is too short to breathe.
+        if plot.height >= 5 {
+            let wave_rect = Rect {
+                height: plot.height - 1,
+                ..plot
+            };
+            let samples = 2 * w;
+            let arc: Vec<(f64, f64)> = (0..=samples)
+                .map(|i| {
+                    let hour = i as f64 / samples as f64 * 24.0;
+                    (hour, elev_at(hour))
+                })
+                .collect();
+            let (emin, emax) = arc.iter().fold((f64::MAX, f64::MIN), |(lo, hi), &(_, e)| {
+                (lo.min(e), hi.max(e))
+            });
+            let mirror: Vec<(f64, f64)> = arc.iter().map(|&(h, e)| (h, emin + emax - e)).collect();
+            let chart = Chart::new(vec![
+                Dataset::default()
+                    .marker(Marker::Braille)
+                    .graph_type(GraphType::Line)
+                    .style(Style::default().fg(pal.faint))
+                    .data(&arc),
+                Dataset::default()
+                    .marker(Marker::Braille)
+                    .graph_type(GraphType::Line)
+                    .style(Style::default().fg(pal.faint))
+                    .data(&mirror),
+            ])
+            // Paint the plot ourselves so it doesn't fall back to the
+            // terminal's grey; the card surface is the canvas.
+            .style(Style::default().bg(pal.surface))
+            .x_axis(Axis::default().bounds([0.0, 24.0]))
+            .y_axis(Axis::default().bounds([emin - 2.0, emax + 2.0]));
+            frame.render_widget(chart, wave_rect);
+        }
+
+        // Widget passes before the buffer work: kelvin labels in the gutter,
+        // hours along the bottom.
+        let mut y_label = |kelvin: u32, y: u16| {
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    format!("{kelvin} K"),
+                    Style::default().fg(pal.muted),
+                )))
+                .alignment(Alignment::Right),
+                Rect {
+                    x: y_col.x,
+                    y,
+                    width: y_col.width.saturating_sub(1),
+                    height: 1,
+                },
+            );
+        };
+        y_label(status.day_temp, day_row);
+        y_label(status.night_temp, night_row);
+        hour_labels(frame, plot, x_row.y, pal);
+
+        // Layer 2: the step. One day-or-night level per column, then corners
+        // and a vertical run wherever the level flips.
+        let mid = f64::from(status.day_temp + status.night_temp) / 2.0;
+        let day_tint = theme::display_tint(status.day_temp);
+        let night_tint = theme::display_tint(status.night_temp);
+        let mid_tint = theme::display_tint((status.day_temp + status.night_temp) / 2);
+        let levels: Vec<bool> = (0..w)
+            .map(|x| kelvin_at((x as f64 + 0.5) / w as f64 * 24.0) >= mid)
+            .collect();
+        let buf = frame.buffer_mut();
+        for (x, &is_day) in levels.iter().enumerate() {
+            let (row, colour) = if is_day {
+                (day_row, day_tint)
+            } else {
+                (night_row, night_tint)
+            };
+            if let Some(cell) = buf.cell_mut(Position::new(plot.x + x as u16, row)) {
+                cell.set_symbol("─").set_fg(colour);
+            }
+        }
+        for x in 0..w.saturating_sub(1) {
+            if levels[x] == levels[x + 1] {
+                continue;
+            }
+            let col = plot.x + (x + 1) as u16;
+            let descending = levels[x];
+            let (top_sym, bottom_sym) = if descending {
+                ("╮", "╰")
+            } else {
+                ("╭", "╯")
+            };
+            if let Some(cell) = buf.cell_mut(Position::new(col, day_row)) {
+                cell.set_symbol(top_sym).set_fg(mid_tint);
+            }
+            if let Some(cell) = buf.cell_mut(Position::new(col, night_row)) {
+                cell.set_symbol(bottom_sym).set_fg(mid_tint);
+            }
+            for row in day_row + 1..night_row {
+                if let Some(cell) = buf.cell_mut(Position::new(col, row)) {
+                    cell.set_symbol("│").set_fg(mid_tint);
+                }
+            }
+        }
+
+        // Layer 3: the tint strip — every column wears the colour the screen
+        // will be at that hour. This is f.lux's fill, one row tall.
+        for x in 0..w {
+            let kelvin = kelvin_at((x as f64 + 0.5) / w as f64 * 24.0).round() as u32;
+            if let Some(cell) = buf.cell_mut(Position::new(plot.x + x as u16, strip_y)) {
+                cell.set_symbol("▂").set_fg(theme::display_tint(kelvin));
+            }
+        }
+
+        // Layer 4: the sunlight caption on the plateau's floor, skipped when
+        // the plateau is too narrow to hold it.
+        let daylight = (0..=960)
+            .filter(|i| elev_at(f64::from(*i) * 0.025) > 0.0)
+            .count() as f64
+            * 0.025;
+        let caption = format!("{daylight:.0}h sunlight");
+        let day_cols: Vec<usize> = (0..w).filter(|&x| levels[x]).collect();
+        if let (Some(&first), Some(&last)) = (day_cols.first(), day_cols.last()) {
+            let run = last - first + 1;
+            if run > caption.len() + 4 {
+                let start = plot.x + (first + (run - caption.len()) / 2) as u16;
+                for (offset, glyph) in caption.chars().enumerate() {
+                    if let Some(cell) =
+                        buf.cell_mut(Position::new(start + offset as u16, night_row))
+                    {
+                        cell.set_symbol(&glyph.to_string()).set_fg(pal.faint);
+                    }
+                }
+            }
+        }
+
+        // Layer 5: now — a dot riding the line, f.lux's sun bead.
+        let now_temp = kelvin_at(now_hour);
+        let now_col = plot.x + (now_hour / 24.0 * (w - 1) as f64).round() as u16;
+        let span = f64::from(status.day_temp.saturating_sub(status.night_temp)).max(1.0);
+        let frac = ((f64::from(status.day_temp) - now_temp) / span).clamp(0.0, 1.0);
+        let now_row = day_row + (frac * f64::from(night_row - day_row)).round() as u16;
+        if let Some(cell) = buf.cell_mut(Position::new(now_col, now_row)) {
+            cell.set_symbol("●").set_fg(pal.text);
+        }
+    }
+
+    /// The sun's arc for the today tab (#35): the day's elevation in braille —
+    /// the smooth thing the schedule is derived from — cut into runs tinted by
+    /// the temperature phase, over a dashed horizon rule, with the now
+    /// crosshair. The now tab's curve shows the schedule; this shows why.
+    fn draw_sun_arc(&self, frame: &mut Frame<'_>, area: Rect, pal: &Palette) {
+        let Some(status) = self.status.as_ref().filter(|s| s.has_location) else {
+            return;
+        };
+        let (midnight, now_hour) = self.day_context();
+        let elev_at = |hour: f64| -> f64 {
+            solar_elevation(status.latitude, status.longitude, midnight + hour * 3600.0)
+        };
+        let kelvin_at = |hour: f64| -> f64 {
+            f64::from(target_temperature(
+                elev_at(hour),
+                status.day_temp,
+                status.night_temp,
+            ))
+        };
+
+        let [top, x_row] =
+            Layout::vertical([Constraint::Min(3), Constraint::Length(1)]).areas(area);
+        let [y_col, plot] =
+            Layout::horizontal([Constraint::Length(7), Constraint::Min(10)]).areas(top);
+        let w = plot.width as usize;
+        if w < 8 || plot.height < 3 {
+            return;
+        }
+
+        let samples = 2 * w;
+        let arc: Vec<(f64, f64)> = (0..=samples)
             .map(|i| {
-                let hour = f64::from(i) / 8.0;
-                (hour, kelvin_at(hour))
+                let hour = i as f64 / samples as f64 * 24.0;
+                (hour, elev_at(hour))
             })
             .collect();
+        let (emin, emax) = arc.iter().fold((f64::MAX, f64::MIN), |(lo, hi), &(_, e)| {
+            (lo.min(e), hi.max(e))
+        });
+        let (lo, hi) = (emin - 3.0, emax + 3.0);
+
+        let day = f64::from(status.day_temp);
+        let night = f64::from(status.night_temp);
         let phase_of = |kelvin: f64| {
             if kelvin >= day - 0.5 {
                 0
@@ -1959,35 +2192,46 @@ impl App {
                 1
             }
         };
+        let tints = [
+            theme::display_tint(status.day_temp),
+            theme::display_tint((status.day_temp + status.night_temp) / 2),
+            theme::display_tint(status.night_temp),
+        ];
         let mut runs: Vec<(usize, Vec<(f64, f64)>)> = Vec::new();
-        for &point in &points {
-            let phase = phase_of(point.1);
+        for &(hour, elev) in &arc {
+            let phase = phase_of(kelvin_at(hour));
             match runs.last_mut() {
-                Some((previous, run)) if *previous == phase => run.push(point),
+                Some((previous, run)) if *previous == phase => run.push((hour, elev)),
                 _ => {
+                    // Bridge from the previous run so the arc never gaps.
                     let mut run = Vec::new();
                     if let Some(&bridge) = runs.last().and_then(|(_, r)| r.last()) {
                         run.push(bridge);
                     }
-                    run.push(point);
+                    run.push((hour, elev));
                     runs.push((phase, run));
                 }
             }
         }
 
-        let mid = ((day + night) / 2.0).round() as u32;
-        let tints = [
-            theme::display_tint(status.day_temp),
-            theme::display_tint(mid),
-            theme::display_tint(status.night_temp),
-        ];
+        // The dashed horizon rule and the now crosshair, as spaced scatter
+        // dots; the Chart drops any point outside its bounds, so a polar day
+        // or night simply loses the horizon instead of breaking.
+        let horizon: Vec<(f64, f64)> = (0..=60).map(|i| (f64::from(i) * 0.4, 0.0)).collect();
+        let now_line: Vec<(f64, f64)> = (0..=20)
+            .map(|i| (now_hour, lo + f64::from(i) / 20.0 * (hi - lo)))
+            .collect();
+        let now_point = [(now_hour, elev_at(now_hour))];
 
-        let now_line = [(now_hour, night - pad), (now_hour, day + pad)];
-        let now_point = [(now_hour, kelvin_at(now_hour))];
         let mut datasets = vec![
             Dataset::default()
                 .marker(Marker::Braille)
-                .graph_type(GraphType::Line)
+                .graph_type(GraphType::Scatter)
+                .style(Style::default().fg(pal.faint))
+                .data(&horizon),
+            Dataset::default()
+                .marker(Marker::Braille)
+                .graph_type(GraphType::Scatter)
                 .style(Style::default().fg(pal.faint))
                 .data(&now_line),
         ];
@@ -2006,32 +2250,18 @@ impl App {
                 .style(Style::default().fg(pal.text))
                 .data(&now_point),
         );
-
-        // ratatui's built-in x labels sit at i·(width / label_count), which is
-        // an off-by-one — it divides by the label *count*, not the gaps — so
-        // they drift off their own values and "now" appears at the wrong hour.
-        // Draw the axes by hand instead: reserve a left gutter and a bottom
-        // row, render the plot label-free, and place every hour tick at the
-        // exact fraction of the width the chart maps that hour to. Ticks and
-        // the "now" dot then share one mapping and line up.
-        let [top, x_row] =
-            Layout::vertical([Constraint::Min(3), Constraint::Length(1)]).areas(area);
-        let [y_col, plot] =
-            Layout::horizontal([Constraint::Length(7), Constraint::Min(10)]).areas(top);
-
         let chart = Chart::new(datasets)
-            // Same fix as the map: paint the plot ourselves so it doesn't fall
-            // back to the terminal's grey; the card surface is the canvas.
             .style(Style::default().bg(pal.surface))
             .x_axis(Axis::default().bounds([0.0, 24.0]))
-            .y_axis(Axis::default().bounds([night - pad, day + pad]));
+            .y_axis(Axis::default().bounds([lo, hi]));
         frame.render_widget(chart, plot);
 
-        // Y labels in the gutter: day at the plot's top, night at its floor.
-        let mut y_label = |kelvin: u32, y: u16| {
+        // Degree labels in the gutter; the horizon label only when the rule
+        // actually crosses the plot (a polar day or night has no horizon).
+        let mut y_label = |text: String, y: u16| {
             frame.render_widget(
                 Paragraph::new(Line::from(Span::styled(
-                    format!("{kelvin} K"),
+                    text,
                     Style::default().fg(pal.muted),
                 )))
                 .alignment(Alignment::Right),
@@ -2043,38 +2273,61 @@ impl App {
                 },
             );
         };
-        y_label(status.day_temp, plot.y);
-        y_label(status.night_temp, plot.y + plot.height.saturating_sub(1));
-
-        // X labels: an even hour every two hours, each centred on the column
-        // the plot maps that hour to — 00 at the left edge, 24 at the right —
-        // which is the same mapping the data uses, so they agree.
-        let width = plot.width as usize;
-        if width >= 2 {
-            let mut cells = vec![' '; width];
-            for hour in (0..=24).step_by(2) {
-                let col = (f64::from(hour) / 24.0 * (width - 1) as f64).round() as usize;
-                let text = format!("{hour:02}");
-                let start = col.saturating_sub(1).min(width - text.len());
-                for (offset, glyph) in text.chars().enumerate() {
-                    cells[start + offset] = glyph;
+        y_label(format!("{emax:+.0}°"), plot.y);
+        y_label(format!("{emin:+.0}°"), plot.y + plot.height - 1);
+        if emin < 0.0 && emax > 0.0 {
+            let horizon_row =
+                plot.y + ((hi / (hi - lo)) * f64::from(plot.height - 1)).round() as u16;
+            if horizon_row > plot.y && horizon_row < plot.y + plot.height - 1 {
+                y_label("0°".into(), horizon_row);
+                let word = "horizon";
+                if w > word.len() + 4 {
+                    let start = plot.x + (w - word.len() - 1) as u16;
+                    let buf = frame.buffer_mut();
+                    for (offset, glyph) in word.chars().enumerate() {
+                        if let Some(cell) =
+                            buf.cell_mut(Position::new(start + offset as u16, horizon_row))
+                        {
+                            cell.set_symbol(&glyph.to_string()).set_fg(pal.muted);
+                        }
+                    }
                 }
             }
-            let line: String = cells.into_iter().collect();
-            frame.render_widget(
-                Paragraph::new(Line::from(Span::styled(
-                    line,
-                    Style::default().fg(pal.muted),
-                ))),
-                Rect {
-                    x: plot.x,
-                    y: x_row.y,
-                    width: plot.width,
-                    height: 1,
-                },
-            );
+        }
+        hour_labels(frame, plot, x_row.y, pal);
+    }
+}
+
+/// An even hour every two hours on the axis row, each centred on the column
+/// the plot maps that hour to — the same mapping the data uses, so ticks,
+/// step and dot agree.
+fn hour_labels(frame: &mut Frame<'_>, plot: Rect, y: u16, pal: &Palette) {
+    let width = plot.width as usize;
+    if width < 8 {
+        return;
+    }
+    let mut cells = vec![' '; width];
+    for hour in (0..=24).step_by(2) {
+        let col = (f64::from(hour) / 24.0 * (width - 1) as f64).round() as usize;
+        let text = format!("{hour:02}");
+        let start = col.saturating_sub(1).min(width - text.len());
+        for (offset, glyph) in text.chars().enumerate() {
+            cells[start + offset] = glyph;
         }
     }
+    let line: String = cells.into_iter().collect();
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            line,
+            Style::default().fg(pal.muted),
+        ))),
+        Rect {
+            x: plot.x,
+            y,
+            width: plot.width,
+            height: 1,
+        },
+    );
 }
 
 /// A little sky scene for the sun card: a rayed sun by day, a sun sinking to
