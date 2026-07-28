@@ -62,9 +62,6 @@ Rust'ta ilk projem. Kod hakkında her türlü eleştiriye açığım.
 **Title:** I couldn't get a night light working on Linux Mint, so I
 wrote my own (X11, Rust)
 
-This post was written with AI. So was a good chunk of the app. The
-post took more iterations. Anyway:
-
 redshift is archived, and gammastep inherited its worst habits: with
 no config it silently hangs looking for your location, nothing stops
 two copies running at once (I found four on a stock Mint install),
