@@ -59,48 +59,42 @@ Rust'ta ilk projem. Kod hakkında her türlü eleştiriye açığım.
 
 ## r/linux (EN)
 
-**Title:** nightlightd, a zero-config night light daemon for X11 (first
-release)
+**Title:** I couldn't get a night light working on Linux Mint, so I
+wrote my own (X11, Rust)
 
-I couldn't get a night light working reliably on my Linux Mint Xfce
-install, so I wrote one. redshift is archived; gammastep works but
-inherited three defects from redshift's architecture, each of which I
-measured before writing a line of code (evidence with commands in the
-repo's docs/PRIOR-ART.md):
+This post was written with AI. So was a good chunk of the app. The
+post took more iterations. Anyway:
 
-1. With no config and no geoclue, it hangs at location acquisition and
-   applies nothing, silently. nightlightd reads /etc/localtime and
-   looks the coordinates up in the tzdata every distro already ships.
-   No network, no prompts.
-2. Nothing stops two copies running at once (I found four accumulated
-   instances from three autostart mechanisms on a stock install).
-   nightlightd claims a D-Bus name as a single-instance lock; a second
-   copy exits.
-3. It never subscribes to RandR events, so a resume from suspend or a
-   hotplugged monitor leaves the screen neutral until the next polling
-   tick. nightlightd listens and re-applies.
+redshift is archived, and gammastep inherited its worst habits: with
+no config it silently hangs looking for your location, nothing stops
+two copies running at once (I found four on a stock Mint install),
+and it doesn't notice a monitor coming back from suspend. I measured
+all three before writing any code; the evidence, with commands you
+can run, is in the repo's docs/PRIOR-ART.md.
 
-One daemon, three thin clients over D-Bus: tray icon, an f.lux-style
-settings panel, and a ratatui terminal dashboard whose default theme
-follows the actual colour your screen is filtered to.
+nightlightd reads your timezone from /etc/localtime instead of
+asking, takes a D-Bus name so a second copy can't exist, and listens
+for screen events so the tint is back about a second after a resume
+or a hotplug. There's a tray icon, an f.lux-style settings panel,
+and a ratatui terminal dashboard whose default theme follows the
+colour your screen is filtered to right now.
 
-X11 only, on purpose; the mechanism doesn't exist on GNOME/KDE
-Wayland. v0.1.1 is out with a .deb and a fully static musl tarball,
-and it's on the AUR. There's a 28-second demo GIF in the README if
-you want to see it move before installing anything.
+Thanks to Orhun and joshka from the ratatui team, who reviewed the
+dashboard twice and were right both times.
 
-Two honest caveats. First: my biggest worry is that something already
-does exactly this and I missed it. PRIOR-ART.md is my best effort to
-check, but if you know a tool that gets all three of these right,
-please say so and I'll point people at it instead. Second: this has
-been dogfooded on exactly one machine (Mint Xfce, X11).
-The packages build and install, but every other setup is untested.
-If it breaks on yours, an issue with your GPU/driver details is the
-most useful thing you can send me.
+X11 only, on purpose. GNOME and KDE's Wayland don't expose the
+mechanism at all.
+
+Tested on exactly one machine: mine. And my honest fear is that
+something already does all of this and I missed it. If so, say it in
+the comments and I'll point people there instead.
+
+v0.1.1 is out: .deb, static musl tarball, AUR. There's a 28-second
+demo GIF in the README.
 
 https://github.com/umutdinceryananer/nightlightd
 
-First Rust project; happy to hear what's wrong with it.
+First Rust project. Tell me what's wrong with it.
 
 ---
 
