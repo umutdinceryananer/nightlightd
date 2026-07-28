@@ -41,7 +41,7 @@ anki renk sıcaklığını takip ediyor. Gece çöktükçe arayüz de ekranla
 birlikte ısınıyor. Güneşin konumundan türetilmiş günlük program, harita
 üzerinden konum seçimi, hepsi terminalde.
 
-v0.1.0 çıktı: .deb paketi ve AUR'da hazır. X11-only, bilinçli olarak.
+v0.1.1 çıktı: .deb paketi ve AUR'da hazır. X11-only, bilinçli olarak.
 
 İki dürüst not. Birincisi, en ciddi endişem bunun zaten var olması.
 Yazmadan önce mevcut araçları elimden geldiğince ölçtüm ve repoya
@@ -85,13 +85,15 @@ settings panel, and a ratatui terminal dashboard whose default theme
 follows the actual colour your screen is filtered to.
 
 X11 only, on purpose; the mechanism doesn't exist on GNOME/KDE
-Wayland. v0.1.0 is out with a .deb, and it's on the AUR.
+Wayland. v0.1.1 is out with a .deb and a fully static musl tarball,
+and it's on the AUR. There's a 28-second demo GIF in the README if
+you want to see it move before installing anything.
 
 Two honest caveats. First: my biggest worry is that something already
 does exactly this and I missed it. PRIOR-ART.md is my best effort to
 check, but if you know a tool that gets all three of these right,
 please say so and I'll point people at it instead. Second: this has
-been dogfooded on exactly one machine (Mint Xfce, X11, one monitor).
+been dogfooded on exactly one machine (Mint Xfce, X11).
 The packages build and install, but every other setup is untested.
 If it breaks on yours, an issue with your GPU/driver details is the
 most useful thing you can send me.
