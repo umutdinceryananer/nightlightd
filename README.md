@@ -156,7 +156,7 @@ Tracked in [`docs/ISSUES.md`](docs/ISSUES.md).
 | M3 | Daemon and event loop | ✅ done |
 | M4 | DBus, CLI, systemd, suspend | ✅ done |
 | M5 | Tray icon, settings panel, and terminal dashboard | ✅ done |
-| M6 | Packaging and release | 🔶 v0.1.1 released, on the AUR · Flatpak and announce remain |
+| M6 | Packaging and release | 🔶 v0.1.1 released, on the AUR, announced · Flatpak remains |
 
 One debt, stated plainly: the original plan was to send the timezone fallback upstream to gammastep *before* writing any Rust — it helps far more people there, and the review would have said whether the other two defects can be patched in place. The Rust got written first. The merge request is still owed and still planned ([`docs/UPSTREAM-MR.md`](docs/UPSTREAM-MR.md)); if it lands and the remaining defects prove fixable upstream, this repository becomes happily obsolete — which was always the acceptable outcome.
 
