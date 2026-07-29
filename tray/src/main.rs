@@ -185,6 +185,21 @@ fn main() {
         }
     };
 
+    // One tray per user bus (GitHub #1): claim a well-known name before
+    // showing anything; if it is taken, a tray from this or an earlier login
+    // is already alive and this one leaves quietly.
+    match client.claim_tray_name() {
+        Ok(true) => {}
+        Ok(false) => {
+            eprintln!("nightlight-tray: already running");
+            return;
+        }
+        // Carry on unlocked: a duplicate icon beats no icon at all.
+        Err(error) => {
+            eprintln!("nightlight-tray: cannot check for another tray: {error}");
+        }
+    }
+
     let status = client.status();
     // `assume_sni_available(true)`: at login the tray autostarts before the
     // panel's StatusNotifierWatcher exists, so a plain spawn() fails on the

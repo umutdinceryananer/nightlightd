@@ -78,6 +78,8 @@ trait Daemon {
 
 /// A live handle to the daemon: the session-bus connection plus a proxy.
 pub struct Client {
+    /// Kept alongside the proxy: the single-instance name lives on it.
+    connection: zbus::blocking::Connection,
     proxy: DaemonProxyBlocking<'static>,
 }
 
@@ -88,7 +90,24 @@ impl Client {
     pub fn connect() -> zbus::Result<Self> {
         let connection = zbus::blocking::Connection::session()?;
         let proxy = DaemonProxyBlocking::new(&connection)?;
-        Ok(Self { proxy })
+        Ok(Self { connection, proxy })
+    }
+
+    /// Claims the tray's own well-known name as a single-instance lock,
+    /// the daemon's #19 medicine applied to the tray (GitHub #1): on
+    /// distros where the session bus is the per-user bus, a tray from the
+    /// previous login survives logout (it holds no X connection), and every
+    /// new login's autostart would add another icon. Returns `false` when
+    /// another tray already owns the name, so the caller can exit quietly.
+    pub fn claim_tray_name(&self) -> zbus::Result<bool> {
+        match self.connection.request_name_with_flags(
+            "org.nightlightd.Tray",
+            zbus::fdo::RequestNameFlags::DoNotQueue.into(),
+        ) {
+            Ok(zbus::fdo::RequestNameReply::PrimaryOwner) => Ok(true),
+            Ok(_) | Err(zbus::Error::NameTaken) => Ok(false),
+            Err(other) => Err(other),
+        }
     }
 
     /// The current status, or `None` when the daemon cannot be reached.
