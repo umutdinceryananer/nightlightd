@@ -214,37 +214,39 @@ https://github.com/umutdinceryananer/nightlightd
 
 ## r/rust (EN)
 
-**Title:** My first Rust project: a zero-config screen colour
-temperature daemon for X11, with a ratatui dashboard
+**Title:** My first Rust project: a zero-config night light daemon
+for X11, with a ratatui dashboard
 
-I set out to learn Rust with a real problem: I couldn't get a night
-light working reliably on Linux Mint Xfce. redshift is archived and
-gammastep inherited three measurable defects from it (silent hang
-without a location source, no protection against duplicate instances,
-no reaction to RandR events after suspend). All three are documented
-with commands and outputs in the repo's PRIOR-ART.md.
+I wanted to learn Rust on a real problem. Mine was that I couldn't
+get a night light working on Linux Mint: redshift is archived, and
+gammastep silently hangs without a location source, lets duplicate
+instances fight over the screen, and doesn't react to RandR events
+after a suspend. I measured all three before writing any code; the
+evidence is in the repo's docs/PRIOR-ART.md.
 
-The result is a workspace of five crates: a pure core (colour maths,
-solar elevation, timezone-to-location) with no dependencies, a daemon
-owning X11 and D-Bus, and three thin clients that hold no state: a
-tray icon (ksni), a settings panel (egui), and a ratatui dashboard.
-The TUI's default theme follows the actual colour the screen is
-filtered to; the schedule tab derives the day's milestones from real
-solar elevation rather than hand-set times.
+nightlightd is a workspace of five crates. A pure core (colour
+maths, solar elevation, timezone to location) with no dependencies,
+a daemon that owns X11 and D-Bus, and three thin clients that hold
+no state: a tray icon (ksni), a settings panel (egui), and a ratatui
+dashboard whose default theme follows the colour the screen is
+actually filtered to.
 
-Things Rust made pleasant: the core crate is pure functions and tests;
-the wire format of the D-Bus status struct is pinned by a test in
-every client, so a signature drift fails CI instead of failing at
-runtime.
+[GIF BURAYA]
 
-Honest caveats: dogfooded on one machine (Mint Xfce, X11, one
-monitor), and my biggest worry is that something already does exactly
-this; if so, tell me and I'll point people there.
+My favourite Rust moment so far: the D-Bus status struct's wire
+format is pinned by a test in every client crate, so a signature
+drift fails CI instead of failing at runtime.
+
+Tested on exactly one machine: mine. And my honest fear is that
+something already does all of this and I missed it. If so, say so
+and I'll point people there instead.
+
+v0.1.1 is out: .deb, static musl tarball, AUR.
 
 https://github.com/umutdinceryananer/nightlightd
 
-It's my first Rust project, so unidiomatic corners are guaranteed.
-Reviews of the code are worth more to me than stars.
+Unidiomatic corners are guaranteed. Reviews of the code are worth
+more to me than stars.
 
 ---
 
