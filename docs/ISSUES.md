@@ -380,10 +380,11 @@ At the end of this milestone the tool becomes genuinely usable.
 ### #30 Announce
 
 **Done.** GitHub topics, the GitLab comment on xfce4-settings #111,
-r/xfce, r/unixporn, awesome-ratatui (merged), the ratatui showcase
-issue, and r/linux. Ratatui's account and its author shared the
-project on LinkedIn unprompted. The Mint forum, r/rust and Discord
-were skipped; the channels above already reached those audiences.
+r/xfce, r/unixporn, awesome-ratatui (merged), and the ratatui
+showcase issue. Ratatui's account and its author shared the project
+on LinkedIn unprompted. r/linux bounced off a karma automod and may
+be retried later; the Mint forum and Discord were skipped, their
+audiences already reached through the channels above.
 
 - **What:** r/linux, r/xfce, r/unixporn, the Linux Mint forums, the XFCE forums.
 - **Why:** There is a waiting audience. The night light feature request on `xfce4-power-manager` has been open since 2019, with people still subscribed to it. Leave a comment there: "I wrote this; use it until the native version lands."
