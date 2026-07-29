@@ -245,8 +245,9 @@ v0.1.1 is out: .deb, static musl tarball, AUR.
 
 https://github.com/umutdinceryananer/nightlightd
 
-Unidiomatic corners are guaranteed. Reviews of the code are worth
-more to me than stars.
+It's my first Rust project, so parts of it are probably not how an
+experienced Rust dev would write them. Point those out and you've
+made my day. Reviews are worth more to me than stars.
 
 ---
 
