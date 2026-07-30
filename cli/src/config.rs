@@ -84,6 +84,30 @@ pub fn load() -> Loaded {
     let text = match std::fs::read_to_string(&path) {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            // No config of ours at all: the one moment a gammastep or
+            // redshift file may be translated in (GitHub #2). The result is
+            // written to disk immediately, so this happens exactly once and
+            // leaves a visible artifact rather than live magic.
+            if let Some((config, tool)) = crate::import::from_incumbents() {
+                match save(&config) {
+                    Ok(()) => tracing::info!(
+                        "imported your {tool} settings into {} (day {} K / night {} K, gamma {}, brightness {}/{})",
+                        path.display(),
+                        config.day_temp,
+                        config.night_temp,
+                        config.gamma,
+                        config.day_brightness,
+                        config.night_brightness
+                    ),
+                    Err(error) => {
+                        tracing::warn!("imported {tool} settings but could not save them: {error}")
+                    }
+                }
+                return Loaded {
+                    config,
+                    damaged: false,
+                };
+            }
             return Loaded {
                 config: Config::default(),
                 damaged: false,
