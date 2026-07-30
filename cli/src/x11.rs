@@ -17,7 +17,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use nightlightd_core::color::{build_ramp, temperature_to_rgb};
 use nightlightd_core::location::location_from_timezone;
-use nightlightd_core::mode::{Mode, resolve_temperature};
+use nightlightd_core::mode::Mode;
+use nightlightd_core::solar::solar_elevation;
+use nightlightd_core::transition::{target_brightness, target_temperature};
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use x11rb::connection::Connection;
 use x11rb::protocol::Event;
@@ -43,6 +45,24 @@ const SETTLE_INTERVAL: Duration = Duration::from_secs(1);
 
 /// The neutral temperature whose ramp is the identity — a normal screen.
 pub const NEUTRAL_KELVIN: u32 = 6500;
+
+/// Everything one ramp write needs (GitHub #2): the temperature plus the two
+/// shaping factors, derived together in one place so every path that touches
+/// the screen agrees on what it should show.
+#[derive(Clone, Copy, PartialEq)]
+struct Target {
+    kelvin: u32,
+    gamma: f64,
+    brightness: f64,
+}
+
+/// The screen a disabled filter leaves behind: fully neutral, factors and
+/// all, the behaviour gammastep users already expect from a kill.
+const NEUTRAL_TARGET: Target = Target {
+    kelvin: NEUTRAL_KELVIN,
+    gamma: 1.0,
+    brightness: 1.0,
+};
 
 /// One active CRTC (a "screen" in XRandR terms) and the size of its gamma ramp.
 #[derive(Debug, Clone, Copy)]
@@ -72,7 +92,14 @@ pub fn apply_temperature(kelvin: u32) -> Result<usize, Box<dyn Error>> {
     let root = conn.setup().roots[screen_num].root;
     let resources = conn.randr_get_screen_resources(root)?.reply()?;
     let crtcs = active_crtcs(&conn, &resources)?;
-    write_ramps(&conn, &crtcs, kelvin, true)?;
+    // Identity factors on purpose: this is the restore/oneshot path, and a
+    // restore must hand back a fully neutral screen.
+    let target = Target {
+        kelvin,
+        gamma: 1.0,
+        brightness: 1.0,
+    };
+    write_ramps(&conn, &crtcs, target, true)?;
     conn.flush()?;
     Ok(crtcs.len())
 }
@@ -215,48 +242,71 @@ fn drain_screen_changes<C: Connection>(conn: &C) -> Result<bool, Box<dyn Error>>
 /// the outputs it landed on — back into the state (without holding the lock
 /// across the X writes).
 fn apply_desired<C: Connection>(conn: &C, root: u32, state: &Shared) -> Result<(), Box<dyn Error>> {
-    let (target, previous) = {
+    let (target, changed) = {
         let mut state = lock(state);
-        let target = desired_temp(&mut state);
-        (target, state.current_temp)
+        let target = desired_target(&mut state);
+        let changed = target.kelvin != state.current_temp
+            || (target.brightness - state.current_brightness).abs() > 1e-9;
+        (target, changed)
     };
-    let crtcs = reapply(conn, root, target, target != previous)?;
+    let crtcs = reapply(conn, root, target, changed)?;
     let mut state = lock(state);
-    state.current_temp = target;
+    state.current_temp = target.kelvin;
+    state.current_brightness = target.brightness;
     state.outputs = crtcs.iter().map(|c| (c.crtc, c.gamma_size)).collect();
     Ok(())
 }
 
-/// The temperature the state calls for: neutral when disabled, the manual
-/// override when set, otherwise the sun-based target for right now.
-///
-/// In automatic mode the timezone lookup is refreshed into the state's
-/// location cache when it succeeds and reused from there when it transiently
-/// fails, so a momentary failure never resets the screen to neutral
-/// (`day_temp`). Only a location that has never resolved falls back to
-/// `day_temp`. `GetStatus` reads the same cache.
-fn desired_temp(state: &mut State) -> u32 {
+/// The target the state calls for: fully neutral when disabled; otherwise
+/// the sun's temperature and brightness plus the constant gamma. A manual
+/// temperature override pins the kelvin but leaves the calibration gamma and
+/// the sun-driven brightness alone, so holding a temperature never strips a
+/// dim evening screen back to full blast.
+fn desired_target(state: &mut State) -> Target {
     if !state.enabled {
-        return NEUTRAL_KELVIN;
+        return NEUTRAL_TARGET;
     }
-    if let Some(kelvin) = state.override_temp {
-        return kelvin;
+    let elevation = current_elevation(state);
+    let brightness = match elevation {
+        Some(elevation) => {
+            target_brightness(elevation, state.day_brightness, state.night_brightness)
+        }
+        None => state.day_brightness,
+    };
+    let kelvin = if let Some(kelvin) = state.override_temp {
+        kelvin
+    } else if let Mode::Fixed(kelvin) = state.mode {
+        kelvin
+    } else {
+        match elevation {
+            Some(elevation) => target_temperature(elevation, state.day_temp, state.night_temp),
+            None => state.day_temp,
+        }
+    };
+    Target {
+        kelvin,
+        gamma: state.gamma,
+        brightness,
     }
-    if !matches!(state.mode, Mode::Automatic) {
-        return resolve_temperature(state.mode, unix_now(), state.day_temp, state.night_temp);
-    }
-    if let Some(resolved) = location_from_timezone() {
-        state.location = Some(resolved);
-    }
-    match state.location {
-        Some((lat, lon)) => resolve_temperature(
-            Mode::ManualLocation { lat, lon },
-            unix_now(),
-            state.day_temp,
-            state.night_temp,
-        ),
-        None => state.day_temp,
-    }
+}
+
+/// The sun's elevation right now, when a location can be had: a manual
+/// mode's pinned coordinates, or the timezone lookup refreshed into the
+/// state's cache on success and reused from there on a transient failure, so
+/// a momentary failure never resets the screen. `None` only for a location
+/// that has never resolved (or a fixed mode, which has none to offer).
+fn current_elevation(state: &mut State) -> Option<f64> {
+    let (lat, lon) = match state.mode {
+        Mode::ManualLocation { lat, lon } => (lat, lon),
+        Mode::Fixed(_) => return None,
+        Mode::Automatic => {
+            if let Some(resolved) = location_from_timezone() {
+                state.location = Some(resolved);
+            }
+            state.location?
+        }
+    };
+    Some(solar_elevation(lat, lon, unix_now()))
 }
 
 /// Seconds since the Unix epoch, as an `f64` for the solar maths. Degrades to
@@ -267,18 +317,18 @@ pub(crate) fn unix_now() -> f64 {
         .map_or(0.0, |elapsed| elapsed.as_secs_f64())
 }
 
-/// Re-reads the current CRTCs, writes the `kelvin` ramp to each, and returns
+/// Re-reads the current CRTCs, writes the target's ramp to each, and returns
 /// what it wrote to. Re-reading means a newly-attached monitor is covered too
 /// (issue #14).
 fn reapply<C: Connection>(
     conn: &C,
     root: u32,
-    kelvin: u32,
+    target: Target,
     changed: bool,
 ) -> Result<Vec<CrtcInfo>, Box<dyn Error>> {
     let resources = conn.randr_get_screen_resources(root)?.reply()?;
     let crtcs = active_crtcs(conn, &resources)?;
-    write_ramps(conn, &crtcs, kelvin, changed)?;
+    write_ramps(conn, &crtcs, target, changed)?;
     conn.flush()?;
     Ok(crtcs)
 }
@@ -306,24 +356,35 @@ fn active_crtcs<C: Connection>(
     Ok(crtcs)
 }
 
-/// Builds and writes the `kelvin` ramp to each CRTC.
+/// Builds and writes the target's ramp to each CRTC.
 fn write_ramps<C: Connection>(
     conn: &C,
     crtcs: &[CrtcInfo],
-    kelvin: u32,
+    target: Target,
     changed: bool,
 ) -> Result<(), Box<dyn Error>> {
-    let gains = temperature_to_rgb(kelvin);
+    let gains = temperature_to_rgb(target.kelvin);
+    let kelvin = target.kelvin;
+    // Shaping factors appear in the log line only when they do something,
+    // so the common log stays as short as it always was.
+    let shaped = if (target.gamma - 1.0).abs() > 1e-9 || (target.brightness - 1.0).abs() > 1e-9 {
+        format!(
+            " (gamma {:.2}, brightness {:.2})",
+            target.gamma, target.brightness
+        )
+    } else {
+        String::new()
+    };
     for c in crtcs {
-        let ramp = build_ramp(c.gamma_size, gains, 1.0, 1.0);
+        let ramp = build_ramp(c.gamma_size, gains, target.gamma, target.brightness);
         conn.randr_set_crtc_gamma(c.crtc, &ramp.red, &ramp.green, &ramp.blue)?
             .check()?;
         // A change (sun moved, a client request) is logged by default; an
         // unchanged periodic tick is only logged at debug.
         if changed {
-            tracing::info!("applied {kelvin} K to CRTC {}", c.crtc);
+            tracing::info!("applied {kelvin} K{shaped} to CRTC {}", c.crtc);
         } else {
-            tracing::debug!("applied {kelvin} K to CRTC {}", c.crtc);
+            tracing::debug!("applied {kelvin} K{shaped} to CRTC {}", c.crtc);
         }
     }
     Ok(())

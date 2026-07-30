@@ -265,6 +265,7 @@ mod tests {
             day_brightness: 1.0,
             night_brightness: 1.0,
             current_temp: 6500,
+            current_brightness: 1.0,
             location: None,
             outputs: Vec::new(),
         }

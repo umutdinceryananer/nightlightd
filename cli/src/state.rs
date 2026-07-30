@@ -39,6 +39,9 @@ pub struct State {
     pub night_brightness: f64,
     /// The last temperature actually applied — reported by `GetStatus`.
     pub current_temp: u32,
+    /// The last brightness factor actually applied, for change detection and
+    /// the status readout.
+    pub current_brightness: f64,
     /// The last successfully resolved location (automatic mode). The poll loop
     /// keeps it warm; `GetStatus` reads it instead of re-parsing zone.tab on
     /// every call, and a transient lookup failure reuses it instead of
