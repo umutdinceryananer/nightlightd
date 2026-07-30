@@ -70,9 +70,21 @@ const DEMO_SCRIPT: &[(f64, KeyCode, &str)] = &[
 /// The tab bar, in order. Each holds real content or it does not exist.
 const TABS: &[&str] = &["now", "today", "location", "outputs", "settings"];
 const LOCATION_TAB: usize = 2;
-/// The settings tab's index and its selectable rows: day, night, theme, login.
+/// The settings tab's index and its selectable rows: day, night, gamma,
+/// night dim, theme, login.
 const SETTINGS_TAB: usize = 4;
-const SETTINGS_ITEMS: usize = 4;
+const SETTINGS_ITEMS: usize = 6;
+
+/// The gamma slider's on-screen band. Core accepts 0.1 to 10, but a slider
+/// spanning that would bury the useful calibration range in its first
+/// centimetre; hand-written config values outside the band still apply.
+const GAMMA_UI_MIN: f64 = 0.5;
+const GAMMA_UI_MAX: f64 = 1.5;
+/// One arrow press of gamma or brightness.
+const FACTOR_STEP: f64 = 0.05;
+
+/// A settings slider rail: (value, min, max) for the row underneath.
+type Rail = (f64, f64, f64);
 
 /// Picker steps in degrees — coarse on purpose; braille map cells are chunky.
 const PICK_LAT_STEP: f64 = 3.0;
@@ -405,8 +417,8 @@ impl App {
             }
             KeyCode::Left | KeyCode::Right => self.adjust_setting(code == KeyCode::Right),
             KeyCode::Enter | KeyCode::Char(' ') => match self.settings_selected {
-                2 => self.theme_popup = Some(self.theme_index),
-                3 => self.toggle_login(),
+                4 => self.theme_popup = Some(self.theme_index),
+                5 => self.toggle_login(),
                 _ => {}
             },
             _ => {}
@@ -442,6 +454,24 @@ impl App {
                 }
             }
             2 => {
+                if let Some(status) = &self.status {
+                    let step = if increase { FACTOR_STEP } else { -FACTOR_STEP };
+                    let gamma = (status.gamma + step).clamp(GAMMA_UI_MIN, GAMMA_UI_MAX);
+                    self.client.set_gamma(gamma);
+                    self.last_poll = None;
+                }
+            }
+            3 => {
+                if let Some(status) = &self.status {
+                    let step = if increase { FACTOR_STEP } else { -FACTOR_STEP };
+                    let night = (status.night_brightness + step).clamp(0.1, 1.0);
+                    // The day bound rides along unchanged; this row is the
+                    // night dim, the knob Mumuskeh actually asked for.
+                    self.client.set_brightness(status.day_brightness, night);
+                    self.last_poll = None;
+                }
+            }
+            4 => {
                 let count = THEMES.len();
                 self.theme_index = if increase {
                     (self.theme_index + 1) % count
@@ -449,7 +479,7 @@ impl App {
                     (self.theme_index + count - 1) % count
                 };
             }
-            3 => self.toggle_login(),
+            5 => self.toggle_login(),
             _ => {}
         }
     }
@@ -925,11 +955,31 @@ impl App {
         let value = |v: Option<String>| v.unwrap_or_else(|| "—".into());
         let day = value(self.status.as_ref().map(|s| format!("{} K", s.day_temp)));
         let night = value(self.status.as_ref().map(|s| format!("{} K", s.night_temp)));
-        let day_k = self.status.as_ref().map(|s| s.day_temp);
-        let night_k = self.status.as_ref().map(|s| s.night_temp);
-        let rows: [(&str, String, &str, Option<u32>); SETTINGS_ITEMS] = [
-            ("daytime", day, "‹ › adjust", day_k),
-            ("nighttime", night, "‹ › adjust", night_k),
+        let gamma = value(self.status.as_ref().map(|s| format!("{:.2}", s.gamma)));
+        let dim = value(
+            self.status
+                .as_ref()
+                .map(|s| format!("{:.0}%", s.night_brightness * 100.0)),
+        );
+        // Each slider row carries (value, min, max) for the rail underneath.
+        let day_rail = self
+            .status
+            .as_ref()
+            .map(|s| (f64::from(s.day_temp), f64::from(NIGHT_MIN), 6500.0));
+        let night_rail = self
+            .status
+            .as_ref()
+            .map(|s| (f64::from(s.night_temp), f64::from(NIGHT_MIN), 6500.0));
+        let gamma_rail = self
+            .status
+            .as_ref()
+            .map(|s| (s.gamma, GAMMA_UI_MIN, GAMMA_UI_MAX));
+        let dim_rail = self.status.as_ref().map(|s| (s.night_brightness, 0.1, 1.0));
+        let rows: [(&str, String, &str, Option<Rail>); SETTINGS_ITEMS] = [
+            ("daytime", day, "‹ › adjust", day_rail),
+            ("nighttime", night, "‹ › adjust", night_rail),
+            ("gamma", gamma, "‹ › adjust", gamma_rail),
+            ("night dim", dim, "‹ › adjust", dim_rail),
             (
                 "theme",
                 THEMES[self.theme_index].name.to_string(),
@@ -949,7 +999,7 @@ impl App {
         ];
 
         let mut lines: Vec<Line<'_>> = Vec::new();
-        let mut sliders: Vec<(u16, u32, bool)> = Vec::new();
+        let mut sliders: Vec<(u16, Rail, bool)> = Vec::new();
         for (index, (label, val, hint, slider)) in rows.into_iter().enumerate() {
             let selected = index == self.settings_selected;
             let body = format!(" {label:<16} {val:<14}");
@@ -964,8 +1014,8 @@ impl App {
                     Span::styled(format!("{val:<14}"), Style::default().fg(pal.text)),
                 ]));
             }
-            if let Some(kelvin) = slider {
-                sliders.push((inner.y + lines.len() as u16, kelvin, selected));
+            if let Some(rail) = slider {
+                sliders.push((inner.y + lines.len() as u16, rail, selected));
                 lines.push(Line::default());
             }
             lines.push(Line::default());
@@ -985,13 +1035,13 @@ impl App {
         // where the bound sits in the shared NIGHT_MIN..=6500 K range, ticks in
         // the accent so they track the live tint; the empty ticks brighten when
         // their row is selected.
-        for (y, kelvin, selected) in sliders {
+        for (y, (value, min, max), selected) in sliders {
             let width = inner.width.saturating_sub(6).min(28);
             if width < 2 {
                 continue;
             }
             let rail = if selected { pal.muted } else { pal.faint };
-            let slider = Slider::new(f64::from(kelvin), f64::from(NIGHT_MIN), 6500.0)
+            let slider = Slider::new(value.clamp(min, max), min, max)
                 .show_value(false)
                 .show_handle(false)
                 .filled_symbol("▰")
@@ -1851,6 +1901,16 @@ impl App {
                 ),
                 Span::styled("  ·  ", Style::default().fg(pal.faint)),
                 Span::styled(mode, Style::default().fg(pal.accent).bold()),
+                // The dim badge appears only while the screen is actually
+                // dimmed, so the common daytime line stays as it was.
+                if status.enabled && (status.brightness - 1.0).abs() > 1e-9 {
+                    Span::styled(
+                        format!("  ·  {:.0}%", status.brightness * 100.0),
+                        Style::default().fg(pal.muted),
+                    )
+                } else {
+                    Span::raw("")
+                },
             ])),
             badges,
         );

@@ -45,6 +45,8 @@ trait Daemon {
     fn set_mode(&self, mode: &str) -> zbus::Result<()>;
     fn set_day_temp(&self, kelvin: u32) -> zbus::Result<()>;
     fn set_night_temp(&self, kelvin: u32) -> zbus::Result<()>;
+    fn set_gamma(&self, gamma: f64) -> zbus::Result<()>;
+    fn set_brightness(&self, day: f64, night: f64) -> zbus::Result<()>;
     fn set_location(&self, latitude: f64, longitude: f64) -> zbus::Result<()>;
     fn clear_location(&self) -> zbus::Result<()>;
     fn get_outputs(&self) -> zbus::Result<Vec<(u32, u16)>>;
@@ -92,6 +94,16 @@ impl Client {
     /// keeps the band ordered). Errors swallowed.
     pub fn set_night_temp(&self, kelvin: u32) {
         let _ = self.proxy.set_night_temp(kelvin);
+    }
+
+    /// Sets the gamma exponent (GitHub #2); the daemon clamps and persists.
+    pub fn set_gamma(&self, gamma: f64) {
+        let _ = self.proxy.set_gamma(gamma);
+    }
+
+    /// Sets the brightness bounds; the daemon clamps and persists them.
+    pub fn set_brightness(&self, day: f64, night: f64) {
+        let _ = self.proxy.set_brightness(day, night);
     }
 
     /// Pins a manual location (degrees); the daemon clamps and persists it.
