@@ -24,7 +24,7 @@ These are settled. Do not propose alternatives unless something concrete forces 
 Say no to these. They are the reasons comparable projects died.
 
 - **Wayland.** X11 only. A wlroots backend is `#31`, later, as a separate output layer.
-- **Brightness.** Colour only. This is where Gammy drowned.
+- **Brightness, amended by GitHub #2.** A *static* multiplier ships with ramp shaping in v0.2 — it shares gamma's five lines in the ramp write. What stays banned forever: anything adaptive, screen-content sampling, backlight/DDC control. *That* is where Gammy drowned.
 - **ICC colour profiles.** Legitimate, expensive, `#32`.
 - **Per-monitor temperature.** `#34`.
 - **NVIDIA driver quirks.** Wait for reports.

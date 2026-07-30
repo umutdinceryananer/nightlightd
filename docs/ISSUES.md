@@ -427,9 +427,14 @@ Keep all of these **out of v0.1.** Scope creep is what kills projects like this.
 
 ### #37 Brightness control
 
-- **What:** —
-- **Why:** **Don't.** This is exactly where Gammy drowned. Do colour. Leave brightness alone. This issue exists so it can be closed.
-- **Difficulty:** —
+- **What:** A static multiplier only, folded into ramp shaping with gamma
+  — tracked as GitHub #2, target v0.2, requested by the first daily
+  driver (a monitor with no OSD controls).
+- **Why:** The original ban was really about *adaptive* brightness:
+  screen sampling, feedback loops, DDC. That stays banned forever. A
+  fixed factor from config shares its code path with gamma, so refusing
+  one while shipping the other would be arbitrary.
+- **Difficulty:** Easy (rides GitHub #2)
 
 ### #36 Deep gamma LUT
 
