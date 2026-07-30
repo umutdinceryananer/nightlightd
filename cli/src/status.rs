@@ -40,6 +40,14 @@ pub struct Status {
     /// The configured night temperature bound (kelvin) — the bottom of the
     /// automatic curve.
     pub night_temp: u32,
+    /// The gamma exponent in force (GitHub #2); 1.0 is the identity.
+    pub gamma: f64,
+    /// The brightness factor currently applied to the screen.
+    pub brightness: f64,
+    /// The configured daytime brightness bound.
+    pub day_brightness: f64,
+    /// The configured night brightness bound.
+    pub night_brightness: f64,
 }
 
 #[cfg(test)]
@@ -54,6 +62,6 @@ mod tests {
     /// and panel/src/daemon.rs; change all three together.
     #[test]
     fn wire_signature_is_pinned() {
-        assert_eq!(Status::SIGNATURE.to_string(), "(busdbddbuu)");
+        assert_eq!(Status::SIGNATURE.to_string(), "(busdbddbuudddd)");
     }
 }

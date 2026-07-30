@@ -135,6 +135,10 @@ fn demo_status() -> Status {
         following: true,
         day_temp: 6500,
         night_temp: 2600,
+        gamma: 1.0,
+        brightness: 1.0,
+        day_brightness: 1.0,
+        night_brightness: 1.0,
     }
 }
 

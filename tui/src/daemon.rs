@@ -26,6 +26,10 @@ pub struct Status {
     pub following: bool,
     pub day_temp: u32,
     pub night_temp: u32,
+    pub gamma: f64,
+    pub brightness: f64,
+    pub day_brightness: f64,
+    pub night_brightness: f64,
 }
 
 /// The slice of the daemon interface the TUI uses. `zbus::proxy` generates
@@ -116,6 +120,6 @@ mod tests {
     /// while writes still work.
     #[test]
     fn wire_signature_is_pinned() {
-        assert_eq!(Status::SIGNATURE.to_string(), "(busdbddbuu)");
+        assert_eq!(Status::SIGNATURE.to_string(), "(busdbddbuudddd)");
     }
 }

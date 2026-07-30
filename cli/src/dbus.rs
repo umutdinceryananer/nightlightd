@@ -10,6 +10,7 @@ use zbus::blocking::connection::Builder;
 use zbus::fdo::{RequestNameFlags, RequestNameReply};
 use zbus::interface;
 
+use nightlightd_core::color::{BRIGHTNESS_RANGE, GAMMA_RANGE};
 use nightlightd_core::location::location_from_timezone;
 use nightlightd_core::mode::Mode;
 use nightlightd_core::solar::solar_elevation;
@@ -95,6 +96,37 @@ impl Daemon {
         self.waker.wake();
     }
 
+    /// Set the gamma exponent (GitHub #2), constant across the day, then
+    /// persist and re-apply. Clamped into core's sane range; a value that is
+    /// not a finite number is ignored rather than trusted.
+    fn set_gamma(&self, gamma: f64) {
+        {
+            let mut state = lock(&self.state);
+            if gamma.is_finite() {
+                state.gamma = gamma.clamp(GAMMA_RANGE.0, GAMMA_RANGE.1);
+            }
+        }
+        persist(&self.state);
+        self.waker.wake();
+    }
+
+    /// Set the day and night brightness bounds (GitHub #2), then persist and
+    /// re-apply. Each is clamped into core's range; the screen eases between
+    /// them on the temperature's own solar curve.
+    fn set_brightness(&self, day: f64, night: f64) {
+        {
+            let mut state = lock(&self.state);
+            if day.is_finite() {
+                state.day_brightness = day.clamp(BRIGHTNESS_RANGE.0, BRIGHTNESS_RANGE.1);
+            }
+            if night.is_finite() {
+                state.night_brightness = night.clamp(BRIGHTNESS_RANGE.0, BRIGHTNESS_RANGE.1);
+            }
+        }
+        persist(&self.state);
+        self.waker.wake();
+    }
+
     /// Pin a manual location (degrees) and persist it; the sun is followed
     /// there from now on, including after a trip through "auto". Out-of-range
     /// values are clamped, not rejected.
@@ -161,6 +193,10 @@ impl Daemon {
                 following,
                 day_temp: state.day_temp,
                 night_temp: state.night_temp,
+                gamma: state.gamma,
+                brightness: state.current_brightness,
+                day_brightness: state.day_brightness,
+                night_brightness: state.night_brightness,
             },
             None => Status {
                 enabled: state.enabled,
@@ -173,6 +209,10 @@ impl Daemon {
                 following,
                 day_temp: state.day_temp,
                 night_temp: state.night_temp,
+                gamma: state.gamma,
+                brightness: state.current_brightness,
+                day_brightness: state.day_brightness,
+                night_brightness: state.night_brightness,
             },
         }
     }

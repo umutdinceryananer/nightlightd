@@ -27,6 +27,10 @@ pub struct Status {
     pub following: bool,
     pub day_temp: u32,
     pub night_temp: u32,
+    pub gamma: f64,
+    pub brightness: f64,
+    pub day_brightness: f64,
+    pub night_brightness: f64,
 }
 
 /// The slice of the daemon interface the panel uses. `zbus::proxy` generates
@@ -99,6 +103,6 @@ mod tests {
     /// work: no curve, no mirror, but sliders that still move the screen.
     #[test]
     fn wire_signature_is_pinned() {
-        assert_eq!(Status::SIGNATURE.to_string(), "(busdbddbuu)");
+        assert_eq!(Status::SIGNATURE.to_string(), "(busdbddbuudddd)");
     }
 }
