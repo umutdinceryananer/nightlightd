@@ -912,7 +912,7 @@ impl App {
                     Style::default().fg(pal.muted),
                 )),
                 Line::from(Span::styled(
-                    "per-output control is #34, planned for v0.2 — this is its home",
+                    "per-output control is #34, planned for v0.3 — this is its home",
                     Style::default().fg(pal.faint),
                 )),
             ]),
