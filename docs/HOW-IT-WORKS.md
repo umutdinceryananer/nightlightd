@@ -100,6 +100,31 @@ Every value in the blue table gets multiplied by 0.55.
 
 Done. (#5)
 
+### The other two knobs on the same table
+
+Since v0.2 the same table carries two more adjustments, both asked for by
+the first real user (GitHub #2), whose monitor has no buttons of its own.
+Think of a TV's picture menu:
+
+- **Temperature** is the colour tone. That's everything above.
+- **Gamma** is the shape of the incline. Instead of a straight line from
+  dark to bright, bend it slightly: a gamma of 0.9 makes the middle
+  values a touch darker while black stays black and white stays white.
+  People use it to tame a washed-out panel, so it holds all day.
+- **Brightness** is the ceiling. A brightness of 0.9 means no value ever
+  leaves the card at more than 90% strength; the whole screen is a
+  little dimmer. This one has a day bound and a night bound, and it
+  slides between them on the same solar curve as the temperature, so
+  the screen dims as the sun goes down instead of jumping at some
+  switch-over minute.
+
+One write, three adjustments, and the rules stay the rules: values come
+from the config file, a bad value degrades to something sane instead of
+a black screen, and turning the filter off hands back a completely
+neutral table. Nothing here watches your screen to decide anything; the
+project's old promise that it will never do software auto-brightness is
+still in force, in `ISSUES.md` #37.
+
 ---
 
 ## Part 3: How you know *when* to change it

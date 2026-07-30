@@ -77,6 +77,20 @@ The dashboard is five tabs, each with something real to show — no filler:
 
 **now** draws the schedule the way f.lux draws it — the day as a square wave over faint crossing sun-arcs, with a strip along the floor wearing the screen's colour at every hour. **today** derives the day's milestones — night's end, sunrise, full day, solar noon, sunset — from the same solar maths the daemon schedules on, and plots the sun's arc they fall on. **location** shows the city the timezone resolved to and lets you pin a manual spot on the map. **settings** nudges the day and night bounds on sliders. And the theme is yours: `live` follows the screen, or pick from a set of editor palettes (`tokyo`, `mocha`, `nord`, `gruvbox`, `synth`, `ember`, `phosphor`) with `T`.
 
+Every knob is a number in `~/.config/nightlightd/config.toml` (all
+optional, these are the defaults except the two shaping examples):
+
+```toml
+day_temp = 6500
+night_temp = 4500
+gamma = 0.9            # bend the ramp's curve, constant all day
+night_brightness = 0.9 # dim to 90% at night, easing with the sun
+```
+
+Gamma and brightness ride the same gamma-ramp write as the colour, so
+they cost nothing extra and reset with it. Nothing is ever adaptive:
+no screen sampling, no backlight control, by design.
+
 ---
 
 ## Design
