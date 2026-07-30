@@ -310,25 +310,49 @@ pub struct Ramp {
 /// Largest value a 16-bit ramp entry can hold (`u16::MAX`).
 const RAMP_MAX: f64 = 65_535.0;
 
-/// Builds a gamma ramp of `size` entries per channel by scaling a linear
-/// (identity) ramp by each channel's gain.
-///
-/// `ramp[i] = (i / (size - 1)) * gain * 65535`, rounded to the nearest 16-bit
-/// value. Gains of `(1.0, 1.0, 1.0)` therefore produce the identity ramp, which
-/// leaves the screen untouched. `size` comes from the hardware at runtime, so a
-/// degenerate size of 0 or 1 is handled without dividing by zero.
-pub fn build_ramp(size: u16, gains: (f64, f64, f64)) -> Ramp {
-    let (red_gain, green_gain, blue_gain) = gains;
-    Ramp {
-        red: build_channel(size, red_gain),
-        green: build_channel(size, green_gain),
-        blue: build_channel(size, blue_gain),
+/// Bounds for the ramp-shaping factors (GitHub #2). Gamma outside this range
+/// stops looking like calibration and starts looking like a broken screen;
+/// brightness below the floor is a black screen nobody can see to undo.
+pub const GAMMA_RANGE: (f64, f64) = (0.1, 10.0);
+pub const BRIGHTNESS_RANGE: (f64, f64) = (0.1, 1.0);
+
+/// Clamps a shaping factor into `range`, quietly treating anything that is
+/// not a finite number as the identity `1.0` — a bad value must never panic
+/// or black the screen.
+fn shaping_factor(value: f64, range: (f64, f64)) -> f64 {
+    if value.is_finite() {
+        value.clamp(range.0, range.1)
+    } else {
+        1.0
     }
 }
 
-/// Builds one channel's ramp: `size` entries rising linearly from 0, scaled by
-/// `gain`.
-fn build_channel(size: u16, gain: f64) -> Vec<u16> {
+/// Builds a gamma ramp of `size` entries per channel: a linear ramp bent by
+/// `gamma`, scaled by each channel's gain and by `brightness` (GitHub #2).
+///
+/// `ramp[i] = (i / (size - 1))^(1/gamma) * gain * brightness * 65535`,
+/// rounded to the nearest 16-bit value — redshift's colorramp formula.
+/// Gains of `(1.0, 1.0, 1.0)` with both factors at `1.0` produce the
+/// identity ramp, which leaves the screen untouched (`powf(1.0)` is exact,
+/// and the identity test pins it). Out-of-range factors are clamped to
+/// [`GAMMA_RANGE`]/[`BRIGHTNESS_RANGE`] and non-finite ones fall back to
+/// `1.0`, so a bad config degrades to a sane screen instead of a black one.
+/// `size` comes from the hardware at runtime, so a degenerate size of 0 or 1
+/// is handled without dividing by zero.
+pub fn build_ramp(size: u16, gains: (f64, f64, f64), gamma: f64, brightness: f64) -> Ramp {
+    let exponent = 1.0 / shaping_factor(gamma, GAMMA_RANGE);
+    let brightness = shaping_factor(brightness, BRIGHTNESS_RANGE);
+    let (red_gain, green_gain, blue_gain) = gains;
+    Ramp {
+        red: build_channel(size, red_gain * brightness, exponent),
+        green: build_channel(size, green_gain * brightness, exponent),
+        blue: build_channel(size, blue_gain * brightness, exponent),
+    }
+}
+
+/// Builds one channel's ramp: `size` entries rising from 0 along the gamma
+/// curve, scaled by `scale` (the channel gain times the brightness factor).
+fn build_channel(size: u16, scale: f64, exponent: f64) -> Vec<u16> {
     let last = size.saturating_sub(1);
     (0..size)
         .map(|i| {
@@ -339,7 +363,7 @@ fn build_channel(size: u16, gain: f64) -> Vec<u16> {
             } else {
                 f64::from(i) / f64::from(last)
             };
-            (position * gain * RAMP_MAX).round() as u16
+            (position.powf(exponent) * scale * RAMP_MAX).round() as u16
         })
         .collect()
 }
@@ -415,7 +439,7 @@ mod tests {
 
     #[test]
     fn identity_ramp_when_gains_are_one() {
-        let ramp = build_ramp(256, (1.0, 1.0, 1.0));
+        let ramp = build_ramp(256, (1.0, 1.0, 1.0), 1.0, 1.0);
         assert_eq!(ramp.red.len(), 256);
         // A linear ramp runs from 0 to the 16-bit maximum.
         assert_eq!(ramp.red[0], 0);
@@ -432,7 +456,7 @@ mod tests {
         // Ramp sizes differ per monitor; the output must match whatever the
         // card reports.
         for size in [256u16, 1024, 2048] {
-            let ramp = build_ramp(size, (1.0, 0.5, 0.0));
+            let ramp = build_ramp(size, (1.0, 0.5, 0.0), 1.0, 1.0);
             assert_eq!(ramp.red.len(), size as usize);
             assert_eq!(ramp.green.len(), size as usize);
             assert_eq!(ramp.blue.len(), size as usize);
@@ -442,7 +466,7 @@ mod tests {
     #[test]
     fn gain_scales_the_top_of_the_ramp() {
         // The final entry is 1.0 * gain * 65535, so the gain sets the peak.
-        let ramp = build_ramp(1024, (1.0, 0.5, 0.0));
+        let ramp = build_ramp(1024, (1.0, 0.5, 0.0), 1.0, 1.0);
         assert_eq!(ramp.red[1023], u16::MAX); // gain 1.0 -> full
         assert_eq!(ramp.green[1023], 32768); // gain 0.5 -> half (rounded)
         assert_eq!(ramp.blue[1023], 0); // gain 0.0 -> off
@@ -451,7 +475,63 @@ mod tests {
     #[test]
     fn degenerate_sizes_do_not_panic() {
         // size 0 -> empty; size 1 -> a single entry. Neither divides by zero.
-        assert!(build_ramp(0, (1.0, 1.0, 1.0)).red.is_empty());
-        assert_eq!(build_ramp(1, (1.0, 1.0, 1.0)).red.len(), 1);
+        assert!(build_ramp(0, (1.0, 1.0, 1.0), 1.0, 1.0).red.is_empty());
+        assert_eq!(build_ramp(1, (1.0, 1.0, 1.0), 1.0, 1.0).red.len(), 1);
+    }
+
+    /// The guarantee phase A rests on: identity factors reproduce the linear
+    /// ramp bit for bit, so shipping ramp shaping changes nothing for anyone
+    /// who has not asked for it.
+    #[test]
+    fn identity_factors_reproduce_the_linear_ramp() {
+        for size in [2u16, 256, 1024] {
+            let ramp = build_ramp(size, (1.0, 1.0, 1.0), 1.0, 1.0);
+            let last = f64::from(size - 1);
+            for (i, &value) in ramp.red.iter().enumerate() {
+                let expected = (i as f64 / last * RAMP_MAX).round() as u16;
+                assert_eq!(value, expected);
+            }
+            assert_eq!(ramp.red, ramp.green);
+            assert_eq!(ramp.red, ramp.blue);
+        }
+    }
+
+    #[test]
+    fn gamma_below_one_darkens_midtones_and_keeps_endpoints() {
+        let linear = build_ramp(256, (1.0, 1.0, 1.0), 1.0, 1.0);
+        let shaped = build_ramp(256, (1.0, 1.0, 1.0), 0.9, 1.0);
+        assert_eq!(shaped.red[0], 0);
+        assert_eq!(shaped.red[255], linear.red[255]);
+        assert!(shaped.red[128] < linear.red[128]);
+    }
+
+    #[test]
+    fn brightness_scales_the_ceiling() {
+        let ramp = build_ramp(256, (1.0, 1.0, 1.0), 1.0, 0.9);
+        assert_eq!(ramp.red[0], 0);
+        assert_eq!(ramp.red[255], (0.9 * RAMP_MAX).round() as u16);
+    }
+
+    #[test]
+    fn shaped_ramps_stay_monotonic() {
+        let ramp = build_ramp(1024, (1.0, 0.7, 0.4), 0.5, 0.6);
+        for channel in [&ramp.red, &ramp.green, &ramp.blue] {
+            for pair in channel.windows(2) {
+                assert!(pair[0] <= pair[1]);
+            }
+        }
+    }
+
+    /// A bad config value must dim, never blind: zero brightness clamps to
+    /// the floor, zero gamma clamps instead of dividing by zero, and NaN
+    /// falls back to the identity.
+    #[test]
+    fn silly_factors_degrade_quietly() {
+        let floor = build_ramp(256, (1.0, 1.0, 1.0), 1.0, 0.0);
+        assert_eq!(floor.red[255], (0.1 * RAMP_MAX).round() as u16);
+        let bent = build_ramp(256, (1.0, 1.0, 1.0), 0.0, 1.0);
+        assert_eq!(bent.red[255], RAMP_MAX as u16);
+        let nan = build_ramp(256, (1.0, 1.0, 1.0), f64::NAN, f64::NAN);
+        assert_eq!(nan.red, build_ramp(256, (1.0, 1.0, 1.0), 1.0, 1.0).red);
     }
 }

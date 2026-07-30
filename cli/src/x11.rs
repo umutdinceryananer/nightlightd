@@ -315,7 +315,7 @@ fn write_ramps<C: Connection>(
 ) -> Result<(), Box<dyn Error>> {
     let gains = temperature_to_rgb(kelvin);
     for c in crtcs {
-        let ramp = build_ramp(c.gamma_size, gains);
+        let ramp = build_ramp(c.gamma_size, gains, 1.0, 1.0);
         conn.randr_set_crtc_gamma(c.crtc, &ramp.red, &ramp.green, &ramp.blue)?
             .check()?;
         // A change (sun moved, a client request) is logged by default; an
