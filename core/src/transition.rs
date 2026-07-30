@@ -4,9 +4,9 @@
 //! Instead the target temperature eases across a band of solar elevations,
 //! matching redshift's behaviour: at or above +3 degrees it is full daytime,
 //! at or below -6 degrees full night, and it interpolates linearly between.
-//! The brightness factor (GitHub #2) rides exactly the same band, so the
-//! screen dims with the sun instead of snapping the way gammastep's
-//! night-mode switch does.
+//! The brightness factor (GitHub #2) rides exactly the same band, easing
+//! with the sun just as redshift and gammastep ease theirs — the band is
+//! theirs to begin with.
 
 /// Elevation (degrees) at or above which it is full daytime.
 const DAY_ELEVATION: f64 = 3.0;
