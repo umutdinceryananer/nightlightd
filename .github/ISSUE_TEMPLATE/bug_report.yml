@@ -1,0 +1,47 @@
+# The bug form (#33's advice): gamma bugs are usually driver bugs, so the
+# form asks for the GPU story up front instead of in the third comment.
+name: Bug report
+description: Something misbehaved. Driver details make most reports solvable on the first try.
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you saw, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce
+      placeholder: |
+        1. ...
+        2. ...
+    validations:
+      required: true
+  - type: input
+    id: distro
+    attributes:
+      label: Distro and desktop
+      placeholder: e.g. MX Linux Xfce, Mint 22 Cinnamon
+    validations:
+      required: true
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU and driver
+      description: "`lspci | grep -i vga`, plus the driver and its version (nouveau / proprietary NVIDIA 580.xx / amdgpu / i915)."
+      placeholder: e.g. NVIDIA Quadro P400, proprietary 580.xx
+  - type: textarea
+    id: xrandr
+    attributes:
+      label: xrandr --verbose (first ~40 lines)
+      description: Only needed when the colour itself is wrong. Paste as-is.
+      render: text
+  - type: textarea
+    id: logs
+    attributes:
+      label: Daemon logs
+      description: "`journalctl --user -u nightlightd -n 50` if you run the systemd unit, or the daemon's terminal output."
+      render: text
