@@ -30,6 +30,14 @@ Do this before opening your own repository. It is small, isolated, and it buys y
 
 ### #0 Submit a timezone location provider to gammastep
 
+**Done.** Opened as [chinstrap/gammastep!28](https://gitlab.com/chinstrap/gammastep/-/merge_requests/28)
+on 2026-07-10, before the Rust port of the same logic landed in `core`.
+Awaiting review since; upstream has merged nothing from anyone since
+March 2025, so no conclusion can be drawn from the silence. What the
+attempt revealed — the provider chain never advances past a hanging
+geoclue2, and merge-request pipelines are broken for every new
+contributor — is recorded in `PRIOR-ART.md`, "Upstream attempt".
+
 - **What:** Fork `gitlab.com/chinstrap/gammastep`. Add `src/location-timezone.c`: read the `/etc/localtime` symlink, extract the zone name, look up the coordinate in `/usr/share/zoneinfo/zone.tab`. Register it in the provider list in `redshift.c`, ordered after `geoclue2` and before `manual`. Open a merge request.
 - **Why:** This closes defect 1 (see `PRIOR-ART.md`) for every existing gammastep user, which is orders of magnitude more people than will ever install your tool. It is roughly 80 lines of C against an interface that already exists. It is hard to argue against.
 - **What you get either way:**

@@ -163,7 +163,7 @@ Tracked in [`docs/ISSUES.md`](docs/ISSUES.md).
 
 | | | |
 |---|---|---|
-| M-1 | Upstream fix to gammastep | 🔶 still owed — see below |
+| M-1 | Upstream fix to gammastep | 🔶 MR open, awaiting review — see below |
 | M0 | Skeleton | ✅ done |
 | M1 | Core library — colour, sun, timezone | ✅ done |
 | M2 | X11 backend | ✅ done |
@@ -172,7 +172,7 @@ Tracked in [`docs/ISSUES.md`](docs/ISSUES.md).
 | M5 | Tray icon, settings panel, and terminal dashboard | ✅ done |
 | M6 | Packaging and release | 🔶 v0.2.0 released, on the AUR, announced · Flatpak remains |
 
-One debt, stated plainly: the original plan was to send the timezone fallback upstream to gammastep *before* writing any Rust — it helps far more people there, and the review would have said whether the other two defects can be patched in place. The Rust got written first. The merge request is still owed and still planned ([`docs/UPSTREAM-MR.md`](docs/UPSTREAM-MR.md)); if it lands and the remaining defects prove fixable upstream, this repository becomes happily obsolete — which was always the acceptable outcome.
+One promise, kept and now out of our hands: the timezone fallback went upstream *before* the Rust port of it was written. [`chinstrap/gammastep!28`](https://gitlab.com/chinstrap/gammastep/-/merge_requests/28), opened 2026-07-10, adds the same provider in C — it helps far more people there. It has been awaiting review since; upstream's last commit is from March 2025 and its oldest open merge request dates to 2020, so patience is the plan. What the attempt revealed is recorded in [`docs/PRIOR-ART.md`](docs/PRIOR-ART.md) under "Upstream attempt". If it lands and the remaining defects prove fixable upstream, this repository becomes happily obsolete — which was always the acceptable outcome.
 
 ---
 

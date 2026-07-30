@@ -1,5 +1,11 @@
 # Upstream MR: timezone location provider for gammastep
 
+> **Status: done.** Opened as [chinstrap/gammastep!28](https://gitlab.com/chinstrap/gammastep/-/merge_requests/28)
+> on 2026-07-10, awaiting review since. The outcome and what the attempt
+> revealed are recorded in [`PRIOR-ART.md`](PRIOR-ART.md), "Upstream
+> attempt". The plan below is kept as written — it is the record of how
+> the work was done, not a to-do list.
+
 **Goal.** Add a location provider to gammastep that derives an approximate location from the system timezone, so the program stops hanging silently when geoclue2 is unavailable.
 
 **Why this comes before writing `nightlightd`.** See `PRIOR-ART.md`, defect 1. This is roughly 80 lines of C against an interface that already exists. It fixes the bug for every existing gammastep user, which is far more people than will ever install a new tool. And whatever the maintainer says in review tells us whether defects 2 and 3 are patchable in place — which decides whether `nightlightd` needs to exist at all.
