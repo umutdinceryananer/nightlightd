@@ -30,6 +30,13 @@ pub struct State {
     pub day_temp: u32,
     /// Night temperature bound (kelvin), from the config.
     pub night_temp: u32,
+    /// Gamma exponent from the config (GitHub #2), constant across the day.
+    /// Carried verbatim so persisting never rewrites a hand-written value.
+    pub gamma: f64,
+    /// Daytime brightness factor from the config.
+    pub day_brightness: f64,
+    /// Night brightness factor from the config.
+    pub night_brightness: f64,
     /// The last temperature actually applied — reported by `GetStatus`.
     pub current_temp: u32,
     /// The last successfully resolved location (automatic mode). The poll loop

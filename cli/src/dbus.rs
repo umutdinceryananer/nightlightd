@@ -200,6 +200,9 @@ fn persist(state: &Shared) {
         Config {
             day_temp: state.day_temp,
             night_temp: state.night_temp,
+            gamma: state.gamma,
+            day_brightness: state.day_brightness,
+            night_brightness: state.night_brightness,
             latitude,
             longitude,
         }
@@ -258,6 +261,9 @@ mod tests {
             config_damaged: false,
             day_temp: 6500,
             night_temp: 3500,
+            gamma: 1.0,
+            day_brightness: 1.0,
+            night_brightness: 1.0,
             current_temp: 6500,
             location: None,
             outputs: Vec::new(),

@@ -18,6 +18,16 @@ pub struct Config {
     pub day_temp: u32,
     /// Night temperature (kelvin).
     pub night_temp: u32,
+    /// Gamma exponent bending the ramp curve, constant across the day
+    /// (GitHub #2). 1.0 is the identity. Kept verbatim here and clamped
+    /// where it is spent, so a save never rewrites a hand-written value.
+    pub gamma: f64,
+    /// Brightness factor in full daylight; 1.0 leaves the screen at full
+    /// output.
+    pub day_brightness: f64,
+    /// Brightness factor at full night. The screen eases between the two
+    /// factors on the same solar curve as the temperature.
+    pub night_brightness: f64,
     /// Manual latitude in degrees; pins the location instead of the timezone.
     /// Omitted from the written file when absent (TOML has no null).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -32,6 +42,9 @@ impl Default for Config {
         Self {
             day_temp: 6500,
             night_temp: 4500,
+            gamma: 1.0,
+            day_brightness: 1.0,
+            night_brightness: 1.0,
             latitude: None,
             longitude: None,
         }
@@ -170,6 +183,36 @@ mod tests {
     fn a_lone_coordinate_stays_automatic() {
         let config: Config = toml::from_str("latitude = 39.93").unwrap();
         assert_eq!(config.mode(), Mode::Automatic);
+    }
+
+    #[test]
+    fn shaping_defaults_are_identity() {
+        let config = Config::default();
+        assert_eq!(config.gamma, 1.0);
+        assert_eq!(config.day_brightness, 1.0);
+        assert_eq!(config.night_brightness, 1.0);
+    }
+
+    #[test]
+    fn shaping_fields_parse_and_the_rest_stay_default() {
+        // Mumuskeh's actual setup from GitHub #2, translated to our keys.
+        let text = "gamma = 0.9\nnight_brightness = 0.9\n";
+        let config: Config = toml::from_str(text).unwrap();
+        assert_eq!(config.gamma, 0.9);
+        assert_eq!(config.day_brightness, 1.0);
+        assert_eq!(config.night_brightness, 0.9);
+    }
+
+    #[test]
+    fn shaping_fields_survive_a_save_round_trip() {
+        let config = Config {
+            gamma: 0.85,
+            night_brightness: 0.9,
+            ..Config::default()
+        };
+        let text = toml::to_string(&config).unwrap();
+        let back: Config = toml::from_str(&text).unwrap();
+        assert_eq!(back, config);
     }
 
     #[test]
