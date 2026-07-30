@@ -14,7 +14,7 @@
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
 [![Built With Ratatui](https://ratatui.rs/built-with-ratatui/badge.svg)](https://ratatui.rs/)
 
-> **Status: v0.1.2.** The daemon works — timezone-based location, a single-instance D-Bus lock, gamma ramps over XRandR, re-apply on resume from suspend, a `--status` readout — and so do the interfaces: a tray icon, an f.lux-style settings panel, and a full-screen terminal dashboard. A [release with a `.deb`](https://github.com/umutdinceryananer/nightlightd/releases/latest) is out and it is [on the AUR](https://aur.archlinux.org/packages/nightlightd); Flatpak is next. Young software, one machine's worth of dogfooding — expect rough edges, and please report them.
+> **Status: v0.2.0.** The daemon works — timezone-based location, a single-instance D-Bus lock, gamma ramps over XRandR, re-apply on resume from suspend, a `--status` readout — and so do the interfaces: a tray icon, an f.lux-style settings panel, and a full-screen terminal dashboard. A [release with a `.deb`](https://github.com/umutdinceryananer/nightlightd/releases/latest) is out and it is [on the AUR](https://aur.archlinux.org/packages/nightlightd); Flatpak is next. Young software, one machine's worth of dogfooding — expect rough edges, and please report them.
 
 <p align="center">
   <img src="docs/screenshots/nightlight-tui.gif" alt="the terminal dashboard's demo reel: a compressed day warms the interface through sunset into night, walks the five tabs, rolls through the themes and loops at dawn" width="820">
@@ -119,7 +119,7 @@ Read [`docs/HOW-IT-WORKS.md`](docs/HOW-IT-WORKS.md) for the long version, writte
 Grab the `.deb` from the [latest release](https://github.com/umutdinceryananer/nightlightd/releases/latest), then:
 
 ```
-sudo apt install ./nightlightd_0.1.2-1_amd64.deb
+sudo apt install ./nightlightd_0.2.0-1_amd64.deb
 systemctl --user enable --now nightlightd
 ```
 
@@ -170,7 +170,7 @@ Tracked in [`docs/ISSUES.md`](docs/ISSUES.md).
 | M3 | Daemon and event loop | ✅ done |
 | M4 | DBus, CLI, systemd, suspend | ✅ done |
 | M5 | Tray icon, settings panel, and terminal dashboard | ✅ done |
-| M6 | Packaging and release | 🔶 v0.1.2 released, on the AUR, announced · Flatpak remains |
+| M6 | Packaging and release | 🔶 v0.2.0 released, on the AUR, announced · Flatpak remains |
 
 One debt, stated plainly: the original plan was to send the timezone fallback upstream to gammastep *before* writing any Rust — it helps far more people there, and the review would have said whether the other two defects can be patched in place. The Rust got written first. The merge request is still owed and still planned ([`docs/UPSTREAM-MR.md`](docs/UPSTREAM-MR.md)); if it lands and the remaining defects prove fixable upstream, this repository becomes happily obsolete — which was always the acceptable outcome.
 
