@@ -24,7 +24,7 @@ use tracing_subscriber::EnvFilter;
 /// Screen colour temperature daemon for X11.
 #[derive(Parser)]
 #[command(name = "nightlightd", version, about)]
-#[command(group(ArgGroup::new("action").args(["temp", "toggle", "on", "off", "auto", "status"])))]
+#[command(group(ArgGroup::new("action").args(["temp", "toggle", "on", "off", "auto", "gamma", "brightness", "status"])))]
 struct Cli {
     /// Run the daemon: follow the sun continuously.
     #[arg(long, conflicts_with = "action")]
@@ -47,6 +47,13 @@ struct Cli {
     /// Return to following the sun (client).
     #[arg(long)]
     auto: bool,
+    /// Set the gamma exponent, 0.1 to 10, constant across the day (client).
+    #[arg(long, value_name = "GAMMA")]
+    gamma: Option<f64>,
+    /// Set the brightness bounds, 0.1 to 1: one value for all day, or
+    /// DAY:NIGHT to dim with the sun (client).
+    #[arg(long, value_name = "DAY:NIGHT")]
+    brightness: Option<String>,
     /// Print the daemon's status (client).
     #[arg(long)]
     status: bool,
@@ -76,11 +83,37 @@ fn client_request(cli: &Cli) -> Option<client::Request> {
         Some(client::Request::SetEnabled(false))
     } else if cli.auto {
         Some(client::Request::Auto)
+    } else if let Some(gamma) = cli.gamma {
+        Some(client::Request::SetGamma(gamma))
+    } else if let Some(brightness) = cli.brightness.as_deref() {
+        match parse_brightness(brightness) {
+            Some(request) => Some(request),
+            None => {
+                eprintln!(
+                    "nightlightd: --brightness wants a number or DAY:NIGHT, like 0.9 or 1.0:0.85"
+                );
+                std::process::exit(2);
+            }
+        }
     } else if cli.status {
         Some(client::Request::Status)
     } else {
         None
     }
+}
+
+/// Parses the `--brightness` value: `0.9` means both bounds, `1.0:0.9`
+/// means day and night. Returns `None` on nonsense so the caller can print
+/// a usage hint instead of sending garbage to the daemon.
+fn parse_brightness(text: &str) -> Option<client::Request> {
+    let (day, night) = match text.split_once(':') {
+        Some((day, night)) => (day.trim().parse().ok()?, night.trim().parse().ok()?),
+        None => {
+            let both: f64 = text.trim().parse().ok()?;
+            (both, both)
+        }
+    };
+    Some(client::Request::SetBrightness(day, night))
 }
 
 /// Sends a request to the daemon, with a clear error when it is not running.
@@ -238,5 +271,25 @@ mod tests {
     fn no_reset_requires_daemon() {
         assert!(Cli::try_parse_from(["nightlightd", "--no-reset"]).is_err());
         assert!(Cli::try_parse_from(["nightlightd", "--daemon", "--no-reset"]).is_ok());
+    }
+
+    #[test]
+    fn brightness_accepts_one_value_or_a_pair() {
+        assert!(matches!(
+            parse_brightness("0.9"),
+            Some(client::Request::SetBrightness(d, n)) if d == 0.9 && n == 0.9
+        ));
+        assert!(matches!(
+            parse_brightness("1.0:0.85"),
+            Some(client::Request::SetBrightness(d, n)) if d == 1.0 && n == 0.85
+        ));
+        assert!(parse_brightness("warm").is_none());
+        assert!(parse_brightness("1.0:").is_none());
+    }
+
+    #[test]
+    fn shaping_flags_join_the_exclusive_action_group() {
+        assert!(Cli::try_parse_from(["nightlightd", "--gamma", "0.9"]).is_ok());
+        assert!(Cli::try_parse_from(["nightlightd", "--gamma", "0.9", "--status"]).is_err());
     }
 }

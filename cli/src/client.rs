@@ -18,6 +18,8 @@ trait Daemon {
     fn set_enabled(&self, enabled: bool) -> zbus::Result<()>;
     fn toggle(&self) -> zbus::Result<()>;
     fn set_mode(&self, mode: &str) -> zbus::Result<()>;
+    fn set_gamma(&self, gamma: f64) -> zbus::Result<()>;
+    fn set_brightness(&self, day: f64, night: f64) -> zbus::Result<()>;
     fn get_status(&self) -> zbus::Result<Status>;
 }
 
@@ -31,6 +33,10 @@ pub enum Request {
     SetEnabled(bool),
     /// Return to following the sun.
     Auto,
+    /// Set the gamma exponent (GitHub #2).
+    SetGamma(f64),
+    /// Set the day and night brightness bounds (GitHub #2).
+    SetBrightness(f64, f64),
     /// Print the daemon's status.
     Status,
 }
@@ -44,6 +50,8 @@ pub fn send(request: Request) -> zbus::Result<()> {
         Request::Toggle => proxy.toggle(),
         Request::SetEnabled(enabled) => proxy.set_enabled(enabled),
         Request::Auto => proxy.set_mode("auto"),
+        Request::SetGamma(gamma) => proxy.set_gamma(gamma),
+        Request::SetBrightness(day, night) => proxy.set_brightness(day, night),
         Request::Status => {
             print_status(&proxy.get_status()?);
             Ok(())
@@ -57,6 +65,13 @@ fn print_status(status: &Status) {
     let onoff = if status.enabled { "on" } else { "off" };
     println!("nightlightd: {onoff}, {} K", status.temperature);
     println!("  source: {}", status.source);
+    // The shaping factors earn a line only when they do something.
+    if (status.gamma - 1.0).abs() > 1e-9 || (status.brightness - 1.0).abs() > 1e-9 {
+        println!(
+            "  ramp:   gamma {:.2}, brightness {:.2} (day {:.2} / night {:.2})",
+            status.gamma, status.brightness, status.day_brightness, status.night_brightness
+        );
+    }
     if status.has_location {
         println!(
             "  sun:    {:+.1}° ({})",
