@@ -26,6 +26,16 @@ const NEUTRAL: u32 = 6500;
 /// Where the slider starts before the user has touched it.
 const START_KELVIN: u32 = 2800;
 
+/// The gamma slider's ends. Core accepts 0.1–10.0, but that is a safety clamp,
+/// not a usable band — outside roughly this range the screen is illegible.
+/// The same window the terminal dashboard offers.
+const GAMMA_MIN: f64 = 0.5;
+const GAMMA_MAX: f64 = 1.5;
+
+/// The night-dim slider's ends: core's brightness floor (never black) to full.
+const DIM_MIN: f64 = 0.1;
+const DIM_MAX: f64 = 1.0;
+
 /// The figlet "slant" wordmark, the same one the README uses, embedded at
 /// compile time so there is nothing to escape.
 const WORDMARK: &str = include_str!("wordmark.txt");
@@ -47,6 +57,13 @@ struct Panel {
     /// The day/night values when the panel opened, for "Revert changes".
     orig_day: u32,
     orig_night: u32,
+    /// The ramp-shaping knobs (GitHub #2): the gamma exponent and the night
+    /// brightness factor, with the same opened-with/last-reported bookkeeping
+    /// as the temperature bounds.
+    gamma: f64,
+    night_dim: f64,
+    orig_gamma: f64,
+    orig_night_dim: f64,
     start_at_login: bool,
     offset_secs: i32,
     /// Set by the single-instance `Present` call; the loop clears it and raises
@@ -63,7 +80,23 @@ struct Panel {
     /// showing stale sliders forever, without stomping an in-progress drag.
     daemon_day: u32,
     daemon_night: u32,
+    daemon_gamma: f64,
+    daemon_night_dim: f64,
     bounds_dragging: bool,
+}
+
+impl Panel {
+    /// Sends a night-brightness change. The day bound rides along unchanged —
+    /// daemon-owned state no panel widget edits — so it is read fresh here
+    /// rather than echoed from the up-to-a-second-old cache, and when even a
+    /// fresh read fails the send is skipped entirely: inventing a day bound
+    /// of 1.0 would persist a value the user never chose.
+    fn send_night_dim(&mut self, night: f64) {
+        if let Some(fresh) = self.client.status() {
+            self.client.set_brightness(fresh.day_brightness, night);
+        }
+        self.last_poll = None;
+    }
 }
 
 impl eframe::App for Panel {
@@ -109,6 +142,16 @@ impl eframe::App for Panel {
             self.orig_night = status.night_temp;
             self.daemon_day = status.day_temp;
             self.daemon_night = status.night_temp;
+            // The UI copies live inside the sliders' windows (egui silently
+            // clamps the backing value there anyway); orig_* and daemon_*
+            // keep the verbatim values, so a hand-written config value
+            // outside the window is never the panel's to rewrite.
+            self.gamma = status.gamma.clamp(GAMMA_MIN, GAMMA_MAX);
+            self.night_dim = status.night_brightness.clamp(DIM_MIN, DIM_MAX);
+            self.orig_gamma = status.gamma;
+            self.orig_night_dim = status.night_brightness;
+            self.daemon_gamma = status.gamma;
+            self.daemon_night_dim = status.night_brightness;
             // Seed the warm slider from what is actually applied, so a panel
             // opened during a manual override shows the truth instead of the
             // compile-time default (the following-mode mirror only covers auto).
@@ -122,12 +165,19 @@ impl eframe::App for Panel {
         if self.anchors_synced
             && !self.bounds_dragging
             && let Some(status) = &status
-            && (status.day_temp != self.daemon_day || status.night_temp != self.daemon_night)
+            && (status.day_temp != self.daemon_day
+                || status.night_temp != self.daemon_night
+                || status.gamma != self.daemon_gamma
+                || status.night_brightness != self.daemon_night_dim)
         {
             self.day_temp = status.day_temp;
             self.night_temp = status.night_temp;
             self.daemon_day = status.day_temp;
             self.daemon_night = status.night_temp;
+            self.gamma = status.gamma.clamp(GAMMA_MIN, GAMMA_MAX);
+            self.night_dim = status.night_brightness.clamp(DIM_MIN, DIM_MAX);
+            self.daemon_gamma = status.gamma;
+            self.daemon_night_dim = status.night_brightness;
         }
 
         ui.add(
@@ -157,9 +207,13 @@ impl eframe::App for Panel {
         // per release, not once per drag frame.
         let day_min = self.night_temp.max(4000);
         let night_max = self.day_temp.min(4500);
+        // `update_while_editing(false)` on every slider: typing into the value
+        // field must commit once, on Enter or focus loss — not per keystroke,
+        // where a half-typed "75" would already have sent 7.
         let day = ui.add(
             egui::Slider::new(&mut self.day_temp, day_min..=6500)
                 .suffix(" K")
+                .update_while_editing(false)
                 .text("Daytime"),
         );
         if day.drag_stopped() || (day.changed() && !day.dragged()) {
@@ -169,22 +223,88 @@ impl eframe::App for Panel {
         let night = ui.add(
             egui::Slider::new(&mut self.night_temp, 1500..=night_max)
                 .suffix(" K")
+                .update_while_editing(false)
                 .text("Nighttime"),
         );
         if night.drag_stopped() || (night.changed() && !night.dragged()) {
             self.client.set_night_temp(self.night_temp);
             self.last_poll = None;
         }
-        self.bounds_dragging = day.dragged() || night.dragged();
+
+        // The two ramp-shaping knobs (GitHub #2), sent on release like the
+        // bounds above. Gamma bends the curve's midtones all day; night dim
+        // lowers the ceiling after dark, easing on the same solar curve as the
+        // temperature. The day-brightness bound stays whatever the daemon
+        // holds — no interface exposes it, only the config file.
+        // Display formatting only — `fixed_decimals` would round the backing
+        // value itself on the first frame, marking the slider changed and
+        // sending a value the user never chose (a config gamma of 0.925 must
+        // not become 0.93 on disk just because the panel opened).
+        let gamma = ui.add(
+            egui::Slider::new(&mut self.gamma, GAMMA_MIN..=GAMMA_MAX)
+                .custom_formatter(|v, _| format!("{v:.2}"))
+                .update_while_editing(false)
+                .text("Gamma"),
+        );
+        // The format guard on both shaped knobs: clicking into the value field
+        // and away again re-commits the display-rounded text (0.925 renders as
+        // "0.92" and would come back as such). A difference the display cannot
+        // even show is formatter residue, not a user choice — never sent.
+        if (gamma.drag_stopped() || (gamma.changed() && !gamma.dragged()))
+            && format!("{:.2}", self.gamma) != format!("{:.2}", self.daemon_gamma)
+        {
+            self.client.set_gamma(self.gamma);
+            self.last_poll = None;
+        }
+        let dim = ui.add(
+            egui::Slider::new(&mut self.night_dim, DIM_MIN..=DIM_MAX)
+                .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
+                .custom_parser(|s| {
+                    // "90" and "90%" mean ninety percent; "0.9" — the unit the
+                    // config file uses — means the same. The slider's window
+                    // makes the two readings unambiguous.
+                    let v: f64 = s.trim().trim_end_matches('%').trim().parse().ok()?;
+                    Some(if v > DIM_MAX { v / 100.0 } else { v })
+                })
+                .update_while_editing(false)
+                .text("Night dim"),
+        );
+        if (dim.drag_stopped() || (dim.changed() && !dim.dragged()))
+            && format!("{:.0}%", self.night_dim * 100.0)
+                != format!("{:.0}%", self.daemon_night_dim * 100.0)
+        {
+            self.send_night_dim(self.night_dim);
+        }
+        self.bounds_dragging = day.dragged() || night.dragged() || gamma.dragged() || dim.dragged();
 
         ui.add_space(4.0);
         // Back to the values the panel opened with, undoing this session's
-        // slider fiddling.
-        if ui.button("Revert changes").clicked() {
+        // slider fiddling. Nothing to undo before the first sync (the origs
+        // would be compile-time defaults, not the user's values), and the
+        // shaped knobs are only sent when this session actually moved them —
+        // an untouched knob is not the panel's to rewrite, even with the
+        // value it believes is current.
+        if ui.button("Revert changes").clicked() && self.anchors_synced {
             self.day_temp = self.orig_day;
             self.night_temp = self.orig_night;
             self.client.set_day_temp(self.day_temp);
             self.client.set_night_temp(self.night_temp);
+            // Touched means either the UI copy moved off its seed or the
+            // daemon's reported value moved off the opening one — the second
+            // catches a knob dragged exactly onto the window edge, where the
+            // clamped UI copy lands back on its seed while the daemon changed.
+            let gamma_seed = self.orig_gamma.clamp(GAMMA_MIN, GAMMA_MAX);
+            if self.gamma != gamma_seed || self.daemon_gamma != self.orig_gamma {
+                // The verbatim orig, not the displayed clamp: a hand-written
+                // out-of-window gamma comes back exactly as written.
+                self.client.set_gamma(self.orig_gamma);
+                self.gamma = gamma_seed;
+            }
+            let dim_seed = self.orig_night_dim.clamp(DIM_MIN, DIM_MAX);
+            if self.night_dim != dim_seed || self.daemon_night_dim != self.orig_night_dim {
+                self.send_night_dim(self.orig_night_dim);
+                self.night_dim = dim_seed;
+            }
             self.last_poll = None;
         }
 
@@ -194,7 +314,9 @@ impl eframe::App for Panel {
         ui.label("Warm the screen by hand — drag left for warmer:");
         ui.add_space(4.0);
 
-        let slider = egui::Slider::new(&mut self.kelvin, WARMEST..=NEUTRAL).suffix(" K");
+        let slider = egui::Slider::new(&mut self.kelvin, WARMEST..=NEUTRAL)
+            .suffix(" K")
+            .update_while_editing(false);
         // Apply live only when the user actually moves it; the daemon pins
         // whatever the slider lands on and switches to manual. The cached
         // snapshot is updated in place so the following-mode mirror stops
@@ -283,7 +405,7 @@ fn main() -> eframe::Result<()> {
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([460.0, 600.0])
+            .with_inner_size([460.0, 660.0])
             .with_resizable(false),
         ..Default::default()
     };
@@ -299,6 +421,10 @@ fn main() -> eframe::Result<()> {
                 anchors_synced: false,
                 orig_day: 6500,
                 orig_night: 4500,
+                gamma: 1.0,
+                night_dim: 1.0,
+                orig_gamma: 1.0,
+                orig_night_dim: 1.0,
                 start_at_login: autostart::enabled(),
                 offset_secs: local_offset_seconds(),
                 focus: Arc::clone(&focus),
@@ -306,6 +432,8 @@ fn main() -> eframe::Result<()> {
                 last_poll: None,
                 daemon_day: 6500,
                 daemon_night: 4500,
+                daemon_gamma: 1.0,
+                daemon_night_dim: 1.0,
                 bounds_dragging: false,
             }))
         }),

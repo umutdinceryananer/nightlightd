@@ -47,6 +47,8 @@ trait Daemon {
     fn set_mode(&self, mode: &str) -> zbus::Result<()>;
     fn set_day_temp(&self, kelvin: u32) -> zbus::Result<()>;
     fn set_night_temp(&self, kelvin: u32) -> zbus::Result<()>;
+    fn set_gamma(&self, gamma: f64) -> zbus::Result<()>;
+    fn set_brightness(&self, day: f64, night: f64) -> zbus::Result<()>;
 }
 
 /// A live handle to the daemon: the session-bus connection plus a proxy.
@@ -91,6 +93,18 @@ impl Client {
     /// the daemon. Errors swallowed.
     pub fn set_night_temp(&self, kelvin: u32) {
         let _ = self.proxy.set_night_temp(kelvin);
+    }
+
+    /// Sets the gamma exponent; the daemon clamps and persists it. Errors
+    /// swallowed.
+    pub fn set_gamma(&self, gamma: f64) {
+        let _ = self.proxy.set_gamma(gamma);
+    }
+
+    /// Sets the brightness bounds; the daemon clamps and persists them. Errors
+    /// swallowed.
+    pub fn set_brightness(&self, day: f64, night: f64) {
+        let _ = self.proxy.set_brightness(day, night);
     }
 }
 
