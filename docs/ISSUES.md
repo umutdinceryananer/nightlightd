@@ -453,6 +453,42 @@ Keep all of these **out of v0.1.** Scope creep is what kills projects like this.
 - **Difficulty:** Unknown
 - **Note:** Measure the banding first. If nobody can see it, don't build it.
 
+### #38 Fade between targets
+
+- **What:** When the applied target changes by more than a small threshold
+  (toggle, manual set, daemon start, resume), walk the ramp there over a
+  few seconds of intermediate writes instead of one write. The event
+  loop's timer already exists; a short-lived fast tick drives the walk.
+- **Why:** Both Reddit reviews of v0.2.0 called out the hard switch,
+  independently. f.lux animates every change. redshift and gammastep fade
+  on start and stop, so users arriving from them expect it (gammastep's
+  own MR queue has a draft about its quit fade). The per-minute twilight
+  steps are also visible at aggressive night temperatures, where 5000 K
+  of span means roughly 125 K per tick.
+- **Detail:** Static easing with a fixed duration. Nothing adaptive. The
+  restore on exit may ease briefly but must always complete.
+- **Done when:** Toggling the filter at night eases over a couple of
+  seconds instead of snapping, and `--temp` changes do the same.
+- **Difficulty:** Medium (core loop change)
+- **Target:** v0.2.1
+
+### #39 Configurable transition band
+
+- **What:** Expose the transition band's elevation bounds in the config
+  (`day_elevation`, `night_elevation`, today fixed at +3 and -6).
+  Lowering the night bound to -12 holds daylight longer and lands the
+  full night value deeper into dusk.
+- **Why:** Asked for on the v0.2.0 announcement thread. The sky stays
+  bright for a while after sunset and eyes adapt slowly, so one fixed
+  band cannot suit everyone. Elevation stays the right axis (it adapts
+  to latitude and season where clock offsets do not), but the endpoints
+  need not be constants.
+- **Done when:** The pair round-trips through the config, an inverted
+  pair degrades to the defaults quietly, and the TUI's schedule reflects
+  the configured band.
+- **Difficulty:** Easy
+- **Target:** v0.3
+
 ---
 
 ## Ordering summary
