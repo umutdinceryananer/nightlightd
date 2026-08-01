@@ -6,29 +6,29 @@
 /_/ /_/_/\__, /_/ /_/\__/_/_/\__, /_/ /_/\__/\__,_/
         /____/              /____/
 
-  zero-config screen colour temperature for X11
-  reads your timezone · refuses to run twice · survives suspend
+  screen colour temperature daemon for X11
+  location from the timezone · single instance · reapplies after suspend
 ```
 
 [![CI](https://github.com/umutdinceryananer/nightlightd/actions/workflows/ci.yml/badge.svg)](https://github.com/umutdinceryananer/nightlightd/actions/workflows/ci.yml)
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
 [![Built With Ratatui](https://ratatui.rs/built-with-ratatui/badge.svg)](https://ratatui.rs/)
 
-> **Status: v0.2.0.** The daemon works — timezone-based location, a single-instance D-Bus lock, gamma ramps over XRandR, re-apply on resume from suspend, a `--status` readout — and so do the interfaces: a tray icon, an f.lux-style settings panel, and a full-screen terminal dashboard. A [release with a `.deb`](https://github.com/umutdinceryananer/nightlightd/releases/latest) is out and it is [on the AUR](https://aur.archlinux.org/packages/nightlightd); Flatpak is next. Young software, one machine's worth of dogfooding — expect rough edges, and please report them.
+> **Version 0.2.0.** The daemon provides timezone based location, a single instance D-Bus lock, gamma ramps over XRandR, reapplication on resume from suspend, and a `--status` readout. Three clients ship with it, a tray icon, a settings panel, and a terminal dashboard. A [release with a `.deb`](https://github.com/umutdinceryananer/nightlightd/releases/latest) and an [AUR package](https://aur.archlinux.org/packages/nightlightd) are available. Flatpak is planned. Young software, tested on one machine so far. Report what breaks.
 
 <p align="center">
   <img src="docs/screenshots/nightlight-tui.gif" alt="the terminal dashboard's demo reel: a compressed day warms the interface through sunset into night, walks the five tabs, rolls through the themes and loops at dawn" width="820">
 </p>
 
-The interface warms with the screen. In the default `live` theme the accent colour *is* the tint the daemon is filtering to right now — soft gold by day, deep candle-orange at night — so the dashboard reads warmer as the evening comes on. Everything on screen is derived from that one colour.
+In the default `live` theme the dashboard's accent colour is the tint the daemon is currently applying, so the interface reads warmer as evening comes on. Every other colour on screen is derived from that one.
 
-The reel above is `nightlight-tui --demo`: a whole day compressed into twenty-eight seconds, no daemon required. Every keypress the tour makes is shown in the corner as it happens — nothing on screen changes without a visible cause.
+The reel above is `nightlight-tui --demo`, a day compressed into twenty-eight seconds, no daemon required. Each keypress the tour makes is shown in the corner as it happens.
 
 ---
 
 ## X11 only
 
-This tool writes gamma ramps through XRandR. That mechanism does not exist under GNOME's or KDE's Wayland sessions, and it never will. Wayland support, if it ever lands, will cover wlroots compositors only (Sway, Hyprland, river) through a separate backend.
+This tool writes gamma ramps through XRandR. That mechanism does not exist under GNOME's or KDE's Wayland sessions. Wayland support, if it lands, will cover wlroots compositors only (Sway, Hyprland, river) through a separate backend.
 
 If you are on Wayland today, use [`wl-gammarelay-rs`](https://github.com/MaxVerevkin/wl-gammarelay-rs).
 
@@ -36,38 +36,38 @@ If you are on Wayland today, use [`wl-gammarelay-rs`](https://github.com/MaxVere
 
 ## Why this exists
 
-redshift was archived in April 2026. gammastep took its place and is maintained, packaged everywhere, and works. This project is not "a maintained redshift" — that already exists.
+redshift was archived in April 2026. gammastep took its place and is maintained, packaged everywhere, and works. A maintained redshift already exists, and this is not one.
 
-It exists to fix three defects that gammastep inherited from redshift's architecture and cannot easily shed. Each one was measured, not assumed. The evidence, with commands and outputs, is in [`docs/PRIOR-ART.md`](docs/PRIOR-ART.md).
+This project fixes three defects that gammastep inherited from redshift's architecture. Each one was measured, not assumed. The evidence, with commands and outputs, is in [`docs/PRIOR-ART.md`](docs/PRIOR-ART.md).
 
 **1. It will not start without being told where you live.**
-With no config file and no `-l`, gammastep prints its settings, hangs at location acquisition, and applies nothing — with no error message. Geoclue2, its only automatic provider, is unavailable on most desktops.
+With no config file and no `-l`, gammastep prints its settings, hangs at location acquisition, and applies nothing. No error is emitted. Geoclue2, its only automatic provider, is unavailable on most desktops.
 
-`nightlightd` reads `/etc/localtime` and looks the coordinate up in the timezone database that every Linux system already ships. No network, no permissions, no questions. Sunset lands within a few minutes of correct, which is all the transition curve needs.
+`nightlightd` reads `/etc/localtime` and looks the coordinate up in the timezone database every Linux system ships. No network, no permissions, no questions. Sunset lands within a few minutes of correct, which is all the transition curve needs.
 
 **2. Two copies can run at once, and the screen flickers.**
 Nothing prevents it. On a stock Mint Xfce install, four redshift instances had accumulated from three autostart mechanisms that do not know about each other.
 
-`nightlightd` claims a DBus name on startup. A second instance finds the name taken and exits. The failure mode is architecturally impossible.
+`nightlightd` claims a D-Bus name on startup. A second instance finds the name taken and exits.
 
 **3. It does not react when the ramp is wiped.**
 `nm -D` on the gammastep binary shows no `xcb_randr_select_input`. It never subscribes to RandR events, so it cannot notice a resume from suspend, a resolution change, or a monitor being plugged in. It recovers on its next polling tick, if at all. It reads `get_screen_resources_current`, so hotplugged monitors are likely never seen.
 
 `nightlightd` subscribes to screen events and rewrites the ramp when they fire.
 
-Everything else — packaging, systemd units, solar-elevation scheduling — gammastep already does well. Those are not selling points here.
+Everything else (packaging, systemd units, solar elevation scheduling) gammastep already does well, and none of it is a selling point here.
 
 ---
 
 ## The interface
 
-The daemon needs none — it runs headless. But three thin clients ship with it, each a separate process that holds no state and talks only over D-Bus, so if one crashes the filter keeps running:
+The daemon runs headless and needs no interface. Three thin clients ship with it. Each is a separate process that holds no state and talks only over D-Bus, so if one crashes the filter keeps running.
 
-- **A tray icon** (`nightlight-tray`) — on/off, automatic/manual, current temperature, in the notification area.
-- **A settings panel** (`nightlight-panel`) — an f.lux-style day/night curve and sliders, for when you want to nudge the bounds.
-- **A terminal dashboard** (`nightlight-tui`) — the whole state on one glanceable screen, built with [ratatui](https://ratatui.rs).
+- **`nightlight-tray`** puts on/off, automatic/manual and the current temperature in the notification area.
+- **`nightlight-panel`** draws the day/night curve with sliders for the temperature bounds, gamma and night brightness.
+- **`nightlight-tui`** is a terminal dashboard built with [ratatui](https://ratatui.rs).
 
-The dashboard is five tabs, each with something real to show — no filler:
+The dashboard has five tabs.
 
 <p align="center">
   <img src="docs/screenshots/02-today.png" alt="today tab: the day's solar milestones as a schedule over the sun's phase-tinted arc" width="270">
@@ -75,10 +75,9 @@ The dashboard is five tabs, each with something real to show — no filler:
   <img src="docs/screenshots/05-now-synthwave.png" alt="the now tab in the synthwave theme, pink and cyan" width="270">
 </p>
 
-**now** draws the schedule the way f.lux draws it — the day as a square wave over faint crossing sun-arcs, with a strip along the floor wearing the screen's colour at every hour. **today** derives the day's milestones — night's end, sunrise, full day, solar noon, sunset — from the same solar maths the daemon schedules on, and plots the sun's arc they fall on. **location** shows the city the timezone resolved to and lets you pin a manual spot on the map. **settings** nudges the day and night bounds on sliders. And the theme is yours: `live` follows the screen, or pick from a set of editor palettes (`tokyo`, `mocha`, `nord`, `gruvbox`, `synth`, `ember`, `phosphor`) with `T`.
+**now** plots the day as a square wave over the sun's crossing arcs, with a strip along the floor showing the screen's colour at every hour. **today** derives the day's milestones (night's end, sunrise, full day, solar noon, sunset) from the same solar maths the daemon schedules on. **location** shows the city the timezone resolved to and takes a manual pin on the map. **settings** adjusts the day and night bounds, gamma and night dim. `T` cycles the themes. `live` follows the screen; the rest (`tokyo`, `mocha`, `nord`, `gruvbox`, `synth`, `ember`, `phosphor`) are fixed palettes.
 
-Every knob is a number in `~/.config/nightlightd/config.toml` (all
-optional, these are the defaults except the two shaping examples):
+Every knob is a number in `~/.config/nightlightd/config.toml`. All fields are optional. These are the defaults, except the two shaping examples.
 
 ```toml
 day_temp = 6500
@@ -87,15 +86,13 @@ gamma = 0.9            # bend the ramp's curve, constant all day
 night_brightness = 0.9 # dim to 90% at night, easing with the sun
 ```
 
-Gamma and brightness ride the same gamma-ramp write as the colour, so
-they cost nothing extra and reset with it. Nothing is ever adaptive:
-no screen sampling, no backlight control, by design.
+Gamma and brightness ride the same gamma ramp write as the colour, so they cost nothing extra and reset with it. Nothing is adaptive. No screen sampling, no backlight control, by design.
 
 ---
 
 ## Design
 
-A daemon does the work; thin clients talk to it over DBus.
+A daemon does the work. Thin clients talk to it over D-Bus.
 
 ```
 tray icon   ─┐
@@ -106,9 +103,9 @@ CLI         ─┘              ▲    ▲
                             └────── timer
 ```
 
-The daemon has no interface. If the tray icon dies, the filter lives. One brain, many remotes.
+The daemon has no interface of its own. If a client dies, the filter keeps running.
 
-Read [`docs/HOW-IT-WORKS.md`](docs/HOW-IT-WORKS.md) for the long version, written for someone who has never heard of a gamma ramp.
+[`docs/HOW-IT-WORKS.md`](docs/HOW-IT-WORKS.md) is the long version, written for someone who has never heard of a gamma ramp.
 
 ---
 
@@ -116,7 +113,7 @@ Read [`docs/HOW-IT-WORKS.md`](docs/HOW-IT-WORKS.md) for the long version, writte
 
 ### Debian / Ubuntu / Mint
 
-Grab the `.deb` from the [latest release](https://github.com/umutdinceryananer/nightlightd/releases/latest), then:
+Grab the `.deb` from the [latest release](https://github.com/umutdinceryananer/nightlightd/releases/latest), then
 
 ```
 sudo apt install ./nightlightd_0.2.0-1_amd64.deb
@@ -124,9 +121,9 @@ systemctl --user enable --now nightlightd
 ```
 
 The package installs all four binaries, the systemd user unit, and the tray's
-autostart entry — but a *user* unit cannot be enabled for you at install time,
-so the daemon needs that one `systemctl --user` line (or a log-out/log-in plus
-the panel's "Start at login" box).
+autostart entry. A *user* unit cannot be enabled at install time, so the
+daemon needs that one `systemctl --user` line (or a log-out/log-in plus the
+panel's "Start at login" box).
 
 ### Arch (AUR)
 
@@ -137,11 +134,11 @@ systemctl --user enable --now nightlightd
 
 ### Any distro (static binaries)
 
-The [release](https://github.com/umutdinceryananer/nightlightd/releases/latest) also carries a musl tarball — fully static builds of the daemon and the terminal dashboard with no library dependencies at all, for x86_64 Linux of any age. Unpack and follow the bundled `INSTALL`.
+The [release](https://github.com/umutdinceryananer/nightlightd/releases/latest) also carries a musl tarball, fully static builds of the daemon and the terminal dashboard with no library dependencies, for x86_64 Linux of any age. Unpack and follow the bundled `INSTALL`.
 
 ### From source
 
-Rust toolchain required:
+Requires a Rust toolchain.
 
 ```
 cargo install --path cli     # the daemon + CLI: nightlightd
@@ -163,16 +160,16 @@ Tracked in [`docs/ISSUES.md`](docs/ISSUES.md).
 
 | | | |
 |---|---|---|
-| M-1 | Upstream fix to gammastep | 🔶 MR open, awaiting review — see below |
+| M-1 | Upstream fix to gammastep | 🔶 MR open, awaiting review (below) |
 | M0 | Skeleton | ✅ done |
-| M1 | Core library — colour, sun, timezone | ✅ done |
+| M1 | Core library (colour, sun, timezone) | ✅ done |
 | M2 | X11 backend | ✅ done |
 | M3 | Daemon and event loop | ✅ done |
 | M4 | DBus, CLI, systemd, suspend | ✅ done |
-| M5 | Tray icon, settings panel, and terminal dashboard | ✅ done |
-| M6 | Packaging and release | 🔶 v0.2.0 released, on the AUR, announced · Flatpak remains |
+| M5 | Tray icon, settings panel, terminal dashboard | ✅ done |
+| M6 | Packaging and release | 🔶 v0.2.0 released, on the AUR, announced. Flatpak remains |
 
-One promise, kept and now out of our hands: the timezone fallback went upstream *before* the Rust port of it was written. [`chinstrap/gammastep!28`](https://gitlab.com/chinstrap/gammastep/-/merge_requests/28), opened 2026-07-10, adds the same provider in C — it helps far more people there. It has been awaiting review since; upstream's last commit is from March 2025 and its oldest open merge request dates to 2020, so patience is the plan. What the attempt revealed is recorded in [`docs/PRIOR-ART.md`](docs/PRIOR-ART.md) under "Upstream attempt". If it lands and the remaining defects prove fixable upstream, this repository becomes happily obsolete — which was always the acceptable outcome.
+The timezone fallback went upstream before the Rust port of it was written. [`chinstrap/gammastep!28`](https://gitlab.com/chinstrap/gammastep/-/merge_requests/28), opened 2026-07-10, adds the same provider in C, where it helps far more people. It has been awaiting review since. Upstream's last commit is from March 2025 and its oldest open merge request dates to 2020, so a long wait is expected. What the attempt revealed is recorded in [`docs/PRIOR-ART.md`](docs/PRIOR-ART.md) under "Upstream attempt". If it lands and the remaining defects prove fixable upstream, this repository becomes obsolete, which was always an acceptable outcome.
 
 ---
 
