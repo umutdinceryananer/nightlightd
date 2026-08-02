@@ -263,7 +263,7 @@ fn apply_desired<C: Connection>(
     fade: &mut Option<Fade>,
 ) -> Result<(), Box<dyn Error>> {
     let now = Instant::now();
-    let (desired, applied) = {
+    let (desired, applied, fade_enabled) = {
         let mut state = lock(state);
         let desired = desired_target(&mut state);
         let applied = Target {
@@ -271,23 +271,12 @@ fn apply_desired<C: Connection>(
             gamma: state.current_gamma,
             brightness: state.current_brightness,
         };
-        (desired, applied)
+        (desired, applied, state.fade)
     };
 
-    // Keep the walk pointed at what the state wants: start one when the
-    // desire moves off the applied target, retarget a walk in flight from
-    // the exact point it has reached, drop it once it has arrived (#38).
-    *fade = match fade.take() {
-        Some(active) if active.destination() == desired => {
-            if active.done(now) {
-                None
-            } else {
-                Some(active)
-            }
-        }
-        Some(active) => active.retarget(desired, now),
-        None => Fade::toward(applied, desired, now),
-    };
+    // Keep the walk pointed at what the state wants (#38); with the switch
+    // off (#44) there is never a walk and every change lands whole.
+    *fade = crate::fade::advance(fade.take(), fade_enabled, applied, desired, now);
 
     let target = fade.as_ref().map_or(desired, |active| active.at(now));
     // One info line per transition, at arrival; the intermediate steps of a

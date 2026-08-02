@@ -25,6 +25,34 @@ pub(crate) const FADE_DURATION: Duration = Duration::from_millis(2000);
 /// 100 ms was visibly stepped on exactly that span.
 pub(crate) const FADE_TICK: Duration = Duration::from_millis(50);
 
+/// One wake's worth of fade bookkeeping: keeps the walk pointed at what the
+/// state wants. Starts one when the desire moves off the applied target,
+/// retargets a walk in flight from the exact point reached, drops it once
+/// arrived — and drops it flat when the switch (#44) is off, so the next
+/// write lands on the destination in one step.
+pub(crate) fn advance(
+    current: Option<Fade>,
+    enabled: bool,
+    applied: Target,
+    desired: Target,
+    now: Instant,
+) -> Option<Fade> {
+    if !enabled {
+        return None;
+    }
+    match current {
+        Some(active) if active.destination() == desired => {
+            if active.done(now) {
+                None
+            } else {
+                Some(active)
+            }
+        }
+        Some(active) => active.retarget(desired, now),
+        None => Fade::toward(applied, desired, now),
+    }
+}
+
 /// One fade in flight: from where, to where, since when.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Fade {
@@ -191,5 +219,35 @@ mod tests {
         let now = Instant::now();
         let fade = Fade::toward(NEUTRAL, WARM, now + Duration::from_secs(5)).unwrap();
         assert_eq!(fade.at(now), NEUTRAL);
+    }
+
+    /// The switch off (#44) means no walk ever starts and a walk in flight
+    /// dies on the next wake, so that write lands on the destination whole.
+    #[test]
+    fn the_switch_off_kills_walks_present_and_future() {
+        let now = Instant::now();
+        assert!(advance(None, false, NEUTRAL, WARM, now).is_none());
+        let inflight = Fade::toward(NEUTRAL, WARM, now);
+        let mid = now + FADE_DURATION / 2;
+        assert!(advance(inflight, false, NEUTRAL, WARM, mid).is_none());
+    }
+
+    /// With the switch on, advance is the same walk lifecycle the loop ran
+    /// before the switch existed: start, hold, retarget, arrive, drop.
+    #[test]
+    fn the_switch_on_runs_the_walk_lifecycle() {
+        let now = Instant::now();
+        let started = advance(None, true, NEUTRAL, WARM, now);
+        assert!(started.is_some());
+        let mid = now + FADE_DURATION / 2;
+        let held = advance(started, true, NEUTRAL, WARM, mid);
+        assert_eq!(held.unwrap().destination(), WARM);
+        let held = advance(held, true, NEUTRAL, WARM, mid);
+        let turned = advance(held, true, NEUTRAL, NEUTRAL, mid);
+        assert_eq!(turned.unwrap().destination(), NEUTRAL);
+        let arrived = advance(turned, true, NEUTRAL, NEUTRAL, mid + FADE_DURATION);
+        assert!(arrived.is_none());
+        // Applied equals desired and nothing in flight: nothing to walk.
+        assert!(advance(None, true, WARM, WARM, now).is_none());
     }
 }
