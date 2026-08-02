@@ -413,6 +413,11 @@ Keep all of these **out of v0.1.** Scope creep is what kills projects like this.
 - **Why:** X11 has a finite shelf life. But GNOME and KDE's Wayland sessions expose no such protocol, so there is nothing you can do there at all.
 - **Difficulty:** Hard
 - **Note:** Design it as a separate backend. Because `core` is already clean, this is only a new output layer — the Wayland equivalent of #10–#14.
+- **Design note (2026-08):** QRedshift compiles its wlr support as a
+  dlopen'd plugin so the X11 build links no Wayland libraries, and
+  picks its backend by checking the Wayland socket actually exists
+  rather than trusting the environment. Both choices are worth
+  copying; the second avoids gammastep's wrong-backend failure.
 
 ### #32 ICC colour profile compatibility
 
@@ -434,6 +439,11 @@ Keep all of these **out of v0.1.** Scope creep is what kills projects like this.
   v0.2 went to ramp shaping (GitHub #2) instead; the outputs tab now
   points here for v0.3.
 - **Difficulty:** Medium
+- **Design note (2026-08):** QRedshift 1.0 shipped exactly this, keyed
+  by RandR output XID and name rather than list position, so a target
+  survives replug and reboot. That is the right design and ours should
+  match it. Its pipelined XCB writes (batch the gets, batch the sets,
+  sync once) are the pattern for touching many CRTCs cheaply.
 
 ### #37 Brightness control
 
@@ -486,6 +496,39 @@ Keep all of these **out of v0.1.** Scope creep is what kills projects like this.
 - **Done when:** The pair round-trips through the config, an inverted
   pair degrades to the defaults quietly, and the TUI's schedule reflects
   the configured band.
+- **Difficulty:** Easy
+- **Target:** v0.3
+
+### #40 Verify the ramp on the tick
+
+- **What:** On each timer tick, read the live ramp and compare before
+  writing. Skip the write when nothing changed; rewrite when something
+  else wiped it. QRedshift calls this a smart delta write. For a
+  stateless tool it is the whole recovery story; for us it is a cheap
+  safety net under the RandR events (#13), catching any wipe that
+  fires no event.
+- **Why:** The events cover suspend, hotplug and resolution changes,
+  but nothing guarantees every driver reports every wipe. A poll that
+  only writes on difference costs one read per minute and turns the
+  worst case from "wiped until the next event" into "wiped for under
+  a minute".
+- **Done when:** `xrandr --gamma 1:1:1` by hand is corrected on the
+  next tick, and an unchanged minute produces no set call (visible at
+  debug log level).
+- **Difficulty:** Easy
+- **Target:** v0.3
+
+### #41 Temperatures past neutral
+
+- **What:** Raise the ceiling above 6500 K, bluish instead of warm, in
+  the config, the D-Bus door and the sliders. QRedshift accepts 25000;
+  redshift's table, which ours is ported from, runs to 25100. Core
+  already computes it (`MAX_TEMPERATURE` is 25000); only the interface
+  clamps say no.
+- **Why:** Some people run a cool screen by day and warm by night.
+  The maths is already paid for.
+- **Done when:** `day_temp = 8000` applies, survives a restart, and
+  every client shows and sets it.
 - **Difficulty:** Easy
 - **Target:** v0.3
 
