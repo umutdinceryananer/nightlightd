@@ -444,6 +444,12 @@ Keep all of these **out of v0.1.** Scope creep is what kills projects like this.
   survives replug and reboot. That is the right design and ours should
   match it. Its pipelined XCB writes (batch the gets, batch the sets,
   sync once) are the pattern for touching many CRTCs cheaply.
+- **Wire note (2026-08):** #44's fade switch reads through an additive
+  `GetFade` method so a patch release does not grow the pinned Status
+  signature. That is a parking spot, not an address. When this issue
+  reworks the wire anyway, fold `fade` into Status, retire the side
+  getter, and ship all four clients together. This line is the
+  promise; do not close #34 without honouring it.
 
 ### #37 Brightness control
 
@@ -577,6 +583,24 @@ that asked for it.
 - **Done when:** With the service stopped, the tray offers Start the
   daemon; clicking it brings the filter up within seconds and the
   menu returns to Turn on/off.
+- **Difficulty:** Easy
+- **Target:** v0.2.1
+
+### #44 A switch for the fade
+
+- **What:** `fade = true` in the config, default on; off means every
+  target change lands in one write, as before #38. Exposed in the
+  TUI's settings tab, the tray menu and the panel, through additive
+  `SetFade` and `GetFade` methods so the pinned Status signature does
+  not grow in a patch release (the consolidation promise lives under
+  #34). The import translates gammastep's own `fade` key, so a
+  hand-written `fade=0` arrives here still off.
+- **Why:** Asked for after a day of living with #38. redshift and
+  gammastep carry the same switch, so arriving users expect it, and
+  some people simply do not want animation.
+- **Done when:** Toggling from any interface changes the behaviour
+  live, survives a restart, and an imported gammastep config with
+  `fade=0` starts with it off.
 - **Difficulty:** Easy
 - **Target:** v0.2.1
 
