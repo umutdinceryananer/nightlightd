@@ -8,6 +8,7 @@
 //! time.
 
 pub mod color;
+pub mod fade;
 pub mod location;
 pub mod mode;
 pub mod solar;
