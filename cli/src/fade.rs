@@ -11,10 +11,6 @@
 //! (a busy machine, a slow X round trip) lands further along the same curve
 //! instead of stretching the fade.
 
-// Landed one slice ahead of the loop that drives it; the allow leaves with
-// the wiring (#38, next slice).
-#![allow(dead_code)]
-
 use std::time::{Duration, Instant};
 
 use nightlightd_core::fade::{blend_factor, blend_temperature, smoothstep};
@@ -24,8 +20,10 @@ use crate::x11::Target;
 /// How long a fade takes, start to settle.
 pub(crate) const FADE_DURATION: Duration = Duration::from_millis(2000);
 
-/// How often the loop should wake to advance an active fade.
-pub(crate) const FADE_TICK: Duration = Duration::from_millis(100);
+/// How often the loop should wake to advance an active fade. 50 ms keeps
+/// the biggest step of a full 6500-to-1500 walk under the eye's notice;
+/// 100 ms was visibly stepped on exactly that span.
+pub(crate) const FADE_TICK: Duration = Duration::from_millis(50);
 
 /// One fade in flight: from where, to where, since when.
 #[derive(Debug, Clone, Copy)]

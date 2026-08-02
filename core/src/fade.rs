@@ -6,20 +6,27 @@
 //! deliberately dumb — a position, not a schedule. Timing lives with the
 //! caller; the maths here must hold for any alpha it is handed.
 //!
-//! The walk is linear in each quantity and the easing is applied by the
-//! caller through [`smoothstep`], so the endpoints stay exact by
+//! The shaping factors walk linearly; the temperature walks in mired space
+//! so it *looks* linear (see [`blend_temperature`]). Easing is applied by
+//! the caller through [`smoothstep`], so the endpoints stay exact by
 //! construction: alpha 0 is bit-for-bit the old target, alpha 1 the new.
 
-/// A point on the straight line between two temperatures (kelvin).
+/// A point between two temperatures, walked in mired (1,000,000 / kelvin),
+/// the photographer's scale on which colour steps look evenly sized. Equal
+/// kelvin steps are perceptually tiny near neutral and huge near candle
+/// light; a linear kelvin walk therefore looks like it stalls and then
+/// lurches. Walked in mired, the same fade reads as one steady glide.
 ///
 /// Alpha outside 0..=1 clamps to the nearer endpoint; a non-finite alpha
 /// lands on `to` — mid-fade is the wrong place to be stranded by a broken
 /// clock, and the new target is where the fade was going anyway.
 pub fn blend_temperature(from: u32, to: u32, alpha: f64) -> u32 {
     let alpha = sane_alpha(alpha);
-    let from = f64::from(from);
-    let to = f64::from(to);
-    (from + alpha * (to - from)).round() as u32
+    // `max(1)` guards the division; real temperatures are four digits.
+    let from_mired = 1_000_000.0 / f64::from(from.max(1));
+    let to_mired = 1_000_000.0 / f64::from(to.max(1));
+    let mired = from_mired + alpha * (to_mired - from_mired);
+    (1_000_000.0 / mired).round() as u32
 }
 
 /// A point on the straight line between two shaping factors (gamma or
@@ -64,9 +71,21 @@ mod tests {
     }
 
     #[test]
-    fn midpoint_is_halfway() {
-        assert_eq!(blend_temperature(6500, 1500, 0.5), 4000);
+    fn factor_midpoint_is_halfway() {
         assert!(approx(blend_factor(0.8, 1.0, 0.5), 0.9));
+    }
+
+    /// The temperature midpoint sits halfway in mired, not in kelvin: for
+    /// 6500 to 1500 that is 2437.5 (warmer than the kelvin mean of 4000),
+    /// because a kelvin step near candle light looks far bigger than the
+    /// same step near neutral.
+    #[test]
+    fn temperature_midpoint_is_halfway_in_mired() {
+        let mid = blend_temperature(6500, 1500, 0.5);
+        assert!(mid == 2437 || mid == 2438, "got {mid}");
+        let mired = |k: u32| 1_000_000.0 / f64::from(k);
+        let want = (mired(6500) + mired(1500)) / 2.0;
+        assert!((mired(mid) - want).abs() < 0.2);
     }
 
     #[test]
