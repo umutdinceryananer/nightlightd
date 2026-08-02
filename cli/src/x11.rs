@@ -25,6 +25,7 @@ use x11rb::connection::Connection;
 use x11rb::protocol::Event;
 use x11rb::protocol::randr::{ConnectionExt as _, GetScreenResourcesReply, NotifyMask};
 
+use crate::fade::{FADE_TICK, Fade};
 use crate::state::{Shared, State, lock};
 use crate::waker::Waker;
 
@@ -120,7 +121,11 @@ pub fn daemon_loop(
     conn.randr_select_input(root, NotifyMask::SCREEN_CHANGE | NotifyMask::CRTC_CHANGE)?
         .check()?;
 
-    try_apply(&conn, root, state)?;
+    // The fade in flight, if any (#38). Owned by the loop: the daemon starts
+    // believing the screen neutral, so a night-time start eases in instead of
+    // snapping.
+    let mut fade: Option<Fade> = None;
+    try_apply(&conn, root, state, &mut fade)?;
 
     let mut last_tick = Instant::now();
     // While `Some(deadline)` and not yet past it, poll fast to overwrite a
@@ -131,7 +136,7 @@ pub fn daemon_loop(
         let settling = settle_until.is_some_and(|deadline| Instant::now() < deadline);
         if !wait_for_change(
             &[conn.stream().as_fd(), waker.as_fd()],
-            poll_timeout(tick_remaining, settling),
+            poll_timeout(tick_remaining, settling, fade.is_some()),
         )? {
             continue;
         }
@@ -143,13 +148,13 @@ pub fn daemon_loop(
         // before it is lost; it arms settling just like a screen change does.
         let woke_on_resume = resumed.swap(false, Ordering::Relaxed);
         let mut layout_changed = drain_screen_changes(&conn)?;
-        try_apply(&conn, root, state)?;
+        try_apply(&conn, root, state, &mut fade)?;
         // Events that raced in during our own round trips would otherwise wake
         // the loop again at once for a full extra pass; absorb them with one
         // bounded re-apply instead (never a loop — a storm settles on the tick).
         if drain_screen_changes(&conn)? {
             layout_changed = true;
-            try_apply(&conn, root, state)?;
+            try_apply(&conn, root, state, &mut fade)?;
         }
         // Arm (or re-arm) the settling window on any layout change or resume, so
         // a gamma reset landing seconds later is healed within ~1 s, not ~60 s.
@@ -163,15 +168,20 @@ pub fn daemon_loop(
     Ok(())
 }
 
-/// The poll timeout: the time left until the next tick, but capped at
+/// The poll timeout: the time left until the next tick, capped at
 /// [`SETTLE_INTERVAL`] while the layout is settling so a silent, eventless
-/// gamma reset is overwritten within a second.
-fn poll_timeout(tick_remaining: Duration, settling: bool) -> Duration {
+/// gamma reset is overwritten within a second, and capped harder at
+/// [`FADE_TICK`] while a fade is walking so it advances a few times a
+/// second (#38). Idle steady state stays the full tick, 0% CPU.
+fn poll_timeout(tick_remaining: Duration, settling: bool, fading: bool) -> Duration {
+    let mut timeout = tick_remaining;
     if settling {
-        tick_remaining.min(SETTLE_INTERVAL)
-    } else {
-        tick_remaining
+        timeout = timeout.min(SETTLE_INTERVAL);
     }
+    if fading {
+        timeout = timeout.min(FADE_TICK);
+    }
+    timeout
 }
 
 /// Applies, degrading quietly on per-request X errors: a CRTC can vanish
@@ -180,8 +190,13 @@ fn poll_timeout(tick_remaining: Duration, settling: bool) -> Duration {
 /// daemon — the next tick retries against fresh resources. Only the loss of
 /// the X connection itself is fatal, since nothing can be applied or restored
 /// without it.
-fn try_apply<C: Connection>(conn: &C, root: u32, state: &Shared) -> Result<(), Box<dyn Error>> {
-    match apply_desired(conn, root, state) {
+fn try_apply<C: Connection>(
+    conn: &C,
+    root: u32,
+    state: &Shared,
+    fade: &mut Option<Fade>,
+) -> Result<(), Box<dyn Error>> {
+    match apply_desired(conn, root, state, fade) {
         Ok(()) => Ok(()),
         Err(error) if is_connection_error(error.as_ref()) => Err(error),
         Err(error) => {
@@ -241,17 +256,47 @@ fn drain_screen_changes<C: Connection>(conn: &C) -> Result<bool, Box<dyn Error>>
 /// Applies the temperature the current state calls for, and records it — plus
 /// the outputs it landed on — back into the state (without holding the lock
 /// across the X writes).
-fn apply_desired<C: Connection>(conn: &C, root: u32, state: &Shared) -> Result<(), Box<dyn Error>> {
-    let (target, changed) = {
+fn apply_desired<C: Connection>(
+    conn: &C,
+    root: u32,
+    state: &Shared,
+    fade: &mut Option<Fade>,
+) -> Result<(), Box<dyn Error>> {
+    let now = Instant::now();
+    let (desired, applied) = {
         let mut state = lock(state);
-        let target = desired_target(&mut state);
-        let changed = target.kelvin != state.current_temp
-            || (target.brightness - state.current_brightness).abs() > 1e-9;
-        (target, changed)
+        let desired = desired_target(&mut state);
+        let applied = Target {
+            kelvin: state.current_temp,
+            gamma: state.current_gamma,
+            brightness: state.current_brightness,
+        };
+        (desired, applied)
     };
+
+    // Keep the walk pointed at what the state wants: start one when the
+    // desire moves off the applied target, retarget a walk in flight from
+    // the exact point it has reached, drop it once it has arrived (#38).
+    *fade = match fade.take() {
+        Some(active) if active.destination() == desired => {
+            if active.done(now) {
+                None
+            } else {
+                Some(active)
+            }
+        }
+        Some(active) => active.retarget(desired, now),
+        None => Fade::toward(applied, desired, now),
+    };
+
+    let target = fade.as_ref().map_or(desired, |active| active.at(now));
+    // One info line per transition, at arrival; the intermediate steps of a
+    // walk and the unchanged ticks stay at debug.
+    let changed = target != applied && fade.is_none();
     let crtcs = reapply(conn, root, target, changed)?;
     let mut state = lock(state);
     state.current_temp = target.kelvin;
+    state.current_gamma = target.gamma;
     state.current_brightness = target.brightness;
     state.outputs = crtcs.iter().map(|c| (c.crtc, c.gamma_size)).collect();
     Ok(())
@@ -417,13 +462,25 @@ mod tests {
     fn settling_caps_the_poll_timeout_but_never_extends_it() {
         let tick_remaining = Duration::from_secs(42);
         // Not settling: wait the full time left until the tick.
-        assert_eq!(poll_timeout(tick_remaining, false), tick_remaining);
+        assert_eq!(poll_timeout(tick_remaining, false, false), tick_remaining);
         // Settling: poll fast, capped at the settle interval.
-        assert_eq!(poll_timeout(tick_remaining, true), SETTLE_INTERVAL);
+        assert_eq!(poll_timeout(tick_remaining, true, false), SETTLE_INTERVAL);
         // Settling never lengthens a wait already shorter than the interval
         // (e.g. the tick is about to fire).
         let almost_due = Duration::from_millis(200);
-        assert_eq!(poll_timeout(almost_due, true), almost_due);
+        assert_eq!(poll_timeout(almost_due, true, false), almost_due);
+    }
+
+    /// A walking fade wakes the loop a few times a second, beats the settle
+    /// cap, and never extends a wait that is already shorter.
+    #[test]
+    fn fading_caps_the_poll_timeout_hardest() {
+        let tick_remaining = Duration::from_secs(42);
+        assert_eq!(poll_timeout(tick_remaining, false, true), FADE_TICK);
+        assert_eq!(poll_timeout(tick_remaining, true, true), FADE_TICK);
+        // Already due sooner than a fade step: keep the shorter wait.
+        let almost_due = Duration::from_millis(20);
+        assert_eq!(poll_timeout(almost_due, true, true), almost_due);
     }
 
     #[test]

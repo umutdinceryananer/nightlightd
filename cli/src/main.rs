@@ -152,6 +152,7 @@ fn run_daemon(no_reset: bool) {
         night_brightness: config.night_brightness,
         current_temp: x11::NEUTRAL_KELVIN,
         current_brightness: 1.0,
+        current_gamma: 1.0,
         location: None,
         outputs: Vec::new(),
     }));

@@ -42,6 +42,10 @@ pub struct State {
     /// The last brightness factor actually applied, for change detection and
     /// the status readout.
     pub current_brightness: f64,
+    /// The last gamma exponent actually applied. Differs from `gamma` (the
+    /// setting) only mid-fade (#38); the fade needs to know where the screen
+    /// is, not where it is headed. Not on the wire.
+    pub current_gamma: f64,
     /// The last successfully resolved location (automatic mode). The poll loop
     /// keeps it warm; `GetStatus` reads it instead of re-parsing zone.tab on
     /// every call, and a transient lookup failure reuses it instead of
