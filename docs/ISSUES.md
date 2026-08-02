@@ -555,6 +555,23 @@ Keep all of these **out of v0.1.** Scope creep is what kills projects like this.
 - **Difficulty:** Easy
 - **Target:** v0.2.1
 
+### #43 The tray should offer to start a stopped daemon
+
+- **What:** When nothing owns the bus name, the tray's menu still
+  shows Turn on, which sends a D-Bus call to nobody. In that state
+  the menu should offer "Start the daemon" instead, running
+  `systemctl --user start nightlightd` and falling back to spawning
+  `nightlightd --daemon` when the unit is not installed.
+- **Why:** Found minutes after #42, again by dogfooding: daemon
+  stopped during a test, the tray truthfully said so, and its only
+  offered action was inert. A thin client cannot be the daemon, but
+  it can ask systemd for one.
+- **Done when:** With the service stopped, the tray offers Start the
+  daemon; clicking it brings the filter up within seconds and the
+  menu returns to Turn on/off.
+- **Difficulty:** Easy
+- **Target:** v0.2.1
+
 ---
 
 ## Ordering summary
