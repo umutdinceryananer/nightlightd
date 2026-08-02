@@ -465,6 +465,14 @@ Keep all of these **out of v0.1.** Scope creep is what kills projects like this.
 
 ### #38 Fade between targets
 
+**Done.** Shipped in four slices ending 2026-08-02: pure blend maths in
+`core/fade.rs`, a time-based state machine in `cli/fade.rs`, the event
+loop wiring, then mired-space walking at a 50 ms tick after the first
+live test showed visible stepping on a 6500 to 1500 span. Retargeting
+mid walk continues from the point reached. Exit restore and resume
+repair stay single writes on purpose. Verified live on the machine
+that asked for it.
+
 - **What:** When the applied target changes by more than a small threshold
   (toggle, manual set, daemon start, resume), walk the ramp there over a
   few seconds of intermediate writes instead of one write. The event

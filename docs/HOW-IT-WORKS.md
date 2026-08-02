@@ -125,6 +125,30 @@ neutral table. Nothing here watches your screen to decide anything; the
 project's old promise that it will never do software auto-brightness is
 still in force, in `ISSUES.md` #37.
 
+### How a change lands on the screen
+
+Until v0.2.1 a new target hit the screen in a single write: toggle the
+filter at night and the whole room changed in one frame. Every reviewer
+of v0.2.0 noticed. Now the daemon walks there instead (#38): for about
+two seconds it rewrites the table a few times per second, each write a
+step along the way, and then goes back to sleep.
+
+Two details make the walk look right. The pace eases, slow at the ends
+and quicker in the middle, because a movement that starts and stops
+abruptly is exactly what the eye is wired to catch. And the temperature
+steps are taken on the mired scale (a million divided by the kelvin),
+the scale photographers use, because kelvin lies to the eye: a 500 K
+step near neutral is barely visible while the same step near candle
+light is a lurch. Walked in mired, the glide looks even the whole way
+down.
+
+Two places stay instant on purpose. Quitting restores a neutral screen
+in one write, because a daemon that animates its own death can be
+interrupted halfway and leave the screen warm with nobody left to fix
+it. And waking from suspend rewrites the ramp immediately, because that
+is a repair, not a transition: the screen was already supposed to be
+warm, and the promise there is speed.
+
 ---
 
 ## Part 3: How you know *when* to change it
