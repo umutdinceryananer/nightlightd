@@ -7,6 +7,7 @@
 mod client;
 mod config;
 mod dbus;
+mod fade;
 mod import;
 mod state;
 mod status;

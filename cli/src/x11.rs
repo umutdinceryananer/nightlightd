@@ -49,11 +49,11 @@ pub const NEUTRAL_KELVIN: u32 = 6500;
 /// Everything one ramp write needs (GitHub #2): the temperature plus the two
 /// shaping factors, derived together in one place so every path that touches
 /// the screen agrees on what it should show.
-#[derive(Clone, Copy, PartialEq)]
-struct Target {
-    kelvin: u32,
-    gamma: f64,
-    brightness: f64,
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Target {
+    pub(crate) kelvin: u32,
+    pub(crate) gamma: f64,
+    pub(crate) brightness: f64,
 }
 
 /// The screen a disabled filter leaves behind: fully neutral, factors and
