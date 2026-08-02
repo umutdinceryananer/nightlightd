@@ -26,7 +26,7 @@ use tracing_subscriber::EnvFilter;
 /// Screen colour temperature daemon for X11.
 #[derive(Parser)]
 #[command(name = "nightlightd", version, about)]
-#[command(group(ArgGroup::new("action").args(["temp", "toggle", "on", "off", "auto", "gamma", "brightness", "status"])))]
+#[command(group(ArgGroup::new("action").args(["temp", "toggle", "on", "off", "auto", "gamma", "brightness", "fade", "status"])))]
 struct Cli {
     /// Run the daemon: follow the sun continuously.
     #[arg(long, conflicts_with = "action")]
@@ -56,6 +56,9 @@ struct Cli {
     /// DAY:NIGHT to dim with the sun (client).
     #[arg(long, value_name = "DAY:NIGHT")]
     brightness: Option<String>,
+    /// Ease target changes over a couple of seconds: on or off (client).
+    #[arg(long, value_name = "ON|OFF")]
+    fade: Option<String>,
     /// Print the daemon's status (client).
     #[arg(long)]
     status: bool,
@@ -97,10 +100,28 @@ fn client_request(cli: &Cli) -> Option<client::Request> {
                 std::process::exit(2);
             }
         }
+    } else if let Some(fade) = cli.fade.as_deref() {
+        match parse_fade(fade) {
+            Some(fade) => Some(client::Request::SetFade(fade)),
+            None => {
+                eprintln!("nightlightd: --fade wants on or off");
+                std::process::exit(2);
+            }
+        }
     } else if cli.status {
         Some(client::Request::Status)
     } else {
         None
+    }
+}
+
+/// Parses the `--fade` value. Returns `None` on nonsense so the caller can
+/// print a usage hint instead of sending garbage to the daemon.
+fn parse_fade(text: &str) -> Option<bool> {
+    match text.trim().to_ascii_lowercase().as_str() {
+        "on" => Some(true),
+        "off" => Some(false),
+        _ => None,
     }
 }
 
@@ -259,6 +280,22 @@ mod tests {
         let cli = Cli::try_parse_from(["nightlightd", "--temp", "2800"]).unwrap();
         assert_eq!(cli.temp, Some(2800));
         assert!(!cli.daemon);
+    }
+
+    #[test]
+    fn fade_flag_parses_and_excludes_other_actions() {
+        let cli = Cli::try_parse_from(["nightlightd", "--fade", "off"]).unwrap();
+        assert_eq!(cli.fade.as_deref(), Some("off"));
+        assert!(Cli::try_parse_from(["nightlightd", "--fade", "on", "--temp", "2800"]).is_err());
+    }
+
+    #[test]
+    fn fade_values_parse_generously_but_not_infinitely() {
+        assert_eq!(parse_fade("on"), Some(true));
+        assert_eq!(parse_fade(" OFF "), Some(false));
+        assert_eq!(parse_fade("On"), Some(true));
+        assert_eq!(parse_fade("maybe"), None);
+        assert_eq!(parse_fade(""), None);
     }
 
     #[test]

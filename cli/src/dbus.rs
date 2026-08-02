@@ -99,6 +99,25 @@ impl Daemon {
     /// Set the gamma exponent (GitHub #2), constant across the day, then
     /// persist and re-apply. Clamped into core's sane range; a value that is
     /// not a finite number is ignored rather than trusted.
+    /// Turn the fade walk (#44) on or off, then persist. Off means the next
+    /// target change lands in one write; a walk in flight completes on the
+    /// wake this triggers.
+    fn set_fade(&self, fade: bool) {
+        {
+            let mut state = lock(&self.state);
+            state.fade = fade;
+        }
+        persist(&self.state);
+        self.waker.wake();
+    }
+
+    /// Whether the fade walk is on. An additive method, not a Status field,
+    /// so the pinned wire signature survives a patch release — the
+    /// consolidation promise is recorded under #34 in ISSUES.md.
+    fn get_fade(&self) -> bool {
+        lock(&self.state).fade
+    }
+
     fn set_gamma(&self, gamma: f64) {
         {
             let mut state = lock(&self.state);

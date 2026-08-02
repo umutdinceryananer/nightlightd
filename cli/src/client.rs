@@ -19,6 +19,8 @@ trait Daemon {
     fn toggle(&self) -> zbus::Result<()>;
     fn set_mode(&self, mode: &str) -> zbus::Result<()>;
     fn set_gamma(&self, gamma: f64) -> zbus::Result<()>;
+    fn set_fade(&self, fade: bool) -> zbus::Result<()>;
+    fn get_fade(&self) -> zbus::Result<bool>;
     fn set_brightness(&self, day: f64, night: f64) -> zbus::Result<()>;
     fn get_status(&self) -> zbus::Result<Status>;
 }
@@ -37,6 +39,8 @@ pub enum Request {
     SetGamma(f64),
     /// Set the day and night brightness bounds (GitHub #2).
     SetBrightness(f64, f64),
+    /// Turn the fade walk on or off (#44).
+    SetFade(bool),
     /// Print the daemon's status.
     Status,
 }
@@ -52,8 +56,12 @@ pub fn send(request: Request) -> zbus::Result<()> {
         Request::Auto => proxy.set_mode("auto"),
         Request::SetGamma(gamma) => proxy.set_gamma(gamma),
         Request::SetBrightness(day, night) => proxy.set_brightness(day, night),
+        Request::SetFade(fade) => proxy.set_fade(fade),
         Request::Status => {
-            print_status(&proxy.get_status()?);
+            // A daemon too old to know GetFade means the fade is not there
+            // to report; defaulting to "on" keeps the line silent.
+            let fade = proxy.get_fade().unwrap_or(true);
+            print_status(&proxy.get_status()?, fade);
             Ok(())
         }
     }
@@ -61,7 +69,7 @@ pub fn send(request: Request) -> zbus::Result<()> {
 
 /// Prints the daemon snapshot: the headline on the first line, then the details
 /// worth eyeballing indented under it.
-fn print_status(status: &Status) {
+fn print_status(status: &Status, fade: bool) {
     let onoff = if status.enabled { "on" } else { "off" };
     println!("nightlightd: {onoff}, {} K", status.temperature);
     println!("  source: {}", status.source);
@@ -71,6 +79,10 @@ fn print_status(status: &Status) {
             "  ramp:   gamma {:.2}, brightness {:.2} (day {:.2} / night {:.2})",
             status.gamma, status.brightness, status.day_brightness, status.night_brightness
         );
+    }
+    // Same rule as the ramp line: the default earns no ink.
+    if !fade {
+        println!("  fade:   off");
     }
     if status.has_location {
         println!(
