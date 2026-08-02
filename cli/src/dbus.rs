@@ -243,6 +243,7 @@ fn persist(state: &Shared) {
             gamma: state.gamma,
             day_brightness: state.day_brightness,
             night_brightness: state.night_brightness,
+            fade: state.fade,
             latitude,
             longitude,
         }
@@ -307,6 +308,7 @@ mod tests {
             current_temp: 6500,
             current_brightness: 1.0,
             current_gamma: 1.0,
+            fade: true,
             location: None,
             outputs: Vec::new(),
         }

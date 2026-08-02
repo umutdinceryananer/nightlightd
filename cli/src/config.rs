@@ -28,6 +28,10 @@ pub struct Config {
     /// Brightness factor at full night. The screen eases between the two
     /// factors on the same solar curve as the temperature.
     pub night_brightness: f64,
+    /// Whether a target change eases onto the screen over a couple of
+    /// seconds (#44). Off means every change lands in one write, the
+    /// behaviour redshift's own `fade=0` selects.
+    pub fade: bool,
     /// Manual latitude in degrees; pins the location instead of the timezone.
     /// Omitted from the written file when absent (TOML has no null).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -45,6 +49,7 @@ impl Default for Config {
             gamma: 1.0,
             day_brightness: 1.0,
             night_brightness: 1.0,
+            fade: true,
             latitude: None,
             longitude: None,
         }
@@ -215,6 +220,18 @@ mod tests {
         assert_eq!(config.gamma, 1.0);
         assert_eq!(config.day_brightness, 1.0);
         assert_eq!(config.night_brightness, 1.0);
+    }
+
+    /// The fade ships on (#44); a hand-written `fade = false` parses and
+    /// survives a save round trip, so a persist never turns it back on.
+    #[test]
+    fn the_fade_defaults_on_and_off_round_trips() {
+        assert!(Config::default().fade);
+        let config: Config = toml::from_str("fade = false").unwrap();
+        assert!(!config.fade);
+        let text = toml::to_string(&config).unwrap();
+        let back: Config = toml::from_str(&text).unwrap();
+        assert!(!back.fade);
     }
 
     #[test]

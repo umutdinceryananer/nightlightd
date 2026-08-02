@@ -93,6 +93,14 @@ fn translate(text: &str) -> Option<Config> {
                     imported = true;
                 }
             }
+            ("general", "fade") => {
+                // gammastep and redshift use 0/1 here (#44). Anything else
+                // is not understood and contributes nothing.
+                if value == "0" || value == "1" {
+                    config.fade = value == "1";
+                    imported = true;
+                }
+            }
             ("manual", "lat") => lat = value.parse().ok(),
             ("manual", "lon") => lon = value.parse().ok(),
             _ => {}
@@ -163,6 +171,18 @@ location-provider=geoclue2
     #[test]
     fn a_lone_coordinate_does_not_count() {
         assert!(translate("[manual]\nlat=41.0\n").is_none());
+    }
+
+    /// A gammastep user who turned the fade off arrives here with it off;
+    /// one who left it on, or never mentioned it, gets our default.
+    #[test]
+    fn the_fade_switch_translates() {
+        let off = translate("[general]\nfade=0\n").unwrap();
+        assert!(!off.fade);
+        let on = translate("[general]\nfade=1\n").unwrap();
+        assert!(on.fade);
+        // Not understood: contributes nothing, alone it is no import.
+        assert!(translate("[general]\nfade=maybe\n").is_none());
     }
 
     #[test]

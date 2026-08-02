@@ -46,6 +46,10 @@ pub struct State {
     /// setting) only mid-fade (#38); the fade needs to know where the screen
     /// is, not where it is headed. Not on the wire.
     pub current_gamma: f64,
+    /// Whether target changes ease onto the screen (#44). Read through the
+    /// additive `GetFade`, not `GetStatus` — the consolidation promise is
+    /// recorded under #34 in ISSUES.md.
+    pub fade: bool,
     /// The last successfully resolved location (automatic mode). The poll loop
     /// keeps it warm; `GetStatus` reads it instead of re-parsing zone.tab on
     /// every call, and a transient lookup failure reuses it instead of

@@ -153,6 +153,7 @@ fn run_daemon(no_reset: bool) {
         current_temp: x11::NEUTRAL_KELVIN,
         current_brightness: 1.0,
         current_gamma: 1.0,
+        fade: config.fade,
         location: None,
         outputs: Vec::new(),
     }));
