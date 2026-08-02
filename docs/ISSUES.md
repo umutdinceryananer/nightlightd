@@ -532,6 +532,29 @@ Keep all of these **out of v0.1.** Scope creep is what kills projects like this.
 - **Difficulty:** Easy
 - **Target:** v0.3
 
+### #42 A version mismatch must not impersonate a stopped daemon
+
+- **What:** When `GetStatus` fails to deserialize, every client falls
+  into its "daemon not running" state. The tray then shows the
+  disabled icon while the screen is visibly warm, and its menu offers
+  Turn on, which sends `set_enabled` to a daemon that is already on
+  and so appears dead. On the failure path, ask the bus whether
+  `org.nightlightd.Daemon` has an owner. Owned but unreadable means
+  this client and the daemon are different versions; the tooltip and
+  the TUI banner should say so, and say the fix, update them together.
+- **Why:** Found by dogfooding on 2026-08-01. A source install had
+  updated the daemon and the TUI but left the tray weeks behind; the
+  status format grew in v0.2.0 and the stale tray reported the daemon
+  as off. Packages carry all four binaries together, but a running
+  session keeps its old client processes in memory until the next
+  login, so every wire-growing upgrade opens the same window for
+  every user.
+- **Done when:** An old tray against a new daemon shows a mismatch
+  message instead of "daemon not running", and the panel and the TUI
+  do the same.
+- **Difficulty:** Easy
+- **Target:** v0.2.1
+
 ---
 
 ## Ordering summary
