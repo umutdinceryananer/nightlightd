@@ -88,7 +88,7 @@ night_brightness = 0.9 # dim to 90% at night, easing with the sun
 
 Gamma and brightness ride the same gamma ramp write as the colour, so they cost nothing extra and reset with it. Nothing is adaptive. No screen sampling, no backlight control, by design.
 
-Every change of target, a toggle, a manual set, the daemon starting at night, eases onto the screen over about two seconds rather than landing in one frame. The walk is taken on the mired scale, so the glide looks even to the eye the whole way down.
+Every change of target, a toggle, a manual set, the daemon starting at night, eases onto the screen over about two seconds rather than landing in one frame. The walk is taken on the mired scale, so the glide looks even to the eye the whole way down. `fade = false` in the config, or the same toggle in any interface, turns it off.
 
 ---
 

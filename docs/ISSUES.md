@@ -588,6 +588,13 @@ that asked for it.
 
 ### #44 A switch for the fade
 
+**Done.** Shipped 2026-08-03 in four slices: config/state/import, the
+additive `SetFade`/`GetFade` pair plus `--fade on|off`, the loop
+honouring the switch (a walk in flight dies on the next wake), and
+the three interfaces, each hiding the control against a daemon that
+cannot answer for it. Verified live: instant with it off, eased with
+it on, one surface's toggle following in the others within a poll.
+
 - **What:** `fade = true` in the config, default on; off means every
   target change lands in one write, as before #38. Exposed in the
   TUI's settings tab, the tray menu and the panel, through additive

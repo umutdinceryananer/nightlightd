@@ -149,6 +149,12 @@ it. And waking from suspend rewrites the ramp immediately, because that
 is a repair, not a transition: the screen was already supposed to be
 warm, and the promise there is speed.
 
+The walk itself has a switch (#44): `fade = false` in the config, or
+the same toggle in any of the three interfaces, and every change lands
+in one write again. redshift's config carried the same `fade` key, so
+the importer translates it, and a user who had turned it off there
+arrives here with it off.
+
 ---
 
 ## Part 3: How you know *when* to change it
