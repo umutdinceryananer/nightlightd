@@ -73,6 +73,11 @@ struct Panel {
     /// while interacting; polling on a timer keeps that from becoming a
     /// blocking D-Bus round trip per frame. `None` forces a fresh read.
     status: Option<Status>,
+    /// The fade switch (#44), read through the additive `GetFade`; `None`
+    /// against a daemon that is unreachable or too old to answer, and then
+    /// the checkbox does not show. Not part of "Revert changes" — it is a
+    /// behaviour switch, not a session's slider fiddling.
+    fade: Option<bool>,
     last_poll: Option<Instant>,
     /// The day/night bounds as the daemon last reported them, plus whether a
     /// bound slider is mid-drag — so a change made elsewhere (another client, a
@@ -115,6 +120,7 @@ impl eframe::App for Panel {
             .is_none_or(|t| t.elapsed() >= Duration::from_secs(1))
         {
             self.status = self.client.status();
+            self.fade = self.client.fade();
             self.last_poll = Some(Instant::now());
         }
         let status = self.status.clone();
@@ -338,6 +344,17 @@ impl eframe::App for Panel {
         ui.add_space(8.0);
         ui.separator();
         ui.add_space(4.0);
+        // The fade switch (#44) shows only when the daemon can answer for it;
+        // sent optimistically, the next poll confirms.
+        if let Some(fade) = self.fade {
+            let mut checked = fade;
+            if ui.checkbox(&mut checked, "Fade transitions").changed() {
+                self.client.set_fade(checked);
+                self.fade = Some(checked);
+                self.last_poll = None;
+            }
+            ui.add_space(4.0);
+        }
         // Enables/disables the daemon's systemd user service, then re-reads the
         // real state — if systemctl failed (unit not installed), the box must
         // snap back instead of showing a success that never happened.
@@ -429,6 +446,7 @@ fn main() -> eframe::Result<()> {
                 offset_secs: local_offset_seconds(),
                 focus: Arc::clone(&focus),
                 status: None,
+                fade: None,
                 last_poll: None,
                 daemon_day: 6500,
                 daemon_night: 4500,

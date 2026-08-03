@@ -47,6 +47,8 @@ trait Daemon {
     fn set_night_temp(&self, kelvin: u32) -> zbus::Result<()>;
     fn set_gamma(&self, gamma: f64) -> zbus::Result<()>;
     fn set_brightness(&self, day: f64, night: f64) -> zbus::Result<()>;
+    fn set_fade(&self, fade: bool) -> zbus::Result<()>;
+    fn get_fade(&self) -> zbus::Result<bool>;
     fn set_location(&self, latitude: f64, longitude: f64) -> zbus::Result<()>;
     fn clear_location(&self) -> zbus::Result<()>;
     fn get_outputs(&self) -> zbus::Result<Vec<(u32, u16)>>;
@@ -104,6 +106,18 @@ impl Client {
     /// Sets the brightness bounds; the daemon clamps and persists them.
     pub fn set_brightness(&self, day: f64, night: f64) {
         let _ = self.proxy.set_brightness(day, night);
+    }
+
+    /// Turns the fade walk (#44) on or off; the daemon persists it.
+    pub fn set_fade(&self, fade: bool) {
+        let _ = self.proxy.set_fade(fade);
+    }
+
+    /// Whether the fade walk is on, or `None` when the daemon is unreachable
+    /// or predates `GetFade` — the settings row then shows a dash and the
+    /// toggle does nothing.
+    pub fn fade(&self) -> Option<bool> {
+        self.proxy.get_fade().ok()
     }
 
     /// Pins a manual location (degrees); the daemon clamps and persists it.

@@ -71,9 +71,9 @@ const DEMO_SCRIPT: &[(f64, KeyCode, &str)] = &[
 const TABS: &[&str] = &["now", "today", "location", "outputs", "settings"];
 const LOCATION_TAB: usize = 2;
 /// The settings tab's index and its selectable rows: day, night, gamma,
-/// night dim, theme, login.
+/// night dim, fade, theme, login.
 const SETTINGS_TAB: usize = 4;
-const SETTINGS_ITEMS: usize = 6;
+const SETTINGS_ITEMS: usize = 7;
 
 /// The gamma slider's on-screen band. Core accepts 0.1 to 10, but a slider
 /// spanning that would bury the useful calibration range in its first
@@ -99,6 +99,9 @@ const MAP_LAT_MAX: f64 = 75.0;
 struct App {
     client: Client,
     status: Option<Status>,
+    /// The fade switch (#44), read through the additive `GetFade`; `None`
+    /// against a daemon that is unreachable or too old to answer.
+    fade: Option<bool>,
     last_poll: Option<Instant>,
     offset_secs: i32,
     theme_index: usize,
@@ -186,6 +189,7 @@ fn main() -> io::Result<()> {
     let mut app = App {
         client,
         status: None,
+        fade: None,
         last_poll: None,
         offset_secs: local_offset_seconds(),
         theme_index,
@@ -272,6 +276,7 @@ impl App {
             if poll_due {
                 self.status = self.client.status();
                 self.outputs = self.client.outputs();
+                self.fade = self.client.fade();
                 self.last_poll = Some(Instant::now());
             }
             // The demo clock rewrites the snapshot every frame, so it runs
@@ -417,8 +422,9 @@ impl App {
             }
             KeyCode::Left | KeyCode::Right => self.adjust_setting(code == KeyCode::Right),
             KeyCode::Enter | KeyCode::Char(' ') => match self.settings_selected {
-                4 => self.theme_popup = Some(self.theme_index),
-                5 => self.toggle_login(),
+                4 => self.toggle_fade(),
+                5 => self.theme_popup = Some(self.theme_index),
+                6 => self.toggle_login(),
                 _ => {}
             },
             _ => {}
@@ -471,7 +477,8 @@ impl App {
                     self.last_poll = None;
                 }
             }
-            4 => {
+            4 => self.toggle_fade(),
+            5 => {
                 let count = THEMES.len();
                 self.theme_index = if increase {
                     (self.theme_index + 1) % count
@@ -479,8 +486,19 @@ impl App {
                     (self.theme_index + count - 1) % count
                 };
             }
-            5 => self.toggle_login(),
+            6 => self.toggle_login(),
             _ => {}
+        }
+    }
+
+    /// Flips the fade walk (#44), optimistically so the row answers the key
+    /// at once; the next poll confirms. A dash row (daemon unreachable or
+    /// pre-0.2.1) has nothing to flip.
+    fn toggle_fade(&mut self) {
+        if let Some(fade) = self.fade {
+            self.client.set_fade(!fade);
+            self.fade = Some(!fade);
+            self.last_poll = None;
         }
     }
 
@@ -927,31 +945,6 @@ impl App {
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
-        // Credit where credit is due: the official logo, bottom-right, with
-        // air between it and the card's edge.
-        if inner.width > 40 && inner.height > 8 {
-            let logo_area = Rect {
-                x: inner.right().saturating_sub(18),
-                y: inner.bottom().saturating_sub(3),
-                width: 15,
-                height: 2,
-            };
-            frame.render_widget(RatatuiLogo::tiny(), logo_area);
-            frame.render_widget(
-                Paragraph::new(Line::from(Span::styled(
-                    "powered by",
-                    Style::default().fg(pal.faint),
-                )))
-                .alignment(Alignment::Right),
-                Rect {
-                    x: inner.x,
-                    y: inner.bottom().saturating_sub(4),
-                    width: inner.width.saturating_sub(3),
-                    height: 1,
-                },
-            );
-        }
-
         let value = |v: Option<String>| v.unwrap_or_else(|| "—".into());
         let day = value(self.status.as_ref().map(|s| format!("{} K", s.day_temp)));
         let night = value(self.status.as_ref().map(|s| format!("{} K", s.night_temp)));
@@ -980,6 +973,16 @@ impl App {
             ("nighttime", night, "‹ › adjust", night_rail),
             ("gamma", gamma, "‹ › adjust", gamma_rail),
             ("night dim", dim, "‹ › adjust", dim_rail),
+            (
+                "fade",
+                match self.fade {
+                    Some(true) => "[x] on".to_string(),
+                    Some(false) => "[ ] off".to_string(),
+                    None => "—".to_string(),
+                },
+                "⏎ toggle",
+                None,
+            ),
             (
                 "theme",
                 THEMES[self.theme_index].name.to_string(),
@@ -1028,7 +1031,56 @@ impl App {
             "         day & night changes persist there automatically",
             Style::default().fg(pal.faint),
         )));
+        let content_rows = lines.len() as u16;
         frame.render_widget(Paragraph::new(lines), inner);
+
+        // Credit where credit is due, sized to the room the content leaves:
+        // the official two-row logo when it fits clear of the text, one line
+        // of plain words when the card is short, nothing when there is no
+        // room at all. Never clipped — a half-eaten logo credits nobody.
+        let room = inner.height.saturating_sub(content_rows);
+        if inner.width > 40 && room >= 4 {
+            let logo_area = Rect {
+                x: inner.right().saturating_sub(18),
+                y: inner.bottom().saturating_sub(3),
+                width: 15,
+                height: 2,
+            };
+            frame.render_widget(RatatuiLogo::tiny(), logo_area);
+            // The logo widget carries no style of its own; painting the area
+            // afterwards lifts it to legible-but-secondary, the same tier as
+            // the map's coastlines.
+            frame
+                .buffer_mut()
+                .set_style(logo_area, Style::default().fg(pal.muted));
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    "powered by",
+                    Style::default().fg(pal.muted),
+                )))
+                .alignment(Alignment::Right),
+                Rect {
+                    x: inner.x,
+                    y: inner.bottom().saturating_sub(4),
+                    width: inner.width.saturating_sub(3),
+                    height: 1,
+                },
+            );
+        } else if inner.width > 30 && room >= 1 {
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    "powered by ratatui",
+                    Style::default().fg(pal.muted),
+                )))
+                .alignment(Alignment::Right),
+                Rect {
+                    x: inner.x,
+                    y: inner.bottom().saturating_sub(1),
+                    width: inner.width.saturating_sub(3),
+                    height: 1,
+                },
+            );
+        }
 
         // The temperature rows carry a real slider (tui-slider) on the row
         // reserved beneath each — the segmented ▰▱ style, no thumb: filled to
@@ -1783,6 +1835,9 @@ impl App {
         let Some(hour) = self.demo_hour() else {
             return;
         };
+        // The demo has no daemon to ask, and the reel should show the
+        // default, not a dash.
+        self.fade = Some(true);
         let mut status = self
             .status
             .take()

@@ -28,12 +28,24 @@ const REFRESH: Duration = Duration::from_secs(5);
 struct NightLight {
     client: Client,
     status: Option<Status>,
+    /// Whether the fade walk (#44) is on; `None` against a daemon that is
+    /// unreachable or predates `GetFade`, and then no menu item shows.
+    fade: Option<bool>,
 }
 
 impl NightLight {
     /// Re-reads the daemon and stores the result (`None` when unreachable).
     fn refresh(&mut self) {
         self.status = self.client.status();
+        self.fade = self.client.fade();
+    }
+
+    /// Flips the fade walk, optimistically so the checkmark answers the
+    /// click at once; the refresh confirms.
+    fn set_fade(&mut self, fade: bool) {
+        self.client.set_fade(fade);
+        self.fade = Some(fade);
+        self.refresh();
     }
 
     /// Toggles the filter, then refreshes so the icon and tooltip update at
@@ -127,7 +139,7 @@ impl ksni::Tray for NightLight {
         // The item promises a direction, so send that direction — a blind
         // Toggle against status gone stale would do the opposite of the label.
         let turn_on = !on;
-        vec![
+        let mut items: Vec<MenuItem<Self>> = vec![
             StandardItem {
                 label: if turn_on { "Turn on" } else { "Turn off" }.into(),
                 activate: Box::new(move |this: &mut Self| this.set_enabled(turn_on)),
@@ -141,6 +153,21 @@ impl ksni::Tray for NightLight {
                 ..Default::default()
             }
             .into(),
+        ];
+        // The fade switch (#44) earns an item only when the daemon can
+        // answer for it; a checkbox nobody reads behind would lie.
+        if let Some(fade) = self.fade {
+            items.push(
+                CheckmarkItem {
+                    label: "Fade transitions".into(),
+                    checked: fade,
+                    activate: Box::new(move |this: &mut Self| this.set_fade(!fade)),
+                    ..Default::default()
+                }
+                .into(),
+            );
+        }
+        items.extend([
             StandardItem {
                 label: "Settings…".into(),
                 activate: Box::new(|_| open_panel()),
@@ -155,7 +182,8 @@ impl ksni::Tray for NightLight {
                 ..Default::default()
             }
             .into(),
-        ]
+        ]);
+        items
     }
 }
 
@@ -201,14 +229,19 @@ fn main() {
     }
 
     let status = client.status();
+    let fade = client.fade();
     // `assume_sni_available(true)`: at login the tray autostarts before the
     // panel's StatusNotifierWatcher exists, so a plain spawn() fails on the
     // missing watcher and the icon never appears (confirmed in
     // ~/.xsession-errors). With this, ksni treats the absent watcher as a soft
     // error and registers the icon once the panel's tray comes online.
-    let handle = match (NightLight { client, status })
-        .assume_sni_available(true)
-        .spawn()
+    let handle = match (NightLight {
+        client,
+        status,
+        fade,
+    })
+    .assume_sni_available(true)
+    .spawn()
     {
         Ok(handle) => handle,
         Err(error) => {

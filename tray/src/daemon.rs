@@ -78,6 +78,8 @@ trait Daemon {
     fn set_enabled(&self, enabled: bool) -> zbus::Result<()>;
     fn set_temperature(&self, kelvin: u32) -> zbus::Result<()>;
     fn set_mode(&self, mode: &str) -> zbus::Result<()>;
+    fn set_fade(&self, fade: bool) -> zbus::Result<()>;
+    fn get_fade(&self) -> zbus::Result<bool>;
 }
 
 /// A live handle to the daemon: the session-bus connection plus a proxy.
@@ -130,6 +132,18 @@ impl Client {
     /// and turns the filter on itself, so one call carries the whole intent.
     pub fn follow_the_sun(&self) {
         let _ = self.proxy.set_mode("auto");
+    }
+
+    /// Turns the fade walk (#44) on or off. Errors swallowed.
+    pub fn set_fade(&self, fade: bool) {
+        let _ = self.proxy.set_fade(fade);
+    }
+
+    /// Whether the fade walk is on, or `None` when the daemon is unreachable
+    /// or too old to know `GetFade` — the caller then shows no fade item at
+    /// all rather than a checkbox that lies.
+    pub fn fade(&self) -> Option<bool> {
+        self.proxy.get_fade().ok()
     }
 
     /// Pins `kelvin`, freezing the screen there and leaving the sun — what
