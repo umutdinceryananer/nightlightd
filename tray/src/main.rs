@@ -62,6 +62,22 @@ impl NightLight {
         self.refresh();
     }
 
+    /// Brings a stopped daemon up (#43). systemd first, so the usual case
+    /// lands in the supervised unit; when that fails (no unit installed, a
+    /// tarball setup), the daemon binary next to this one is spawned
+    /// directly. A thin client cannot be the daemon, but it can ask for one.
+    fn start_daemon(&mut self) {
+        let unit = std::process::Command::new("systemctl")
+            .args(["--user", "start", "nightlightd"])
+            .status();
+        if !unit.is_ok_and(|status| status.success()) {
+            let _ = std::process::Command::new(sibling("nightlightd"))
+                .arg("--daemon")
+                .spawn();
+        }
+        self.refresh();
+    }
+
     /// Flips the fade walk, optimistically so the checkmark answers the
     /// click at once; the refresh confirms.
     fn set_fade(&mut self, fade: bool) {
@@ -139,8 +155,13 @@ impl ksni::Tray for NightLight {
     }
 
     /// Left click toggles the filter — the one action people want most.
+    /// With no daemon to toggle, the click starts one instead (#43).
     fn activate(&mut self, _x: i32, _y: i32) {
-        self.toggle();
+        if self.status.is_none() && !self.mismatch {
+            self.start_daemon();
+        } else {
+            self.toggle();
+        }
     }
 
     /// The hover text: the tray's version of `--status`.
@@ -163,6 +184,33 @@ impl ksni::Tray for NightLight {
     /// Right click: toggle, return to the sun, and quit. The toggle label
     /// reflects the current state so it reads as an action, not a question.
     fn menu(&self) -> Vec<MenuItem<Self>> {
+        // No daemon on the bus at all (#43): every filter action would be a
+        // call to nobody, so the menu offers the one thing that helps.
+        if self.status.is_none() && !self.mismatch {
+            return vec![
+                StandardItem {
+                    label: "Start the daemon".into(),
+                    activate: Box::new(|this: &mut Self| this.start_daemon()),
+                    ..Default::default()
+                }
+                .into(),
+                StandardItem {
+                    label: "Settings…".into(),
+                    activate: Box::new(|_| open_panel()),
+                    ..Default::default()
+                }
+                .into(),
+                MenuItem::Separator,
+                StandardItem {
+                    label: "Quit".into(),
+                    icon_name: "application-exit".into(),
+                    activate: Box::new(|_| std::process::exit(0)),
+                    ..Default::default()
+                }
+                .into(),
+            ];
+        }
+
         let on = self.status.as_ref().is_some_and(|status| status.enabled);
         // The item promises a direction, so send that direction — a blind
         // Toggle against status gone stale would do the opposite of the label.
@@ -251,18 +299,22 @@ fn relaunch_once() {
         .exec();
 }
 
-/// Launches the settings panel. Looks for `nightlight-panel` next to this
-/// binary first (they install together, so this survives an autostart PATH that
-/// lacks `~/.cargo/bin`), and only uses that path if it actually exists —
-/// otherwise the PATH lookup gets a real chance instead of being dead code.
-/// Errors are swallowed — a failed launch must not take the tray down.
-fn open_panel() {
-    let beside_us = std::env::current_exe()
+/// The named sibling binary when it exists next to this one (the four
+/// install together, which survives an autostart PATH that lacks
+/// `~/.cargo/bin`), otherwise the bare name so the PATH lookup gets a real
+/// chance instead of being dead code.
+fn sibling(name: &str) -> std::path::PathBuf {
+    std::env::current_exe()
         .ok()
-        .and_then(|exe| exe.parent().map(|dir| dir.join("nightlight-panel")))
-        .filter(|path| path.exists());
-    let panel = beside_us.unwrap_or_else(|| std::path::PathBuf::from("nightlight-panel"));
-    let _ = std::process::Command::new(panel).spawn();
+        .and_then(|exe| exe.parent().map(|dir| dir.join(name)))
+        .filter(|path| path.exists())
+        .unwrap_or_else(|| std::path::PathBuf::from(name))
+}
+
+/// Launches the settings panel. Errors are swallowed — a failed launch must
+/// not take the tray down.
+fn open_panel() {
+    let _ = std::process::Command::new(sibling("nightlight-panel")).spawn();
 }
 
 fn main() {
