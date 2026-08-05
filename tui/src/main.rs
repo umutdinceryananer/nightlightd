@@ -29,7 +29,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::canvas::{Canvas, Map, MapResolution};
 use ratatui::widgets::{
     Axis, Block, Cell, Chart, Clear, Dataset, GraphType, Padding, Paragraph, RatatuiLogo, Row,
-    Table,
+    Table, Wrap,
 };
 use ratatui::{DefaultTerminal, Frame};
 use ratatui_braille_bar::BrailleBar;
@@ -389,6 +389,7 @@ impl App {
             }
             KeyCode::Char('?') => self.help_popup = true,
             KeyCode::Char('s') => self.sun_popup = true,
+            KeyCode::Char('r') => self.revive_daemon(),
             KeyCode::Tab => {
                 self.tab = (self.tab + 1) % TABS.len();
             }
@@ -494,6 +495,29 @@ impl App {
             6 => self.toggle_login(),
             _ => {}
         }
+    }
+
+    /// `r` on the no-daemon banner: start a stopped daemon (#43) or restart
+    /// a mismatched one (#42). Does nothing while a daemon is answering.
+    /// systemd first; a direct spawn covers a missing unit, with its stdio
+    /// nulled so daemon logs never paint over this dashboard.
+    fn revive_daemon(&mut self) {
+        if self.status.is_some() {
+            return;
+        }
+        let verb = if self.mismatch { "restart" } else { "start" };
+        let unit = std::process::Command::new("systemctl")
+            .args(["--user", verb, "nightlightd"])
+            .status();
+        if !unit.is_ok_and(|status| status.success()) && !self.mismatch {
+            let _ = std::process::Command::new("nightlightd")
+                .arg("--daemon")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn();
+        }
+        self.last_poll = None;
     }
 
     /// Flips the fade walk (#44), optimistically so the row answers the key
@@ -1264,6 +1288,7 @@ impl App {
         lines.push(key("↑↓", "nudge the night temperature"));
         lines.push(key("T", "cycle the theme"));
         lines.push(key("s", "sun details"));
+        lines.push(key("r", "start or restart a silent daemon"));
         lines.push(key("?", "this help"));
         lines.push(key("q", "quit"));
         lines.push(Line::default());
@@ -1931,12 +1956,14 @@ impl App {
 
         let Some(status) = &self.status else {
             let message = if self.mismatch {
-                "update needed: dashboard and daemon differ\ninstall matching versions"
+                "update needed\ndashboard and daemon differ\ninstall matching versions\npress r to restart the daemon"
             } else {
-                "daemon not running"
+                "daemon not running\npress r to start it"
             };
             frame.render_widget(
-                Paragraph::new(message).style(Style::default().fg(pal.err)),
+                Paragraph::new(message)
+                    .style(Style::default().fg(pal.err))
+                    .wrap(Wrap { trim: true }),
                 inner,
             );
             return;
