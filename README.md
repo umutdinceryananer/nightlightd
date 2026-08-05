@@ -14,7 +14,7 @@
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
 [![Built With Ratatui](https://ratatui.rs/built-with-ratatui/badge.svg)](https://ratatui.rs/)
 
-> **Version 0.2.0.** The daemon provides timezone based location, a single instance D-Bus lock, gamma ramps over XRandR, reapplication on resume from suspend, and a `--status` readout. Three clients ship with it, a tray icon, a settings panel, and a terminal dashboard. A [release with a `.deb`](https://github.com/umutdinceryananer/nightlightd/releases/latest) and an [AUR package](https://aur.archlinux.org/packages/nightlightd) are available. Flatpak is planned. Young software, tested on one machine so far. Report what breaks.
+> **Version 0.2.1.** The daemon provides timezone based location, a single instance D-Bus lock, gamma ramps over XRandR, eased transitions between targets, reapplication on resume from suspend, and a `--status` readout. Three clients ship with it, a tray icon, a settings panel, and a terminal dashboard. A [release with a `.deb`](https://github.com/umutdinceryananer/nightlightd/releases/latest) and an [AUR package](https://aur.archlinux.org/packages/nightlightd) are available. Flatpak is planned. Young software, tested on one machine so far. Report what breaks.
 
 <p align="center">
   <img src="docs/screenshots/nightlight-tui.gif" alt="the terminal dashboard's demo reel: a compressed day warms the interface through sunset into night, walks the five tabs, rolls through the themes and loops at dawn" width="820">
@@ -118,7 +118,7 @@ The daemon has no interface of its own. If a client dies, the filter keeps runni
 Grab the `.deb` from the [latest release](https://github.com/umutdinceryananer/nightlightd/releases/latest), then
 
 ```
-sudo apt install ./nightlightd_0.2.0-1_amd64.deb
+sudo apt install ./nightlightd_0.2.1-1_amd64.deb
 systemctl --user enable --now nightlightd
 ```
 

@@ -548,6 +548,16 @@ that asked for it.
 
 ### #42 A version mismatch must not impersonate a stopped daemon
 
+**Done.** Shipped 2026-08-04, and it grew: every surface asks the bus
+whether the name is owned when the status is unreadable, the tray and
+the panel silently re-exec themselves once (healing a process older
+than its own file), and what remains shows a short update needed
+notice with a restart action beside it — a button in the panel, a
+menu item in the tray, the r key in the TUI, words in the CLI. The
+daemon is never restarted automatically by a client. Verified against
+a live v0.1.2 daemon, including the harmless restart while the disk
+was old and the healing one the moment the new binary landed.
+
 - **What:** When `GetStatus` fails to deserialize, every client falls
   into its "daemon not running" state. The tray then shows the
   disabled icon while the screen is visibly warm, and its menu offers
@@ -570,6 +580,13 @@ that asked for it.
 - **Target:** v0.2.1
 
 ### #43 The tray should offer to start a stopped daemon
+
+**Done.** Shipped 2026-08-04. With nothing on the bus the tray's menu
+shrinks to Start the daemon, Settings and Quit, and a left click on
+the struck icon starts one too; the TUI's banner offers the same
+through r. systemd first, a direct spawn beside the binary when the
+unit is absent. Verified live: service stopped, one click, the filter
+faded back in.
 
 - **What:** When nothing owns the bus name, the tray's menu still
   shows Turn on, which sends a D-Bus call to nobody. In that state
