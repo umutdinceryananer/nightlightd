@@ -45,6 +45,21 @@ pub enum Request {
     Status,
 }
 
+/// Whether something owns the daemon's bus name right now. Asked only after
+/// a failed request (#42): owned but failing means this binary and the
+/// daemon are different versions, which deserves a different error than
+/// "not running".
+pub fn daemon_on_bus() -> bool {
+    Connection::session()
+        .ok()
+        .and_then(|connection| zbus::blocking::fdo::DBusProxy::new(&connection).ok())
+        .and_then(|fdo| {
+            let name = zbus::names::BusName::try_from("org.nightlightd.Daemon").ok()?;
+            fdo.name_has_owner(name).ok()
+        })
+        .unwrap_or(false)
+}
+
 /// Sends `request` to the running daemon over the session bus.
 pub fn send(request: Request) -> zbus::Result<()> {
     let connection = Connection::session()?;

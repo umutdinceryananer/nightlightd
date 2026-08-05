@@ -78,6 +78,9 @@ struct Panel {
     /// the checkbox does not show. Not part of "Revert changes" — it is a
     /// behaviour switch, not a session's slider fiddling.
     fade: Option<bool>,
+    /// Status unreadable but the daemon's name owned (#42): different
+    /// versions, which deserves a different notice than silence.
+    mismatch: bool,
     last_poll: Option<Instant>,
     /// The day/night bounds as the daemon last reported them, plus whether a
     /// bound slider is mid-drag — so a change made elsewhere (another client, a
@@ -121,6 +124,13 @@ impl eframe::App for Panel {
         {
             self.status = self.client.status();
             self.fade = self.client.fade();
+            self.mismatch = self.status.is_none() && self.client.daemon_on_bus();
+            if self.mismatch {
+                // Maybe this process is simply older than the file it came
+                // from; one silent relaunch answers that. Still mismatched
+                // afterwards means the disk needs the user.
+                relaunch_once();
+            }
             self.last_poll = Some(Instant::now());
         }
         let status = self.status.clone();
@@ -196,6 +206,34 @@ impl eframe::App for Panel {
             .wrap_mode(egui::TextWrapMode::Extend),
         );
         ui.add_space(8.0);
+        // The daemon's absence, and its two distinct flavours (#42), get one
+        // plain line rather than a silently frozen curve. The mismatch case
+        // also offers the one-click half of the recovery: a daemon still
+        // running its pre-update binary is fixed by a restart, and when the
+        // disk is just as old the click is harmless and the notice stays.
+        if self.status.is_none() {
+            if self.mismatch {
+                // Notice above, button below: side by side they fight for
+                // the row and the words lose.
+                ui.colored_label(
+                    egui::Color32::from_rgb(230, 150, 70),
+                    "Update needed: the panel and the daemon are different versions.",
+                );
+                ui.add_space(2.0);
+                if ui.button("Restart the daemon").clicked() {
+                    let _ = std::process::Command::new("systemctl")
+                        .args(["--user", "restart", "nightlightd"])
+                        .spawn();
+                    self.last_poll = None;
+                }
+            } else {
+                ui.colored_label(
+                    egui::Color32::from_rgb(230, 150, 70),
+                    "The daemon is not running, so changes will not reach the screen.",
+                );
+            }
+            ui.add_space(6.0);
+        }
         // The curve draws from the local slider values, so it reshapes live
         // mid-drag even though the daemon only hears about it on release.
         curve::show(
@@ -384,6 +422,29 @@ impl eframe::App for Panel {
     }
 }
 
+/// The one self-repair a stale client can do (#42): replace this process
+/// with whatever its own path holds on disk now. After an update the
+/// running copy is old while the file is new, and this heals that with
+/// nobody watching. Guarded to a single attempt — when the disk copy is
+/// just as old, exec would loop forever otherwise. `exec` only returns on
+/// failure, and every failure path falls through to the visible notice.
+fn relaunch_once() {
+    use std::os::unix::process::CommandExt;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static TRIED: AtomicBool = AtomicBool::new(false);
+    if TRIED.swap(true, Ordering::SeqCst) || std::env::var_os("NIGHTLIGHT_RELAUNCHED").is_some() {
+        return;
+    }
+    let mut args = std::env::args_os();
+    let Some(argv0) = args.next() else {
+        return;
+    };
+    let _ = std::process::Command::new(argv0)
+        .args(args)
+        .env("NIGHTLIGHT_RELAUNCHED", "1")
+        .exec();
+}
+
 /// The local clock's offset from UTC in seconds, read once from `date +%z`
 /// (e.g. `+0300` → 10800). Zero on any failure — the curve then reads in UTC,
 /// which is wrong by the offset but never crashes.
@@ -447,6 +508,7 @@ fn main() -> eframe::Result<()> {
                 focus: Arc::clone(&focus),
                 status: None,
                 fade: None,
+                mismatch: false,
                 last_poll: None,
                 daemon_day: 6500,
                 daemon_night: 4500,

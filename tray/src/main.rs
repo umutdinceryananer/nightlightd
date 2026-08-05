@@ -31,6 +31,10 @@ struct NightLight {
     /// Whether the fade walk (#44) is on; `None` against a daemon that is
     /// unreachable or predates `GetFade`, and then no menu item shows.
     fade: Option<bool>,
+    /// Set when the status is unreadable but the daemon's name is owned
+    /// (#42): the two are different versions, and saying "not running"
+    /// would be the lie the first stale tray told.
+    mismatch: bool,
 }
 
 impl NightLight {
@@ -38,6 +42,24 @@ impl NightLight {
     fn refresh(&mut self) {
         self.status = self.client.status();
         self.fade = self.client.fade();
+        self.mismatch = self.status.is_none() && self.client.daemon_on_bus();
+        if self.mismatch {
+            // Maybe this process is simply older than the file it came from;
+            // one silent relaunch answers that. If it comes back still
+            // mismatched, the tooltip and the menu take over.
+            relaunch_once();
+        }
+    }
+
+    /// Asks systemd for a fresh daemon — the explicit, user-clicked recovery
+    /// for the one mismatch a client cannot heal itself (#42): a daemon
+    /// still running its pre-update binary. Harmless when the disk is just
+    /// as old; the same daemon comes back and the message stays.
+    fn restart_daemon(&mut self) {
+        let _ = std::process::Command::new("systemctl")
+            .args(["--user", "restart", "nightlightd"])
+            .spawn();
+        self.refresh();
     }
 
     /// Flips the fade walk, optimistically so the checkmark answers the
@@ -105,7 +127,10 @@ impl ksni::Tray for NightLight {
     /// daemon is unreachable), so a left click visibly changes the icon. Both
     /// names are Adwaita's, which the mainstream themes inherit from.
     fn icon_name(&self) -> String {
-        let on = self.status.as_ref().is_some_and(|status| status.enabled);
+        // A version mismatch (#42) shows the plain icon: the daemon *is*
+        // running, and the disabled variant here is exactly the lie that
+        // motivated the issue.
+        let on = self.status.as_ref().is_some_and(|status| status.enabled) || self.mismatch;
         if on {
             "night-light-symbolic".into()
         } else {
@@ -122,6 +147,9 @@ impl ksni::Tray for NightLight {
     fn tool_tip(&self) -> ToolTip {
         let description = match &self.status {
             Some(status) => status.describe(),
+            None if self.mismatch => "update needed\n\
+                 tray and daemon are different versions"
+                .into(),
             None => "daemon not running".into(),
         };
         ToolTip {
@@ -154,6 +182,19 @@ impl ksni::Tray for NightLight {
             }
             .into(),
         ];
+        // The user-clicked half of the #42 recovery: a daemon still running
+        // its pre-update binary is fixed by a restart, and clicking is the
+        // user's decision in a way an automatic kill never could be.
+        if self.mismatch {
+            items.push(
+                StandardItem {
+                    label: "Restart the daemon".into(),
+                    activate: Box::new(|this: &mut Self| this.restart_daemon()),
+                    ..Default::default()
+                }
+                .into(),
+            );
+        }
         // The fade switch (#44) earns an item only when the daemon can
         // answer for it; a checkbox nobody reads behind would lie.
         if let Some(fade) = self.fade {
@@ -185,6 +226,29 @@ impl ksni::Tray for NightLight {
         ]);
         items
     }
+}
+
+/// The one self-repair a stale client can do (#42): replace this process
+/// with whatever its own path holds on disk now. After an update the
+/// running copy is old while the file is new, and this heals that with
+/// nobody watching. Guarded to a single attempt — when the disk copy is
+/// just as old, exec would loop forever otherwise. `exec` only returns on
+/// failure, and every failure path falls through to the visible message.
+fn relaunch_once() {
+    use std::os::unix::process::CommandExt;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static TRIED: AtomicBool = AtomicBool::new(false);
+    if TRIED.swap(true, Ordering::SeqCst) || std::env::var_os("NIGHTLIGHT_RELAUNCHED").is_some() {
+        return;
+    }
+    let mut args = std::env::args_os();
+    let Some(argv0) = args.next() else {
+        return;
+    };
+    let _ = std::process::Command::new(argv0)
+        .args(args)
+        .env("NIGHTLIGHT_RELAUNCHED", "1")
+        .exec();
 }
 
 /// Launches the settings panel. Looks for `nightlight-panel` next to this
@@ -230,6 +294,11 @@ fn main() {
 
     let status = client.status();
     let fade = client.fade();
+    let mismatch = status.is_none() && client.daemon_on_bus();
+    if mismatch {
+        // Heal a stale process before the icon even registers.
+        relaunch_once();
+    }
     // `assume_sni_available(true)`: at login the tray autostarts before the
     // panel's StatusNotifierWatcher exists, so a plain spawn() fails on the
     // missing watcher and the icon never appears (confirmed in
@@ -239,6 +308,7 @@ fn main() {
         client,
         status,
         fade,
+        mismatch,
     })
     .assume_sni_available(true)
     .spawn()

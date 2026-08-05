@@ -102,6 +102,9 @@ struct App {
     /// The fade switch (#44), read through the additive `GetFade`; `None`
     /// against a daemon that is unreachable or too old to answer.
     fade: Option<bool>,
+    /// Status unreadable but the daemon's name owned (#42): different
+    /// versions, which deserves a different banner than "not running".
+    mismatch: bool,
     last_poll: Option<Instant>,
     offset_secs: i32,
     theme_index: usize,
@@ -190,6 +193,7 @@ fn main() -> io::Result<()> {
         client,
         status: None,
         fade: None,
+        mismatch: false,
         last_poll: None,
         offset_secs: local_offset_seconds(),
         theme_index,
@@ -277,6 +281,7 @@ impl App {
                 self.status = self.client.status();
                 self.outputs = self.client.outputs();
                 self.fade = self.client.fade();
+                self.mismatch = self.status.is_none() && self.client.daemon_on_bus();
                 self.last_poll = Some(Instant::now());
             }
             // The demo clock rewrites the snapshot every frame, so it runs
@@ -1925,8 +1930,13 @@ impl App {
         frame.render_widget(block, area);
 
         let Some(status) = &self.status else {
+            let message = if self.mismatch {
+                "update needed: dashboard and daemon differ\ninstall matching versions"
+            } else {
+                "daemon not running"
+            };
             frame.render_widget(
-                Paragraph::new("daemon not running").style(Style::default().fg(pal.err)),
+                Paragraph::new(message).style(Style::default().fg(pal.err)),
                 inner,
             );
             return;

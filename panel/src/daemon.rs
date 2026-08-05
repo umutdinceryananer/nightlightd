@@ -56,6 +56,9 @@ trait Daemon {
 /// A live handle to the daemon: the session-bus connection plus a proxy.
 pub struct Client {
     proxy: DaemonProxyBlocking<'static>,
+    /// The bus's own interface, for one question: does anything own the
+    /// daemon's name (#42)?
+    fdo: zbus::blocking::fdo::DBusProxy<'static>,
 }
 
 impl Client {
@@ -65,7 +68,19 @@ impl Client {
     pub fn connect() -> zbus::Result<Self> {
         let connection = Connection::session()?;
         let proxy = DaemonProxyBlocking::new(&connection)?;
-        Ok(Self { proxy })
+        let fdo = zbus::blocking::fdo::DBusProxy::new(&connection)?;
+        Ok(Self { proxy, fdo })
+    }
+
+    /// Whether something owns the daemon's bus name right now. Asked only
+    /// after a failed status read (#42): owned but unreadable means this
+    /// client and the daemon are different versions, which deserves a
+    /// different message than "not running".
+    pub fn daemon_on_bus(&self) -> bool {
+        zbus::names::BusName::try_from("org.nightlightd.Daemon")
+            .ok()
+            .and_then(|name| self.fdo.name_has_owner(name).ok())
+            .unwrap_or(false)
     }
 
     /// The current status, or `None` when the daemon cannot be reached.

@@ -142,9 +142,17 @@ fn parse_brightness(text: &str) -> Option<client::Request> {
 /// Sends a request to the daemon, with a clear error when it is not running.
 fn run_client(request: client::Request) {
     if let Err(error) = client::send(request) {
-        eprintln!(
-            "nightlightd: cannot reach the daemon (is it running? start it with --daemon): {error}"
-        );
+        // Two different absences (#42): nobody on the bus, or a daemon that
+        // is there but speaks another version of the interface.
+        if client::daemon_on_bus() {
+            eprintln!(
+                "nightlightd: update needed, this binary and the daemon are different versions: {error}"
+            );
+        } else {
+            eprintln!(
+                "nightlightd: cannot reach the daemon (is it running? start it with --daemon): {error}"
+            );
+        }
         std::process::exit(1);
     }
 }

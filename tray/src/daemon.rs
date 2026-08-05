@@ -99,6 +99,20 @@ impl Client {
         Ok(Self { connection, proxy })
     }
 
+    /// Whether something owns the daemon's bus name right now. Asked only
+    /// after a failed status read (#42): owned but unreadable means this
+    /// tray and the daemon are different versions, which deserves a
+    /// different tooltip than "not running".
+    pub fn daemon_on_bus(&self) -> bool {
+        zbus::blocking::fdo::DBusProxy::new(&self.connection)
+            .ok()
+            .and_then(|fdo| {
+                let name = zbus::names::BusName::try_from("org.nightlightd.Daemon").ok()?;
+                fdo.name_has_owner(name).ok()
+            })
+            .unwrap_or(false)
+    }
+
     /// Claims the tray's own well-known name as a single-instance lock,
     /// the daemon's #19 medicine applied to the tray (GitHub #1): on
     /// distros where the session bus is the per-user bus, a tray from the
