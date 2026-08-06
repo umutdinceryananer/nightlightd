@@ -183,6 +183,10 @@ fn run_daemon(no_reset: bool) {
         current_brightness: 1.0,
         current_gamma: 1.0,
         fade: config.fade,
+        band: nightlightd_core::transition::Band {
+            day_elevation: config.day_elevation,
+            night_elevation: config.night_elevation,
+        },
         location: None,
         outputs: Vec::new(),
     }));

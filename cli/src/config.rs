@@ -32,6 +32,13 @@ pub struct Config {
     /// seconds (#44). Off means every change lands in one write, the
     /// behaviour redshift's own `fade=0` selects.
     pub fade: bool,
+    /// Solar elevation (degrees) at or above which it is full daytime
+    /// (#39). Kept verbatim; a nonsensical pair degrades to the default
+    /// where it is spent, in core.
+    pub day_elevation: f64,
+    /// Solar elevation at or below which it is full night. Lowering it
+    /// lands full night deeper into dusk — redshift's `elevation-low`.
+    pub night_elevation: f64,
     /// Manual latitude in degrees; pins the location instead of the timezone.
     /// Omitted from the written file when absent (TOML has no null).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -50,6 +57,8 @@ impl Default for Config {
             day_brightness: 1.0,
             night_brightness: 1.0,
             fade: true,
+            day_elevation: 3.0,
+            night_elevation: -6.0,
             latitude: None,
             longitude: None,
         }
@@ -220,6 +229,25 @@ mod tests {
         assert_eq!(config.gamma, 1.0);
         assert_eq!(config.day_brightness, 1.0);
         assert_eq!(config.night_brightness, 1.0);
+    }
+
+    /// The band defaults to redshift's pair (#39); a hand-written pair
+    /// parses and survives a save round trip verbatim, even a nonsensical
+    /// one — judging it is core's job, at spend time.
+    #[test]
+    fn the_band_defaults_and_round_trips_verbatim() {
+        let config = Config::default();
+        assert_eq!(config.day_elevation, 3.0);
+        assert_eq!(config.night_elevation, -6.0);
+        let config: Config = toml::from_str("night_elevation = -12.0").unwrap();
+        assert_eq!(config.night_elevation, -12.0);
+        assert_eq!(config.day_elevation, 3.0);
+        let inverted: Config =
+            toml::from_str("day_elevation = -9.0\nnight_elevation = 4.0").unwrap();
+        let text = toml::to_string(&inverted).unwrap();
+        let back: Config = toml::from_str(&text).unwrap();
+        assert_eq!(back.day_elevation, -9.0);
+        assert_eq!(back.night_elevation, 4.0);
     }
 
     /// The fade ships on (#44); a hand-written `fade = false` parses and

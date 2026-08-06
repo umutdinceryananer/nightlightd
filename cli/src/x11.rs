@@ -19,7 +19,7 @@ use nightlightd_core::color::{build_ramp, temperature_to_rgb};
 use nightlightd_core::location::location_from_timezone;
 use nightlightd_core::mode::Mode;
 use nightlightd_core::solar::solar_elevation;
-use nightlightd_core::transition::{Band, target_brightness, target_temperature};
+use nightlightd_core::transition::{target_brightness, target_temperature};
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use x11rb::connection::Connection;
 use x11rb::protocol::Event;
@@ -304,7 +304,7 @@ fn desired_target(state: &mut State) -> Target {
     let brightness = match elevation {
         Some(elevation) => target_brightness(
             elevation,
-            Band::default(),
+            state.band,
             state.day_brightness,
             state.night_brightness,
         ),
@@ -317,7 +317,7 @@ fn desired_target(state: &mut State) -> Target {
     } else {
         match elevation {
             Some(elevation) => {
-                target_temperature(elevation, Band::default(), state.day_temp, state.night_temp)
+                target_temperature(elevation, state.band, state.day_temp, state.night_temp)
             }
             None => state.day_temp,
         }

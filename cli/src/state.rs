@@ -8,6 +8,7 @@
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use nightlightd_core::mode::Mode;
+use nightlightd_core::transition::Band;
 
 /// The daemon's live state.
 pub struct State {
@@ -50,6 +51,9 @@ pub struct State {
     /// additive `GetFade`, not `GetStatus` — the consolidation promise is
     /// recorded under #34 in ISSUES.md.
     pub fade: bool,
+    /// The transition band (#39), carried verbatim from the config; core
+    /// degrades a nonsensical pair to the default where it is spent.
+    pub band: Band,
     /// The last successfully resolved location (automatic mode). The poll loop
     /// keeps it warm; `GetStatus` reads it instead of re-parsing zone.tab on
     /// every call, and a transient lookup failure reuses it instead of

@@ -263,6 +263,8 @@ fn persist(state: &Shared) {
             day_brightness: state.day_brightness,
             night_brightness: state.night_brightness,
             fade: state.fade,
+            day_elevation: state.band.day_elevation,
+            night_elevation: state.band.night_elevation,
             latitude,
             longitude,
         }
@@ -328,6 +330,7 @@ mod tests {
             current_brightness: 1.0,
             current_gamma: 1.0,
             fade: true,
+            band: nightlightd_core::transition::Band::default(),
             location: None,
             outputs: Vec::new(),
         }

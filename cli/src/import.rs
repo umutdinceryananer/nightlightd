@@ -101,6 +101,19 @@ fn translate(text: &str) -> Option<Config> {
                     imported = true;
                 }
             }
+            // redshift's own names for the transition band (#39).
+            ("general", "elevation-high") => {
+                if let Ok(elevation) = value.parse() {
+                    config.day_elevation = elevation;
+                    imported = true;
+                }
+            }
+            ("general", "elevation-low") => {
+                if let Ok(elevation) = value.parse() {
+                    config.night_elevation = elevation;
+                    imported = true;
+                }
+            }
             ("manual", "lat") => lat = value.parse().ok(),
             ("manual", "lon") => lon = value.parse().ok(),
             _ => {}
@@ -183,6 +196,15 @@ location-provider=geoclue2
         assert!(on.fade);
         // Not understood: contributes nothing, alone it is no import.
         assert!(translate("[general]\nfade=maybe\n").is_none());
+    }
+
+    /// redshift's elevation-high/low pair (#39) translates; the values ride
+    /// verbatim, core judges them where they are spent.
+    #[test]
+    fn the_transition_band_translates() {
+        let config = translate("[general]\nelevation-high=1.5\nelevation-low=-12\n").unwrap();
+        assert_eq!(config.day_elevation, 1.5);
+        assert_eq!(config.night_elevation, -12.0);
     }
 
     #[test]
