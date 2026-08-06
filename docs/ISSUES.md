@@ -680,6 +680,36 @@ it on, one surface's toggle following in the others within a poll.
 - **Difficulty:** Easy
 - **Target:** v0.3
 
+### #47 Dawn and dusk as separate bands
+
+- **What:** Let the morning transition and the evening one be set
+  apart from each other, instead of sharing the one band #39 added.
+  Four elevations where there are two today.
+- **Why:** Found by dragging #45's curve: moving the evening ramp
+  moves the morning ramp with it, because they are not two things.
+  The sun crosses -6 degrees once on the way up and once on the way
+  down, and the curve reads both crossings off the same pair. Wanting
+  them apart is a real preference — warm slowly into the evening,
+  snap back quickly at breakfast — and f.lux has always allowed it.
+- **Detail:** This is an architecture change, not a widget. Core's
+  `target_temperature(elevation, band, ...)` is a pure function of
+  the sun's angle: it cannot tell morning from evening, which is
+  exactly why it needs no clock, tests without a display, and lets
+  every client draw the schedule by sampling. Separate bands mean
+  the function must also be told whether the sun is rising, and two
+  numbers become four in the config, on the bus and in all four
+  clients. Note that the direction is cheap to derive (the hour
+  angle's sign) and can be passed in rather than computed from a
+  clock inside core, which is the version of this that keeps core
+  pure. Land it with #34's wire consolidation: both change the
+  contract, and one breaking pass is cheaper than two.
+- **Done when:** An evening band and a morning band can differ, a
+  config carrying only the old pair still behaves exactly as it does
+  today, and dragging one ramp in the panel leaves the other alone.
+- **Difficulty:** Medium
+- **Depends on:** #39, #45
+- **Target:** v0.3
+
 ---
 
 ## Ordering summary
