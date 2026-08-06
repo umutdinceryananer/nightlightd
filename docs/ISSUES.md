@@ -453,6 +453,11 @@ Keep all of these **out of v0.1.** Scope creep is what kills projects like this.
 
 ### #37 Brightness control
 
+**Done.** Shipped in v0.2.0 as part of the ramp shaping work
+(GitHub #2): a day and a night bound easing on the sun's own curve,
+set from config, D-Bus, the CLI, and now every interface. The fence
+below stands unchanged — nothing adaptive, ever.
+
 - **What:** A static multiplier only, folded into ramp shaping with gamma
   — tracked as GitHub #2, target v0.2, requested by the first daily
   driver (a monitor with no OSD controls).
