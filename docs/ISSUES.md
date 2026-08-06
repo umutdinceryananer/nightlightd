@@ -657,7 +657,14 @@ it on, one surface's toggle following in the others within a poll.
 - **Detail:** Panel first; egui already owns the pointer over the
   painted curve. The dashboard needs mouse capture from crossterm, a
   whole new input surface, so it starts with keys on a settings row
-  and earns the mouse later.
+  and earns the mouse later. The whole line ended up a handle, not
+  just the incline: the plateaus are the day and night temperatures
+  and drag vertically. That forced the curve's vertical axis to stop
+  fitting itself to the current bounds — a self-scaling axis draws
+  every pair as the same picture, leaving a plateau nowhere to be
+  dragged to. Edits stage behind Apply and Revert rather than going
+  out per frame, because a drag crosses hundreds of values on its
+  way to the one that was meant.
 - **Done when:** Dragging the edge in the panel visibly reshapes the
   curve, changes when full night lands, survives a daemon restart,
   and the dashboard's schedule shows the same band.

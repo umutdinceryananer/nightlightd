@@ -87,6 +87,18 @@ struct Panel {
     /// curve matches what the screen actually does; the default against a
     /// daemon that cannot answer.
     band: Band,
+    /// A band proposed by dragging the curve's ramp (#45), not yet sent.
+    /// The curve draws this while it exists; Apply sends it, Revert drops
+    /// it and the curve snaps back to the daemon's band.
+    staged_band: Option<Band>,
+    /// Whether a plateau drag has moved the temperature bounds without
+    /// sending them. The proposed values live in `day_temp`/`night_temp`
+    /// like any slider edit, so the sliders mirror the drag; this only
+    /// records that Apply has something to send and Revert something to
+    /// put back.
+    staged_temps: bool,
+    /// Which part of the curve the current drag holds, carried across frames.
+    curve_held: Option<curve::Handle>,
     last_poll: Option<Instant>,
     /// The day/night bounds as the daemon last reported them, plus whether a
     /// bound slider is mid-drag — so a change made elsewhere (another client, a
@@ -197,6 +209,8 @@ impl eframe::App for Panel {
         // follows them, so this only fires on genuinely external changes.
         if self.anchors_synced
             && !self.bounds_dragging
+            && !self.staged_temps
+            && self.curve_held.is_none()
             && let Some(status) = &status
             && (status.day_temp != self.daemon_day
                 || status.night_temp != self.daemon_night
@@ -251,16 +265,68 @@ impl eframe::App for Panel {
             }
             ui.add_space(6.0);
         }
-        // The curve draws from the local slider values, so it reshapes live
-        // mid-drag even though the daemon only hears about it on release.
-        curve::show(
+        // The curve draws from the local values, so it reshapes live mid-drag
+        // even though the daemon only hears about it on Apply. A drag on the
+        // line itself (#45) proposes an edit: the plateaus move the bounds
+        // the sliders below also hold, the ramps move the transition band.
+        let shown_band = self.staged_band.unwrap_or(self.band);
+        match curve::show(
             ui,
             status.as_ref(),
-            self.band,
+            shown_band,
             self.day_temp,
             self.night_temp,
             self.offset_secs,
-        );
+            &mut self.curve_held,
+        ) {
+            Some(curve::Edit::Band(next)) => self.staged_band = Some(next),
+            Some(curve::Edit::DayTemp(kelvin)) => {
+                self.day_temp = kelvin;
+                self.staged_temps = true;
+            }
+            Some(curve::Edit::NightTemp(kelvin)) => {
+                self.night_temp = kelvin;
+                self.staged_temps = true;
+            }
+            None => {}
+        }
+        // The decision row, present only while the curve holds something
+        // unsent. Buttons first, the reading after — the numbers change under
+        // the drag and the buttons must not wander while they do.
+        if self.staged_band.is_some() || self.staged_temps {
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                if ui.button("Apply").clicked() {
+                    if let Some(staged) = self.staged_band {
+                        self.client
+                            .set_band(staged.day_elevation, staged.night_elevation);
+                        self.band = staged;
+                        self.staged_band = None;
+                    }
+                    if self.staged_temps {
+                        self.client.set_day_temp(self.day_temp);
+                        self.client.set_night_temp(self.night_temp);
+                        self.staged_temps = false;
+                    }
+                    self.last_poll = None;
+                }
+                // Back to what the daemon holds, not to what the panel
+                // opened with: this undoes the drag, not the session.
+                if ui.button("Revert").clicked() {
+                    self.staged_band = None;
+                    if self.staged_temps {
+                        self.day_temp = self.daemon_day;
+                        self.night_temp = self.daemon_night;
+                        self.staged_temps = false;
+                    }
+                }
+                let band = self.staged_band.unwrap_or(self.band);
+                ui.weak(format!(
+                    "{} K / {} K, day above {:+.1}°, night below {:+.1}°",
+                    self.day_temp, self.night_temp, band.day_elevation, band.night_elevation
+                ));
+            });
+        }
         ui.add_space(10.0);
 
         // The two anchors that shape the curve. The ranges lean on each other
@@ -280,6 +346,9 @@ impl eframe::App for Panel {
         );
         if day.drag_stopped() || (day.changed() && !day.dragged()) {
             self.client.set_day_temp(self.day_temp);
+            // The slider sends on release, so whatever a plateau drag had
+            // staged has now gone out by another door.
+            self.staged_temps = false;
             self.last_poll = None;
         }
         let night = ui.add(
@@ -290,6 +359,7 @@ impl eframe::App for Panel {
         );
         if night.drag_stopped() || (night.changed() && !night.dragged()) {
             self.client.set_night_temp(self.night_temp);
+            self.staged_temps = false;
             self.last_poll = None;
         }
 
@@ -528,6 +598,9 @@ fn main() -> eframe::Result<()> {
                 fade: None,
                 mismatch: false,
                 band: Band::default(),
+                staged_band: None,
+                staged_temps: false,
+                curve_held: None,
                 last_poll: None,
                 daemon_day: 6500,
                 daemon_night: 4500,

@@ -51,6 +51,7 @@ trait Daemon {
     fn set_brightness(&self, day: f64, night: f64) -> zbus::Result<()>;
     fn set_fade(&self, fade: bool) -> zbus::Result<()>;
     fn get_fade(&self) -> zbus::Result<bool>;
+    fn set_transition_band(&self, day: f64, night: f64) -> zbus::Result<()>;
     fn get_transition_band(&self) -> zbus::Result<(f64, f64)>;
 }
 
@@ -142,6 +143,12 @@ impl Client {
     /// back to the default band.
     pub fn band(&self) -> Option<(f64, f64)> {
         self.proxy.get_transition_band().ok()
+    }
+
+    /// Sets the transition band (#45); the daemon carries the pair verbatim
+    /// and persists it. Errors swallowed.
+    pub fn set_band(&self, day: f64, night: f64) {
+        let _ = self.proxy.set_transition_band(day, night);
     }
 }
 
