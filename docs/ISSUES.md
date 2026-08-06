@@ -628,6 +628,26 @@ it on, one surface's toggle following in the others within a poll.
 - **Difficulty:** Easy
 - **Target:** v0.2.1
 
+### #45 Drag the curve's incline
+
+- **What:** Grab the transition edge of the day/night curve and drag
+  it. The incline is the transition band, so this is #39 wearing an
+  interface: dragging widens or narrows the elevation window the
+  daemon eases across, instead of asking anyone to think in degrees.
+- **Why:** Asked for right after v0.2.1 shipped, and it completes the
+  #39 story — a hand on the curve beats a pair of numeric fields for
+  a quantity nobody has intuition for.
+- **Detail:** Panel first; egui already owns the pointer over the
+  painted curve. The dashboard needs mouse capture from crossterm, a
+  whole new input surface, so it starts with keys on a settings row
+  and earns the mouse later.
+- **Done when:** Dragging the edge in the panel visibly reshapes the
+  curve, changes when full night lands, survives a daemon restart,
+  and the dashboard's schedule shows the same band.
+- **Difficulty:** Medium
+- **Depends on:** #39
+- **Target:** v0.3
+
 ---
 
 ## Ordering summary
