@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use eframe::egui::{self, Color32, Pos2, Stroke};
 use nightlightd_core::solar::solar_elevation;
-use nightlightd_core::transition::target_temperature;
+use nightlightd_core::transition::{Band, target_temperature};
 
 use crate::daemon::Status;
 
@@ -47,7 +47,7 @@ pub fn show(
     let kelvin_at = |hour: f32| -> f32 {
         let t = midnight + f64::from(hour) * 3600.0;
         let elevation = solar_elevation(status.latitude, status.longitude, t);
-        target_temperature(elevation, day_temp, night_temp) as f32
+        target_temperature(elevation, Band::default(), day_temp, night_temp) as f32
     };
 
     let (response, painter) = ui.allocate_painter(

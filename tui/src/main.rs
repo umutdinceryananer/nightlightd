@@ -20,7 +20,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use nightlightd_core::color::temperature_to_rgb;
 use nightlightd_core::location::nearest_zone;
 use nightlightd_core::solar::solar_elevation;
-use nightlightd_core::transition::target_temperature;
+use nightlightd_core::transition::{Band, target_temperature};
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Alignment, Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Style};
@@ -1877,7 +1877,12 @@ impl App {
         let elevation =
             solar_elevation(status.latitude, status.longitude, midnight + hour * 3600.0);
         status.elevation = elevation;
-        status.temperature = target_temperature(elevation, status.day_temp, status.night_temp);
+        status.temperature = target_temperature(
+            elevation,
+            Band::default(),
+            status.day_temp,
+            status.night_temp,
+        );
         self.status = Some(status);
     }
 
@@ -2269,6 +2274,7 @@ impl App {
         let kelvin_at = |hour: f64| -> f64 {
             f64::from(target_temperature(
                 elev_at(hour),
+                Band::default(),
                 status.day_temp,
                 status.night_temp,
             ))
@@ -2449,6 +2455,7 @@ impl App {
         let kelvin_at = |hour: f64| -> f64 {
             f64::from(target_temperature(
                 elev_at(hour),
+                Band::default(),
                 status.day_temp,
                 status.night_temp,
             ))

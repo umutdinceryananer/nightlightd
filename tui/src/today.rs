@@ -4,7 +4,7 @@
 //! from where the sun actually is at this location on this day.
 
 use nightlightd_core::solar::solar_elevation;
-use nightlightd_core::transition::target_temperature;
+use nightlightd_core::transition::{Band, target_temperature};
 
 /// One solar event of the day.
 pub struct Milestone {
@@ -41,7 +41,8 @@ pub fn milestones(
     let samples: Vec<f64> = (0..=1440)
         .map(|m| elevation_at(f64::from(m) / 60.0))
         .collect();
-    let kelvin_of = |elevation: f64| target_temperature(elevation, day_temp, night_temp);
+    let kelvin_of =
+        |elevation: f64| target_temperature(elevation, Band::default(), day_temp, night_temp);
 
     let mut events: Vec<Milestone> = Vec::new();
     let mut add_crossing = |name: &'static str, threshold: f64, upward: bool| {

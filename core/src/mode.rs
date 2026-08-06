@@ -12,7 +12,7 @@
 
 use crate::location::location_from_timezone;
 use crate::solar::solar_elevation;
-use crate::transition::target_temperature;
+use crate::transition::{Band, target_temperature};
 
 /// How the target temperature should be decided.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -48,7 +48,9 @@ pub fn resolve_temperature(mode: Mode, unix_time: f64, day_temp: u32, night_temp
 /// curve.
 fn temperature_at(lat: f64, lon: f64, unix_time: f64, day_temp: u32, night_temp: u32) -> u32 {
     let elevation = solar_elevation(lat, lon, unix_time);
-    target_temperature(elevation, day_temp, night_temp)
+    // The default band; nothing routes a configured band (#39) through this
+    // path — the daemon's loop derives its targets in `cli` directly.
+    target_temperature(elevation, Band::default(), day_temp, night_temp)
 }
 
 #[cfg(test)]
