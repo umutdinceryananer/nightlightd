@@ -2271,12 +2271,16 @@ impl App {
         self.draw_chart(frame, inner, pal);
     }
 
-    /// The day/night curve, read the f.lux way (#35): a square-wave step in
-    /// box characters — the transition really is one or two columns wide at
-    /// this scale, so it is drawn as the square wave it is — over a pair of
+    /// The day/night curve, read the f.lux way (#35): a step in box
+    /// characters — each column sits at the row its kelvin maps to, corners
+    /// and a vertical run joining neighbours that disagree — over a pair of
     /// faint crossing sun-arcs, a per-hour tint strip along the floor carrying
     /// what f.lux's coloured fill carries, a sunlight-hours caption, and a dot
-    /// riding the line at "now". Falls back to a hint without a location.
+    /// riding the line at "now". With the default band the transition spans a
+    /// column or two and this collapses to the square wave it always was; a
+    /// widened band (#39) stretches it into a staircase, so the dot stays on
+    /// the line instead of floating between the levels. Falls back to a hint
+    /// without a location.
     fn draw_chart(&self, frame: &mut Frame<'_>, area: Rect, pal: &Palette) {
         let Some(status) = self.status.as_ref().filter(|s| s.has_location) else {
             frame.render_widget(
@@ -2374,46 +2378,55 @@ impl App {
         y_label(status.night_temp, night_row);
         hour_labels(frame, plot, x_row.y, pal);
 
-        // Layer 2: the step. One day-or-night level per column, then corners
-        // and a vertical run wherever the level flips.
-        let mid = f64::from(status.day_temp + status.night_temp) / 2.0;
-        let day_tint = theme::display_tint(status.day_temp);
-        let night_tint = theme::display_tint(status.night_temp);
-        let mid_tint = theme::display_tint((status.day_temp + status.night_temp) / 2);
-        let levels: Vec<bool> = (0..w)
-            .map(|x| kelvin_at((x as f64 + 0.5) / w as f64 * 24.0) >= mid)
+        // Layer 2: the step, following the real curve. Each column sits at
+        // the row its kelvin maps to, wearing that kelvin's colour; corners
+        // and a vertical run join neighbours that disagree. A narrow band
+        // drops every row in one column — f.lux's square wave — and a wide
+        // one (#39) descends a row or two at a time, a staircase.
+        let day = f64::from(status.day_temp);
+        let span = f64::from(status.day_temp.saturating_sub(status.night_temp)).max(1.0);
+        let row_of = |kelvin: f64| -> u16 {
+            let frac = ((day - kelvin) / span).clamp(0.0, 1.0);
+            day_row + (frac * f64::from(night_row - day_row)).round() as u16
+        };
+        let columns: Vec<(u16, f64)> = (0..w)
+            .map(|x| {
+                let kelvin = kelvin_at((x as f64 + 0.5) / w as f64 * 24.0);
+                (row_of(kelvin), kelvin)
+            })
             .collect();
         let buf = frame.buffer_mut();
-        for (x, &is_day) in levels.iter().enumerate() {
-            let (row, colour) = if is_day {
-                (day_row, day_tint)
-            } else {
-                (night_row, night_tint)
-            };
+        for (x, &(row, kelvin)) in columns.iter().enumerate() {
             if let Some(cell) = buf.cell_mut(Position::new(plot.x + x as u16, row)) {
-                cell.set_symbol("─").set_fg(colour);
+                cell.set_symbol("─")
+                    .set_fg(theme::display_tint(kelvin.round() as u32));
             }
         }
         for x in 0..w.saturating_sub(1) {
-            if levels[x] == levels[x + 1] {
+            let (from, before) = columns[x];
+            let (to, after) = columns[x + 1];
+            if from == to {
                 continue;
             }
             let col = plot.x + (x + 1) as u16;
-            let descending = levels[x];
-            let (top_sym, bottom_sym) = if descending {
+            // The join wears the blend of its two ends; on a full flip that
+            // is the old mid tint, on a staircase step a local gradient.
+            let colour = theme::display_tint(((before + after) / 2.0).round() as u32);
+            let (top_sym, bottom_sym) = if to > from {
                 ("╮", "╰")
             } else {
                 ("╭", "╯")
             };
-            if let Some(cell) = buf.cell_mut(Position::new(col, day_row)) {
-                cell.set_symbol(top_sym).set_fg(mid_tint);
+            let (top, bottom) = (from.min(to), from.max(to));
+            if let Some(cell) = buf.cell_mut(Position::new(col, top)) {
+                cell.set_symbol(top_sym).set_fg(colour);
             }
-            if let Some(cell) = buf.cell_mut(Position::new(col, night_row)) {
-                cell.set_symbol(bottom_sym).set_fg(mid_tint);
+            if let Some(cell) = buf.cell_mut(Position::new(col, bottom)) {
+                cell.set_symbol(bottom_sym).set_fg(colour);
             }
-            for row in day_row + 1..night_row {
+            for row in top + 1..bottom {
                 if let Some(cell) = buf.cell_mut(Position::new(col, row)) {
-                    cell.set_symbol("│").set_fg(mid_tint);
+                    cell.set_symbol("│").set_fg(colour);
                 }
             }
         }
@@ -2434,7 +2447,7 @@ impl App {
             .count() as f64
             * 0.025;
         let caption = format!("{daylight:.0}h sunlight");
-        let day_cols: Vec<usize> = (0..w).filter(|&x| levels[x]).collect();
+        let day_cols: Vec<usize> = (0..w).filter(|&x| columns[x].0 == day_row).collect();
         if let (Some(&first), Some(&last)) = (day_cols.first(), day_cols.last()) {
             let run = last - first + 1;
             if run > caption.len() + 4 {
@@ -2449,12 +2462,15 @@ impl App {
             }
         }
 
-        // Layer 5: now — a dot riding the line, f.lux's sun bead.
-        let now_temp = kelvin_at(now_hour);
-        let now_col = plot.x + (now_hour / 24.0 * (w - 1) as f64).round() as u16;
-        let span = f64::from(status.day_temp.saturating_sub(status.night_temp)).max(1.0);
-        let frac = ((f64::from(status.day_temp) - now_temp) / span).clamp(0.0, 1.0);
-        let now_row = day_row + (frac * f64::from(night_row - day_row)).round() as u16;
+        // Layer 5: now — a dot riding the line, f.lux's sun bead. The row is
+        // looked up from the drawn line, not recomputed: on a staircase the
+        // slope runs rows per column, so any independent rounding of "now"
+        // parks the dot beside the line instead of on it.
+        let now_x = (now_hour / 24.0 * w as f64 - 0.5)
+            .round()
+            .clamp(0.0, (w - 1) as f64) as usize;
+        let now_col = plot.x + now_x as u16;
+        let now_row = columns[now_x].0;
         if let Some(cell) = buf.cell_mut(Position::new(now_col, now_row)) {
             cell.set_symbol("●").set_fg(pal.text);
         }
