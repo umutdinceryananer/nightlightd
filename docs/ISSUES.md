@@ -653,6 +653,21 @@ it on, one surface's toggle following in the others within a poll.
 - **Depends on:** #39
 - **Target:** v0.3
 
+### #46 A nicer tray menu
+
+- **What:** The menu grew items (#42, #43, #44) faster than it grew
+  looks. The levers SNI actually offers: an icon per item, a readout
+  line wearing the current temperature and sun phase, grouping with
+  separators, disabled states instead of vanishing items.
+- **Why:** Asked for after v0.2.1. First impressions live here — the
+  tray is the surface most people meet first.
+- **Detail:** Honest ceiling, stated up front: the menu is rendered
+  by the desktop's own panel, so fonts, colours and spacing belong to
+  the GTK theme and cannot be touched from here. Where the ceiling
+  disappoints, the answer is the panel, one click away.
+- **Difficulty:** Easy
+- **Target:** v0.3
+
 ---
 
 ## Ordering summary
