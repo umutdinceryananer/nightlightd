@@ -99,6 +99,31 @@ impl Daemon {
     /// Set the gamma exponent (GitHub #2), constant across the day, then
     /// persist and re-apply. Clamped into core's sane range; a value that is
     /// not a finite number is ignored rather than trusted.
+    /// Set the transition band's elevation bounds (#39), then persist and
+    /// re-apply. Values ride verbatim — core degrades a nonsensical pair to
+    /// the default where it is spent — but a non-finite number is ignored
+    /// rather than trusted, like every other door.
+    fn set_transition_band(&self, day_elevation: f64, night_elevation: f64) {
+        {
+            let mut state = lock(&self.state);
+            if day_elevation.is_finite() {
+                state.band.day_elevation = day_elevation;
+            }
+            if night_elevation.is_finite() {
+                state.band.night_elevation = night_elevation;
+            }
+        }
+        persist(&self.state);
+        self.waker.wake();
+    }
+
+    /// The transition band's bounds. Additive, like GetFade (#44); the
+    /// consolidation promise under #34 covers this pair too.
+    fn get_transition_band(&self) -> (f64, f64) {
+        let state = lock(&self.state);
+        (state.band.day_elevation, state.band.night_elevation)
+    }
+
     /// Turn the fade walk (#44) on or off, then persist. Off means the next
     /// target change lands in one write; a walk in flight completes on the
     /// wake this triggers.

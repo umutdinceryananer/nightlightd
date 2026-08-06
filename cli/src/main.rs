@@ -26,7 +26,7 @@ use tracing_subscriber::EnvFilter;
 /// Screen colour temperature daemon for X11.
 #[derive(Parser)]
 #[command(name = "nightlightd", version, about)]
-#[command(group(ArgGroup::new("action").args(["temp", "toggle", "on", "off", "auto", "gamma", "brightness", "fade", "status"])))]
+#[command(group(ArgGroup::new("action").args(["temp", "toggle", "on", "off", "auto", "gamma", "brightness", "fade", "band", "status"])))]
 struct Cli {
     /// Run the daemon: follow the sun continuously.
     #[arg(long, conflicts_with = "action")]
@@ -59,6 +59,10 @@ struct Cli {
     /// Ease target changes over a couple of seconds: on or off (client).
     #[arg(long, value_name = "ON|OFF")]
     fade: Option<String>,
+    /// Set the transition band's solar elevations as DAY:NIGHT degrees,
+    /// like 3:-6; lower NIGHT lands full night deeper into dusk (client).
+    #[arg(long, value_name = "DAY:NIGHT", allow_hyphen_values = true)]
+    band: Option<String>,
     /// Print the daemon's status (client).
     #[arg(long)]
     status: bool,
@@ -108,11 +112,30 @@ fn client_request(cli: &Cli) -> Option<client::Request> {
                 std::process::exit(2);
             }
         }
+    } else if let Some(band) = cli.band.as_deref() {
+        match parse_band(band) {
+            Some((day, night)) => Some(client::Request::SetBand(day, night)),
+            None => {
+                eprintln!("nightlightd: --band wants DAY:NIGHT degrees, like 3:-6 or 1.5:-12");
+                std::process::exit(2);
+            }
+        }
     } else if cli.status {
         Some(client::Request::Status)
     } else {
         None
     }
+}
+
+/// Parses the `--band` value: two elevations split by a colon. Returns
+/// `None` on nonsense so the caller can print a usage hint. An inverted
+/// pair is passed through — the daemon carries it verbatim and core
+/// degrades it where it is spent.
+fn parse_band(text: &str) -> Option<(f64, f64)> {
+    let (day, night) = text.split_once(':')?;
+    let day: f64 = day.trim().parse().ok()?;
+    let night: f64 = night.trim().parse().ok()?;
+    (day.is_finite() && night.is_finite()).then_some((day, night))
 }
 
 /// Parses the `--fade` value. Returns `None` on nonsense so the caller can
@@ -299,6 +322,19 @@ mod tests {
         let cli = Cli::try_parse_from(["nightlightd", "--fade", "off"]).unwrap();
         assert_eq!(cli.fade.as_deref(), Some("off"));
         assert!(Cli::try_parse_from(["nightlightd", "--fade", "on", "--temp", "2800"]).is_err());
+    }
+
+    #[test]
+    fn band_values_parse_with_their_minus_signs() {
+        assert_eq!(parse_band("3:-6"), Some((3.0, -6.0)));
+        assert_eq!(parse_band(" 1.5 : -12 "), Some((1.5, -12.0)));
+        // Inverted rides through; core judges it at spend time.
+        assert_eq!(parse_band("-9:4"), Some((-9.0, 4.0)));
+        assert_eq!(parse_band("3"), None);
+        assert_eq!(parse_band("3:warm"), None);
+        assert_eq!(parse_band("nan:-6"), None);
+        let cli = Cli::try_parse_from(["nightlightd", "--band", "3:-9"]).unwrap();
+        assert_eq!(cli.band.as_deref(), Some("3:-9"));
     }
 
     #[test]

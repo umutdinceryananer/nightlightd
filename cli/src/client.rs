@@ -21,6 +21,8 @@ trait Daemon {
     fn set_gamma(&self, gamma: f64) -> zbus::Result<()>;
     fn set_fade(&self, fade: bool) -> zbus::Result<()>;
     fn get_fade(&self) -> zbus::Result<bool>;
+    fn set_transition_band(&self, day_elevation: f64, night_elevation: f64) -> zbus::Result<()>;
+    fn get_transition_band(&self) -> zbus::Result<(f64, f64)>;
     fn set_brightness(&self, day: f64, night: f64) -> zbus::Result<()>;
     fn get_status(&self) -> zbus::Result<Status>;
 }
@@ -41,6 +43,8 @@ pub enum Request {
     SetBrightness(f64, f64),
     /// Turn the fade walk on or off (#44).
     SetFade(bool),
+    /// Set the transition band's elevation bounds (#39).
+    SetBand(f64, f64),
     /// Print the daemon's status.
     Status,
 }
@@ -72,11 +76,14 @@ pub fn send(request: Request) -> zbus::Result<()> {
         Request::SetGamma(gamma) => proxy.set_gamma(gamma),
         Request::SetBrightness(day, night) => proxy.set_brightness(day, night),
         Request::SetFade(fade) => proxy.set_fade(fade),
+        Request::SetBand(day, night) => proxy.set_transition_band(day, night),
         Request::Status => {
             // A daemon too old to know GetFade means the fade is not there
-            // to report; defaulting to "on" keeps the line silent.
+            // to report; defaulting to "on" keeps the line silent. Same for
+            // the band: the default earns no ink.
             let fade = proxy.get_fade().unwrap_or(true);
-            print_status(&proxy.get_status()?, fade);
+            let band = proxy.get_transition_band().unwrap_or((3.0, -6.0));
+            print_status(&proxy.get_status()?, fade, band);
             Ok(())
         }
     }
@@ -84,7 +91,7 @@ pub fn send(request: Request) -> zbus::Result<()> {
 
 /// Prints the daemon snapshot: the headline on the first line, then the details
 /// worth eyeballing indented under it.
-fn print_status(status: &Status, fade: bool) {
+fn print_status(status: &Status, fade: bool, band: (f64, f64)) {
     let onoff = if status.enabled { "on" } else { "off" };
     println!("nightlightd: {onoff}, {} K", status.temperature);
     println!("  source: {}", status.source);
@@ -98,6 +105,12 @@ fn print_status(status: &Status, fade: bool) {
     // Same rule as the ramp line: the default earns no ink.
     if !fade {
         println!("  fade:   off");
+    }
+    if (band.0 - 3.0).abs() > 1e-9 || (band.1 + 6.0).abs() > 1e-9 {
+        println!(
+            "  band:   day above {:+.1}°, night below {:+.1}°",
+            band.0, band.1
+        );
     }
     if status.has_location {
         println!(
