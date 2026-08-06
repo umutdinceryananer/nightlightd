@@ -184,6 +184,8 @@ In between: proportionally somewhere between the two.
 
 So the filter never snaps on and off. It arrives slowly, and the user doesn't even notice. (#8)
 
+The `+3°` and `-6°` are redshift's numbers, and only the defaults. The pair lives in the config as `day_elevation` and `night_elevation` (#39); lowering the night bound holds daylight deeper into dusk, for skies that stay bright after sunset. An inverted or non-finite pair quietly behaves like the default, judged where the value is spent rather than where it is stored. A night light that errors out over a config typo is worse than no night light.
+
 ### But where do you get the latitude and longitude?
 
 **This is where the product's most important difference lives.**

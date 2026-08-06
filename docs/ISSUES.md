@@ -503,6 +503,18 @@ that asked for it.
 
 ### #39 Configurable transition band
 
+**Done.** Shipped in five slices ending 2026-08-06: the band as a
+parameter through core, config and state carrying the pair verbatim,
+`SetTransitionBand`/`GetTransitionBand` on the bus and `--band
+DAY:NIGHT` at the door, then the clients drawing the schedule from the
+daemon's band instead of their built-in constants. The now tab's
+square wave opens into a staircase when the band is wide, and the dot
+reads its row off the drawn line rather than recomputing it. A silly
+pair (inverted, non-finite) degrades to the default where it is spent,
+never where it is stored, so what the user wrote survives in the
+config. Verified live twice against `--band 3:-25`, at dawn by
+arithmetic and at dusk by screenshot.
+
 - **What:** Expose the transition band's elevation bounds in the config
   (`day_elevation`, `night_elevation`, today fixed at +3 and -6).
   Lowering the night bound to -12 holds daylight longer and lands the

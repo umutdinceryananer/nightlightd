@@ -75,20 +75,23 @@ The dashboard has five tabs.
   <img src="docs/screenshots/05-now-synthwave.png" alt="the now tab in the synthwave theme, pink and cyan" width="270">
 </p>
 
-**now** plots the day as a square wave over the sun's crossing arcs, with a strip along the floor showing the screen's colour at every hour. **today** derives the day's milestones (night's end, sunrise, full day, solar noon, sunset) from the same solar maths the daemon schedules on. **location** shows the city the timezone resolved to and takes a manual pin on the map. **settings** adjusts the day and night bounds, gamma and night dim. `T` cycles the themes. `live` follows the screen; the rest (`tokyo`, `mocha`, `nord`, `gruvbox`, `synth`, `ember`, `phosphor`) are fixed palettes.
+**now** plots the day as a square wave over the sun's crossing arcs, a staircase when the band is widened, with a strip along the floor showing the screen's colour at every hour. **today** derives the day's milestones (night's end, sunrise, full day, solar noon, sunset) from the same solar maths the daemon schedules on. **location** shows the city the timezone resolved to and takes a manual pin on the map. **settings** adjusts the day and night bounds, gamma and night dim. `T` cycles the themes. `live` follows the screen; the rest (`tokyo`, `mocha`, `nord`, `gruvbox`, `synth`, `ember`, `phosphor`) are fixed palettes.
 
-Every knob is a number in `~/.config/nightlightd/config.toml`. All fields are optional. These are the defaults, except the two shaping examples.
+Every knob is a number in `~/.config/nightlightd/config.toml`. All fields are optional. These are the defaults, except the shaping examples.
 
 ```toml
 day_temp = 6500
 night_temp = 4500
 gamma = 0.9            # bend the ramp's curve, constant all day
 night_brightness = 0.9 # dim to 90% at night, easing with the sun
+night_elevation = -12  # hold daylight until the sun is 12 degrees down
 ```
 
 Gamma and brightness ride the same gamma ramp write as the colour, so they cost nothing extra and reset with it. Nothing is adaptive. No screen sampling, no backlight control, by design.
 
 Every change of target, a toggle, a manual set, the daemon starting at night, eases onto the screen over about two seconds rather than landing in one frame. The walk is taken on the mired scale, so the glide looks even to the eye the whole way down. `fade = false` in the config, or the same toggle in any interface, turns it off.
+
+The slow transition is movable too. Full day sits at a sun elevation of +3 degrees and full night at -6, the band redshift uses. `day_elevation` and `night_elevation` move the bounds, and `nightlightd --band 3:-12` does the same from a terminal. Lowering the night bound lands full night deeper into dusk, for eyes that find the default too eager. A nonsense pair quietly behaves like the default.
 
 ---
 
