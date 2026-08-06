@@ -22,9 +22,11 @@ impl Milestone {
     }
 }
 
-/// The transition thresholds, shared with core's transition curve.
+/// Solar noon's floor: "is there any daylight today" is astronomy, not
+/// configuration, so it stays the default night bound. The crossings
+/// themselves use the configured band (#39), already `sane()`d by the
+/// caller so the schedule shows what the daemon actually applies.
 const NIGHT_ELEVATION: f64 = -6.0;
-const DAY_ELEVATION: f64 = 3.0;
 
 /// Computes today's milestones for a location. `midnight` is the unix time of
 /// local midnight. Missing events (polar day/night) are simply absent; the
@@ -33,6 +35,7 @@ pub fn milestones(
     latitude: f64,
     longitude: f64,
     midnight: f64,
+    band: Band,
     day_temp: u32,
     night_temp: u32,
 ) -> Vec<Milestone> {
@@ -41,8 +44,7 @@ pub fn milestones(
     let samples: Vec<f64> = (0..=1440)
         .map(|m| elevation_at(f64::from(m) / 60.0))
         .collect();
-    let kelvin_of =
-        |elevation: f64| target_temperature(elevation, Band::default(), day_temp, night_temp);
+    let kelvin_of = |elevation: f64| target_temperature(elevation, band, day_temp, night_temp);
 
     let mut events: Vec<Milestone> = Vec::new();
     let mut add_crossing = |name: &'static str, threshold: f64, upward: bool| {
@@ -67,12 +69,12 @@ pub fn milestones(
         }
     };
 
-    add_crossing("night ends", NIGHT_ELEVATION, true);
+    add_crossing("night ends", band.night_elevation, true);
     add_crossing("sunrise", 0.0, true);
-    add_crossing("full day", DAY_ELEVATION, true);
-    add_crossing("fade begins", DAY_ELEVATION, false);
+    add_crossing("full day", band.day_elevation, true);
+    add_crossing("fade begins", band.day_elevation, false);
     add_crossing("sunset", 0.0, false);
-    add_crossing("full night", NIGHT_ELEVATION, false);
+    add_crossing("full night", band.night_elevation, false);
 
     // Solar noon: the sample with the highest sun.
     if let Some((minute, &elevation)) = samples.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1))
@@ -100,7 +102,14 @@ mod tests {
 
     #[test]
     fn a_summer_day_in_istanbul_has_all_seven_events_in_order() {
-        let events = milestones(ISTANBUL_LAT, ISTANBUL_LON, SUMMER_MIDNIGHT, 6500, 2800);
+        let events = milestones(
+            ISTANBUL_LAT,
+            ISTANBUL_LON,
+            SUMMER_MIDNIGHT,
+            Band::default(),
+            6500,
+            2800,
+        );
         assert_eq!(events.len(), 7, "expected all seven events");
         for pair in events.windows(2) {
             assert!(pair[0].hour <= pair[1].hour, "events must be sorted");

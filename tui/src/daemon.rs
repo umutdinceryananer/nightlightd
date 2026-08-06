@@ -49,6 +49,7 @@ trait Daemon {
     fn set_brightness(&self, day: f64, night: f64) -> zbus::Result<()>;
     fn set_fade(&self, fade: bool) -> zbus::Result<()>;
     fn get_fade(&self) -> zbus::Result<bool>;
+    fn get_transition_band(&self) -> zbus::Result<(f64, f64)>;
     fn set_location(&self, latitude: f64, longitude: f64) -> zbus::Result<()>;
     fn clear_location(&self) -> zbus::Result<()>;
     fn get_outputs(&self) -> zbus::Result<Vec<(u32, u16)>>;
@@ -133,6 +134,13 @@ impl Client {
     /// toggle does nothing.
     pub fn fade(&self) -> Option<bool> {
         self.proxy.get_fade().ok()
+    }
+
+    /// The transition band (#39), or `None` against a daemon that is
+    /// unreachable or predates `GetTransitionBand` — the drawings then fall
+    /// back to the default band.
+    pub fn band(&self) -> Option<(f64, f64)> {
+        self.proxy.get_transition_band().ok()
     }
 
     /// Pins a manual location (degrees); the daemon clamps and persists it.

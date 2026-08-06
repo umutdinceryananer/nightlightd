@@ -105,6 +105,10 @@ struct App {
     /// Status unreadable but the daemon's name owned (#42): different
     /// versions, which deserves a different banner than "not running".
     mismatch: bool,
+    /// The transition band (#39) as the daemon last reported it, so every
+    /// curve and schedule drawn here matches what the screen actually does;
+    /// the default against a daemon that cannot answer.
+    band: Band,
     last_poll: Option<Instant>,
     offset_secs: i32,
     theme_index: usize,
@@ -194,6 +198,7 @@ fn main() -> io::Result<()> {
         status: None,
         fade: None,
         mismatch: false,
+        band: Band::default(),
         last_poll: None,
         offset_secs: local_offset_seconds(),
         theme_index,
@@ -281,6 +286,17 @@ impl App {
                 self.status = self.client.status();
                 self.outputs = self.client.outputs();
                 self.fade = self.client.fade();
+                self.band = self
+                    .client
+                    .band()
+                    .map(|(day, night)| {
+                        Band {
+                            day_elevation: day,
+                            night_elevation: night,
+                        }
+                        .sane()
+                    })
+                    .unwrap_or_default();
                 self.mismatch = self.status.is_none() && self.client.daemon_on_bus();
                 self.last_poll = Some(Instant::now());
             }
@@ -1340,6 +1356,7 @@ impl App {
                 status.latitude,
                 status.longitude,
                 midnight + offset_days * 86_400.0,
+                self.band,
                 status.day_temp,
                 status.night_temp,
             )
@@ -1749,6 +1766,7 @@ impl App {
             status.latitude,
             status.longitude,
             midnight,
+            self.band,
             status.day_temp,
             status.night_temp,
         );
@@ -1868,6 +1886,7 @@ impl App {
         // The demo has no daemon to ask, and the reel should show the
         // default, not a dash.
         self.fade = Some(true);
+        self.band = Band::default();
         let mut status = self
             .status
             .take()
@@ -2182,6 +2201,7 @@ impl App {
             status.latitude,
             status.longitude,
             midnight,
+            self.band,
             status.day_temp,
             status.night_temp,
         );
@@ -2274,7 +2294,7 @@ impl App {
         let kelvin_at = |hour: f64| -> f64 {
             f64::from(target_temperature(
                 elev_at(hour),
-                Band::default(),
+                self.band,
                 status.day_temp,
                 status.night_temp,
             ))
@@ -2455,7 +2475,7 @@ impl App {
         let kelvin_at = |hour: f64| -> f64 {
             f64::from(target_temperature(
                 elev_at(hour),
-                Band::default(),
+                self.band,
                 status.day_temp,
                 status.night_temp,
             ))

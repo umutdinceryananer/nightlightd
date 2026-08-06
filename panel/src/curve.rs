@@ -26,6 +26,7 @@ const PAD: f32 = 12.0;
 pub fn show(
     ui: &mut egui::Ui,
     status: Option<&Status>,
+    band: Band,
     day_temp: u32,
     night_temp: u32,
     offset_secs: i32,
@@ -47,7 +48,7 @@ pub fn show(
     let kelvin_at = |hour: f32| -> f32 {
         let t = midnight + f64::from(hour) * 3600.0;
         let elevation = solar_elevation(status.latitude, status.longitude, t);
-        target_temperature(elevation, Band::default(), day_temp, night_temp) as f32
+        target_temperature(elevation, band, day_temp, night_temp) as f32
     };
 
     let (response, painter) = ui.allocate_painter(

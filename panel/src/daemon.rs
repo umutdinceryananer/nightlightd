@@ -51,6 +51,7 @@ trait Daemon {
     fn set_brightness(&self, day: f64, night: f64) -> zbus::Result<()>;
     fn set_fade(&self, fade: bool) -> zbus::Result<()>;
     fn get_fade(&self) -> zbus::Result<bool>;
+    fn get_transition_band(&self) -> zbus::Result<(f64, f64)>;
 }
 
 /// A live handle to the daemon: the session-bus connection plus a proxy.
@@ -134,6 +135,13 @@ impl Client {
     /// or too old to know `GetFade` — the checkbox then does not show.
     pub fn fade(&self) -> Option<bool> {
         self.proxy.get_fade().ok()
+    }
+
+    /// The transition band (#39), or `None` against a daemon that is
+    /// unreachable or predates `GetTransitionBand` — the curve then falls
+    /// back to the default band.
+    pub fn band(&self) -> Option<(f64, f64)> {
+        self.proxy.get_transition_band().ok()
     }
 }
 

@@ -35,9 +35,11 @@ impl Default for Band {
 
 impl Band {
     /// A band safe to divide by. Values are carried verbatim and judged
-    /// only here, where they are spent: a non-finite bound, an inverted
-    /// pair or a zero-width one degrades to the default, quietly.
-    fn sane(self) -> Band {
+    /// where they are spent: a non-finite bound, an inverted pair or a
+    /// zero-width one degrades to the default, quietly. Public so a client
+    /// drawing the schedule can show the band the daemon actually applies,
+    /// not the raw pair it reports.
+    pub fn sane(self) -> Band {
         let ordered = self.day_elevation > self.night_elevation;
         if self.day_elevation.is_finite() && self.night_elevation.is_finite() && ordered {
             self

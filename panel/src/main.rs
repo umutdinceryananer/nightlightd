@@ -16,6 +16,8 @@ use std::time::{Duration, Instant};
 
 use eframe::egui;
 
+use nightlightd_core::transition::Band;
+
 use crate::daemon::{Client, Status};
 
 /// The slider's ends, in kelvin. Below ~2000 K the screen goes deep orange;
@@ -81,6 +83,10 @@ struct Panel {
     /// Status unreadable but the daemon's name owned (#42): different
     /// versions, which deserves a different notice than silence.
     mismatch: bool,
+    /// The transition band (#39) as the daemon last reported it, so the
+    /// curve matches what the screen actually does; the default against a
+    /// daemon that cannot answer.
+    band: Band,
     last_poll: Option<Instant>,
     /// The day/night bounds as the daemon last reported them, plus whether a
     /// bound slider is mid-drag — so a change made elsewhere (another client, a
@@ -124,6 +130,17 @@ impl eframe::App for Panel {
         {
             self.status = self.client.status();
             self.fade = self.client.fade();
+            self.band = self
+                .client
+                .band()
+                .map(|(day, night)| {
+                    Band {
+                        day_elevation: day,
+                        night_elevation: night,
+                    }
+                    .sane()
+                })
+                .unwrap_or_default();
             self.mismatch = self.status.is_none() && self.client.daemon_on_bus();
             if self.mismatch {
                 // Maybe this process is simply older than the file it came
@@ -239,6 +256,7 @@ impl eframe::App for Panel {
         curve::show(
             ui,
             status.as_ref(),
+            self.band,
             self.day_temp,
             self.night_temp,
             self.offset_secs,
@@ -509,6 +527,7 @@ fn main() -> eframe::Result<()> {
                 status: None,
                 fade: None,
                 mismatch: false,
+                band: Band::default(),
                 last_poll: None,
                 daemon_day: 6500,
                 daemon_night: 4500,
