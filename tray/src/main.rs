@@ -16,6 +16,7 @@ use std::time::Duration;
 use ksni::blocking::TrayMethods;
 use ksni::menu::{CheckmarkItem, StandardItem};
 use ksni::{MenuItem, ToolTip};
+use nightlightd_core::transition::Band;
 
 use crate::daemon::{Client, Status};
 
@@ -35,6 +36,10 @@ struct NightLight {
     /// (#42): the two are different versions, and saying "not running"
     /// would be the lie the first stale tray told.
     mismatch: bool,
+    /// The transition band (#39) the daemon runs, so the tooltip names the
+    /// sun's phase the way the screen behaves rather than the way the
+    /// defaults used to.
+    band: Band,
 }
 
 impl NightLight {
@@ -42,6 +47,7 @@ impl NightLight {
     fn refresh(&mut self) {
         self.status = self.client.status();
         self.fade = self.client.fade();
+        self.band = self.client.band();
         self.mismatch = self.status.is_none() && self.client.daemon_on_bus();
         if self.mismatch {
             // Maybe this process is simply older than the file it came from;
@@ -167,7 +173,7 @@ impl ksni::Tray for NightLight {
     /// The hover text: the tray's version of `--status`.
     fn tool_tip(&self) -> ToolTip {
         let description = match &self.status {
-            Some(status) => status.describe(),
+            Some(status) => status.describe(self.band),
             None if self.mismatch => "update needed\n\
                  tray and daemon are different versions"
                 .into(),
@@ -346,6 +352,7 @@ fn main() {
 
     let status = client.status();
     let fade = client.fade();
+    let band = client.band();
     let mismatch = status.is_none() && client.daemon_on_bus();
     if mismatch {
         // Heal a stale process before the icon even registers.
@@ -361,6 +368,7 @@ fn main() {
         status,
         fade,
         mismatch,
+        band,
     })
     .assume_sni_available(true)
     .spawn()

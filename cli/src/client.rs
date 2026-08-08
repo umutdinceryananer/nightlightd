@@ -113,40 +113,20 @@ fn print_status(status: &Status, fade: bool, band: (f64, f64)) {
         );
     }
     if status.has_location {
+        // Named by the band this daemon runs, not by the one it shipped
+        // with — the line above may have just printed a different pair.
+        let configured = nightlightd_core::transition::Band {
+            day_elevation: band.0,
+            night_elevation: band.1,
+        };
         println!(
             "  sun:    {:+.1}° ({})",
             status.elevation,
-            sun_phase(status.elevation)
+            nightlightd_core::transition::phase(status.elevation, configured)
         );
         println!(
             "  place:  {:.2}, {:.2} (resolved)",
             status.latitude, status.longitude
         );
-    }
-}
-
-/// Names the part of the day for a solar elevation, matching the transition
-/// curve's thresholds (full day at +3°, full night at -6°).
-fn sun_phase(elevation: f64) -> &'static str {
-    if elevation >= 3.0 {
-        "day"
-    } else if elevation <= -6.0 {
-        "night"
-    } else {
-        "transition"
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn sun_phase_names_each_band() {
-        assert_eq!(sun_phase(45.0), "day");
-        assert_eq!(sun_phase(3.0), "day"); // exact endpoint
-        assert_eq!(sun_phase(0.0), "transition");
-        assert_eq!(sun_phase(-6.0), "night"); // exact endpoint
-        assert_eq!(sun_phase(-20.0), "night");
     }
 }

@@ -2503,6 +2503,7 @@ name = "nightlight-tray"
 version = "0.2.1"
 dependencies = [
  "ksni",
+ "nightlightd-core",
  "serde",
  "zbus",
 ]

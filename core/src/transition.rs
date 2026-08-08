@@ -71,6 +71,20 @@ pub fn target_brightness(elevation: f64, band: Band, day: f64, night: f64) -> f6
     night + daylight_alpha(elevation, band) * (day - night)
 }
 
+/// Names the part of the day an elevation falls in, for the one line every
+/// interface prints beside the sun's angle. Derived from the same alpha the
+/// temperature is, so the word can never disagree with the colour: every
+/// client used to carry its own copy of this with +3 and -6 written into it,
+/// which meant a configured band (#39) got a schedule that moved and a label
+/// that did not.
+pub fn phase(elevation: f64, band: Band) -> &'static str {
+    match daylight_alpha(elevation, band) {
+        alpha if alpha >= 1.0 => "day",
+        alpha if alpha <= 0.0 => "night",
+        _ => "transition",
+    }
+}
+
 /// Where the sun sits in the transition band: 1.0 at or above full daytime,
 /// 0.0 at or below full night, easing linearly between. The one place the
 /// band is applied, so everything that follows the sun follows it together.
@@ -211,6 +225,30 @@ mod tests {
             assert_eq!(target_temperature(elevation, poisoned, DAY, NIGHT), want);
             elevation += 0.5;
         }
+    }
+
+    /// The bug this function exists to end: with the night bound at -12, a
+    /// sun at -6 is still on its way down, and the word has to say so. The
+    /// old per-client copies said "night" there, beside a screen that was
+    /// visibly still moving.
+    #[test]
+    fn the_phase_word_follows_the_configured_band() {
+        let deep = Band {
+            day_elevation: 3.0,
+            night_elevation: -12.0,
+        };
+        assert_eq!(phase(-6.0, Band::default()), "night");
+        assert_eq!(phase(-6.0, deep), "transition");
+        // Endpoints are named by the same rule the curve uses.
+        assert_eq!(phase(-12.0, deep), "night");
+        assert_eq!(phase(3.0, deep), "day");
+        assert_eq!(phase(45.0, deep), "day");
+        // And a silly band is named by the default, like everything else.
+        let inverted = Band {
+            day_elevation: -6.0,
+            night_elevation: 3.0,
+        };
+        assert_eq!(phase(0.0, inverted), phase(0.0, Band::default()));
     }
 
     #[test]

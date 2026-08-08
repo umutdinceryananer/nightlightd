@@ -9,6 +9,11 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+# The shared maths, so the tooltip names the sun's phase with the same
+# function the daemon shapes the curve with. Core pulls in nothing itself —
+# it is pure logic by rule — so this costs the tray no tree, and it ends the
+# fourth hand-copied pair of thresholds.
+nightlightd-core = { version = "0.2.0", path = "../core" }
 # The blocking API, driven by async-io — NOT tokio. ksni's default `tokio`
 # feature drives its blocking `spawn` with a nested tokio runtime, which panics
 # with "Cannot start a runtime from within a runtime". The two backends are
