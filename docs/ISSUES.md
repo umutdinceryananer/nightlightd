@@ -765,6 +765,13 @@ it on, one surface's toggle following in the others within a poll.
 
 ### #48 The band, readable and undoable
 
+**Done.** Shipped 2026-08-08 with #45 still warm. The panel carries a
+line under its curve naming the pair, silent at the default; beside it
+a `Default band` button. The dashboard's `b` editor gets `d`, which
+fills the draft rather than sending, so returning is a change like any
+other and can be escaped. Both ends tested: pressing it on a band
+already at the default leaves nothing to confirm.
+
 - **What:** Two small gaps #45 left. The panel shows the band only
   while a ramp is under the pointer, so a band set from the dashboard
   or the config is a shape with no number anywhere in the window. And
