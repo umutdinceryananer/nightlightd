@@ -61,6 +61,35 @@ pub enum Edit {
     NightTemp(u32),
 }
 
+/// Where a plateau drag lands the daytime temperature. Clamped to the same
+/// window the panel's own slider offers, so the two controls for one value
+/// can never disagree about what is settable, and never below the night
+/// bound — the curve is a schedule, and a schedule that runs backwards is
+/// not a picture of anything.
+fn held_day_temp(kelvin: f32, night_temp: u32) -> u32 {
+    (kelvin.round() as u32).clamp(night_temp.max(DAY_FLOOR), 6500)
+}
+
+/// The same for the lower plateau, held under the day bound.
+fn held_night_temp(kelvin: f32, day_temp: u32) -> u32 {
+    (kelvin.round() as u32).clamp(1500, day_temp.min(NIGHT_CEIL))
+}
+
+/// Where a ramp drag lands a transition bound: the solar elevation under the
+/// pointer, stopped before it crosses its neighbour. The pointer can be
+/// anywhere on a 24-hour axis, so without this a drag past noon would invert
+/// the pair and the daemon would quietly fall back to the default — the
+/// screen jumping to a band the hand never asked for.
+fn held_band(band: Band, elevation: f64, day: bool) -> Band {
+    let mut next = band;
+    if day {
+        next.day_elevation = elevation.max(band.night_elevation + MIN_BAND_WIDTH);
+    } else {
+        next.night_elevation = elevation.min(band.day_elevation - MIN_BAND_WIDTH);
+    }
+    next
+}
+
 /// Draws the curve. `status` supplies the location; `band`, `day_temp` and
 /// `night_temp` come from the panel's live values so the shape follows a drag
 /// before the daemon has been told. Shows a placeholder when no location is
@@ -158,12 +187,8 @@ pub fn show(
     if let Some(handle) = *held {
         if let Some(p) = response.interact_pointer_pos() {
             edit = Some(match handle {
-                Handle::DayLevel => Edit::DayTemp(
-                    (to_kelvin(p.y).round() as u32).clamp(night_temp.max(DAY_FLOOR), 6500),
-                ),
-                Handle::NightLevel => Edit::NightTemp(
-                    (to_kelvin(p.y).round() as u32).clamp(1500, day_temp.min(NIGHT_CEIL)),
-                ),
+                Handle::DayLevel => Edit::DayTemp(held_day_temp(to_kelvin(p.y), night_temp)),
+                Handle::NightLevel => Edit::NightTemp(held_night_temp(to_kelvin(p.y), day_temp)),
                 Handle::DayBound | Handle::NightBound => {
                     let hour = f64::from(hour_of_x(p.x));
                     let elevation = solar_elevation(
@@ -171,13 +196,7 @@ pub fn show(
                         status.longitude,
                         midnight + hour * 3600.0,
                     );
-                    let mut next = band;
-                    if handle == Handle::DayBound {
-                        next.day_elevation = elevation.max(band.night_elevation + MIN_BAND_WIDTH);
-                    } else {
-                        next.night_elevation = elevation.min(band.day_elevation - MIN_BAND_WIDTH);
-                    }
-                    Edit::Band(next)
+                    Edit::Band(held_band(band, elevation, handle == Handle::DayBound))
                 }
             });
         }
@@ -304,4 +323,52 @@ pub fn show(
     }
 
     edit
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A drag runs the pointer across the whole plot, including places that
+    /// would invert the band. Wherever it lands, the pair stays ordered and
+    /// the daemon never sees a band it would have to repair.
+    #[test]
+    fn a_ramp_drag_cannot_invert_the_band() {
+        let band = Band::default();
+        for step in -180..=180 {
+            let elevation = f64::from(step) * 0.5;
+            let moved_day = held_band(band, elevation, true);
+            assert!(moved_day.day_elevation > moved_day.night_elevation);
+            assert_eq!(moved_day.sane(), moved_day);
+            let moved_night = held_band(band, elevation, false);
+            assert!(moved_night.day_elevation > moved_night.night_elevation);
+            assert_eq!(moved_night.sane(), moved_night);
+        }
+    }
+
+    /// Inside its own range a drag is transparent: the bound lands exactly
+    /// on the elevation under the pointer, no snapping, no rounding.
+    #[test]
+    fn a_ramp_drag_lands_where_the_pointer_is() {
+        let band = Band::default();
+        assert_eq!(held_band(band, -12.0, false).night_elevation, -12.0);
+        assert_eq!(held_band(band, 8.0, true).day_elevation, 8.0);
+        // And the bound it was not holding stays exactly where it was.
+        assert_eq!(
+            held_band(band, -12.0, false).day_elevation,
+            band.day_elevation
+        );
+    }
+
+    /// The plateaus obey the sliders' window, so dragging the curve can
+    /// never reach a value the slider beside it refuses to show.
+    #[test]
+    fn plateau_drags_stay_inside_the_sliders_window() {
+        assert_eq!(held_day_temp(9000.0, 4500), 6500);
+        assert_eq!(held_day_temp(1000.0, 4500), 4500); // never under the night bound
+        assert_eq!(held_day_temp(1000.0, 1700), DAY_FLOOR);
+        assert_eq!(held_night_temp(9000.0, 6500), NIGHT_CEIL);
+        assert_eq!(held_night_temp(100.0, 6500), 1500);
+        assert_eq!(held_night_temp(9000.0, 4200), 4200); // never over the day bound
+    }
 }

@@ -450,6 +450,18 @@ Keep all of these **out of v0.1.** Scope creep is what kills projects like this.
   reworks the wire anyway, fold `fade` into Status, retire the side
   getter, and ship all four clients together. This line is the
   promise; do not close #34 without honouring it.
+- **The parking spot filled up (2026-08):** #39 parked
+  `GetTransitionBand` beside `GetFade` on the same reasoning, and the
+  bill is now visible. A dashboard poll is five round trips a second —
+  `GetStatus`, `GetOutputs`, `GetFade`, `GetTransitionBand`, and
+  `NameHasOwner` for #42 — times however many clients are open. Worse
+  than the cost is the seam: a client can read a status and a band
+  that disagree, because they arrived separately. Two fields fold into
+  Status when this lands. A third would be one too many; if something
+  else needs the wire before #34 is ready, do the consolidation first.
+  #47 and #49 are both queued behind exactly that: one turns the band
+  into four numbers, the other into a list. Neither should be parked
+  beside the other two.
 
 ### #37 Brightness control
 
@@ -514,6 +526,22 @@ pair (inverted, non-finite) degrades to the default where it is spent,
 never where it is stored, so what the user wrote survives in the
 config. Verified live twice against `--band 3:-25`, at dawn by
 arithmetic and at dusk by screenshot.
+
+**The tail it left (2026-08-08).** Making the band configurable turned
+every hardcoded `+3` and `-6` into a potential lie, and two of them
+survived the five slices. The first was caught by eye: the schedule
+drew from constants while the dot drew from the daemon, which put the
+dot in mid-air. The second was caught by audit and is the same defect
+one layer up — the *word* beside the sun's angle. `sun_phase` had been
+hand-copied into the CLI, the tray and the dashboard, all three with
+the old pair inside, so a daemon reporting `night below -14.0°` and a
+sun at `-12.9°` printed `(night)` over a screen that was still
+warming. It now lives once, in `core::transition::phase`, derived from
+the same alpha the temperature is, so the word cannot disagree with
+the colour. The tray took a dependency on `core` to get it; core
+carries no dependencies of its own, so that costs the tray nothing and
+ends the fourth copy. **The lesson worth keeping: when a constant
+becomes a setting, grep for the constant, not for the feature.**
 
 - **What:** Expose the transition band's elevation bounds in the config
   (`day_elevation`, `night_elevation`, today fixed at +3 and -6).
@@ -668,6 +696,17 @@ it on, one surface's toggle following in the others within a poll.
 - **Done when:** Dragging the edge in the panel visibly reshapes the
   curve, changes when full night lands, survives a daemon restart,
   and the dashboard's schedule shows the same band.
+- **Test debt, paid (2026-08):** the rules that keep a drag or a
+  keypress from producing nonsense were buried inside the widget code
+  and so untested. They are pure functions now — `nudged_band` in the
+  dashboard, `held_band` and the two plateau clamps in the panel — and
+  each carries a test: the pair cannot cross however long a key is
+  held, a bound cannot leave the window its rail draws, a ramp dragged
+  across all 24 hours never hands the daemon a band it would have to
+  repair, and `BandEdit::touched` is about difference rather than
+  history, so a draft walked back to where it started asks nothing on
+  escape. What is left needing eyes is only what eyes are for: whether
+  the thing looks right and feels right under the hand.
 - **Difficulty:** Medium
 - **Depends on:** #39
 - **Target:** v0.3
@@ -684,6 +723,13 @@ it on, one surface's toggle following in the others within a poll.
   by the desktop's own panel, so fonts, colours and spacing belong to
   the GTK theme and cannot be touched from here. Where the ceiling
   disappoints, the answer is the panel, one click away.
+- **The band belongs in the readout (2026-08):** the tray now polls
+  `GetTransitionBand`, but only so its tooltip can name the sun's
+  phase honestly (#39's tail). Nothing in the menu says what the band
+  is, and a tray is the wrong place to edit one. The readout line
+  this issue is already adding is the right home for it: the applied
+  temperature, the sun phase, and — when the band is not the default
+  — the pair, the same "earns a line" rule `--status` uses.
 - **Difficulty:** Easy
 - **Target:** v0.3
 
@@ -716,6 +762,82 @@ it on, one surface's toggle following in the others within a poll.
 - **Difficulty:** Medium
 - **Depends on:** #39, #45
 - **Target:** v0.3
+
+### #48 The band, readable and undoable
+
+- **What:** Two small gaps #45 left. The panel shows the band only
+  while a ramp is under the pointer, so a band set from the dashboard
+  or the config is a shape with no number anywhere in the window. And
+  nothing anywhere puts it back: `--band 3:-6` is the only road home
+  from a band dragged somewhere regrettable.
+- **Why:** Found by using it. A setting you can reach from three
+  places and read from one is a setting people will be unsure they
+  changed. The undo matters more than it sounds — the drag and the
+  arrows both clamp to a minimum band width, so it is easy to pinch
+  the transition down to half a degree, which is a hard switch, which
+  is the exact complaint #38 and #39 exist to answer.
+- **Detail:** A quiet line under the panel's curve carrying the pair,
+  by the same "earns a line" rule as `--status`: silence at the
+  default, a reading otherwise. For the undo, the smallest honest
+  thing is a "default band" entry wherever the band is edited — the
+  panel's line and the dashboard's `b` panel — rather than a general
+  reset that would raise the question of what else it resets.
+- **Done when:** A band set in the dashboard is readable in the panel
+  without touching anything, and one action in either returns the
+  screen to +3 / -6.
+- **Difficulty:** Easy
+- **Depends on:** #45
+- **Target:** v0.3
+
+### #49 Shape the ramp, not just its ends
+
+- **What:** Handles *inside* the transition, two to four of them, so
+  the ramp is a shape the user draws rather than a straight line
+  between two bounds. Today #39 says when the transition starts and
+  how wide it is; nothing says what it does in between, because in
+  between is a division. Someone who wants dusk to start gently and
+  finish quickly, or to hold a landing halfway down and then drop,
+  has no way to say so.
+- **Why:** Asked for while using #45's drag. Once the ramp is a thing
+  you take hold of, its straightness is the next thing you notice.
+- **Detail:** The points must be `(elevation, fraction)`, not
+  `(elevation, kelvin)`, and this is the whole design. Three things
+  ride `daylight_alpha` — the temperature, the brightness bounds
+  (GitHub #2) and the phase word — precisely so they move as one. A
+  curve in kelvin would shape the colour and leave the brightness on
+  the old straight line, which is the coupling this project has kept
+  on purpose since v0.2. Store fractions, draw kelvin.
+  The rest follows. `daylight_alpha` stops being a division and
+  becomes a walk along a piecewise curve. The current band is the
+  two-point case — `[(night, 0.0), (day, 1.0)]` — so #39 is not
+  replaced, it is the degenerate form, and a config carrying only
+  `day_elevation` and `night_elevation` keeps meaning exactly what it
+  means today. `Band::sane` grows into the same guarantee for a list:
+  elevations strictly increasing, fractions non-decreasing, at least
+  two points, anything else quietly the straight line. Non-decreasing
+  matters more than it sounds — a curve that dips would warm the
+  screen, cool it, then warm it again through one dusk.
+  Drawing is already free: both charts sample the curve rather than
+  assume its shape, which is what #45's staircase work bought. The
+  work is editing (N handles in the panel, N rows behind the
+  dashboard's `b`, which has no mouse) and the wire, where a list is
+  the third thing that would want a side getter.
+- **Ordering:** After #34's consolidation, and designed together with
+  #47. All three change the same contract, and #47 decides whether
+  this is one curve or two — do it in the other order and dawn and
+  dusk each need their own list bolted on afterwards.
+- **The risk, stated plainly:** this is the feature that turns a night
+  light into a curve editor. The defence is that nobody should ever
+  have to open it: the two-point default is redshift's band and stays
+  the shipped behaviour, and the handles are something you find only
+  if you go looking.
+- **Done when:** A dusk ramp can be bent to start slowly and finish
+  quickly, the shape survives a daemon restart, every client draws
+  the same curve, and a config written before this existed behaves
+  identically.
+- **Difficulty:** Hard
+- **Depends on:** #34, #45, #47
+- **Target:** v0.3 or later
 
 ---
 

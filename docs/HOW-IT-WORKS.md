@@ -186,6 +186,10 @@ So the filter never snaps on and off. It arrives slowly, and the user doesn't ev
 
 The `+3°` and `-6°` are redshift's numbers, and only the defaults. The pair lives in the config as `day_elevation` and `night_elevation` (#39); lowering the night bound holds daylight deeper into dusk, for skies that stay bright after sunset. An inverted or non-finite pair quietly behaves like the default, judged where the value is spent rather than where it is stored. A night light that errors out over a config typo is worse than no night light.
 
+You can move it without editing a file. In the panel, the curve itself is the control: drag a ramp sideways to move a bound, drag a plateau up or down to move a temperature, and the shape follows your hand while the screen waits for Apply. In the dashboard, `b` over either chart opens the same two bounds on the arrow keys, again drawn live and applied on Enter. Both stage rather than send, for the same reason: a hand on its way to the value you meant crosses a hundred you did not.
+
+One consequence worth knowing about, because it cost us a bug. Once the band is a setting, every place that still says "+3" or "-6" is telling a story about a different program. The word beside the sun's angle — day, transition, night — comes from `core::transition::phase`, computed from the same fraction the temperature is, so the label and the colour move together. There is one copy of that function and every interface calls it.
+
 ### But where do you get the latitude and longitude?
 
 **This is where the product's most important difference lives.**

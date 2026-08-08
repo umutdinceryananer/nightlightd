@@ -64,7 +64,7 @@ Everything else (packaging, systemd units, solar elevation scheduling) gammastep
 The daemon runs headless and needs no interface. Three thin clients ship with it. Each is a separate process that holds no state and talks only over D-Bus, so if one crashes the filter keeps running.
 
 - **`nightlight-tray`** puts on/off, automatic/manual and the current temperature in the notification area.
-- **`nightlight-panel`** draws the day/night curve with sliders for the temperature bounds, gamma and night brightness.
+- **`nightlight-panel`** draws the day/night curve with sliders for the temperature bounds, gamma and night brightness. The curve is also the control: drag a ramp to move the transition band, a plateau to move a temperature, Apply when the shape looks right.
 - **`nightlight-tui`** is a terminal dashboard built with [ratatui](https://ratatui.rs).
 
 The dashboard has five tabs.
@@ -75,7 +75,7 @@ The dashboard has five tabs.
   <img src="docs/screenshots/05-now-synthwave.png" alt="the now tab in the synthwave theme, pink and cyan" width="270">
 </p>
 
-**now** plots the day as a square wave over the sun's crossing arcs, a staircase when the band is widened, with a strip along the floor showing the screen's colour at every hour. **today** derives the day's milestones (night's end, sunrise, full day, solar noon, sunset) from the same solar maths the daemon schedules on. **location** shows the city the timezone resolved to and takes a manual pin on the map. **settings** adjusts the day and night bounds, gamma and night dim. `T` cycles the themes. `live` follows the screen; the rest (`tokyo`, `mocha`, `nord`, `gruvbox`, `synth`, `ember`, `phosphor`) are fixed palettes.
+**now** plots the day as a square wave over the sun's crossing arcs, a staircase when the band is widened, with a strip along the floor showing the screen's colour at every hour. **today** derives the day's milestones (night's end, sunrise, full day, solar noon, sunset) from the same solar maths the daemon schedules on, over the sun's own arc drawn the same way. **location** shows the city the timezone resolved to and takes a manual pin on the map. **settings** adjusts the day and night bounds, gamma and night dim. `b` over either chart opens the transition band on the arrow keys, drawn live and applied on Enter. `?` lists every key. `T` cycles the themes. `live` follows the screen; the rest (`tokyo`, `mocha`, `nord`, `gruvbox`, `synth`, `ember`, `phosphor`) are fixed palettes.
 
 Every knob is a number in `~/.config/nightlightd/config.toml`. All fields are optional. These are the defaults, except the shaping examples.
 
