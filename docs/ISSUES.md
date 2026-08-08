@@ -713,6 +713,21 @@ it on, one surface's toggle following in the others within a poll.
 
 ### #46 A nicer tray menu
 
+**Done.** Shipped 2026-08-08. Three blocks in a fixed order — what is
+happening, what you can do, the application — so the menu keeps one
+shape whatever the daemon is doing. A readout line on top carrying the
+applied temperature and the sun's phase, and the band under it when it
+is not the default, both unclickable and `Informative`. `Disposition`
+turned out to be the one lever the protocol gives for how a line
+should feel: a stopped daemon reads `Warning`, a version mismatch
+`Alert`. Start and restart collapsed into one slot that changes label
+and icon. Controls unreachable during a mismatch are disabled rather
+than hidden, since the line above says why; the fade switch stays
+hidden against a daemon that has never heard of it, because a greyed
+checkbox there invites a click that can never work. The readout's
+words are a pure function with tests — a `MenuItem` carries closures
+and cannot be read back.
+
 - **What:** The menu grew items (#42, #43, #44) faster than it grew
   looks. The levers SNI actually offers: an icon per item, a readout
   line wearing the current temperature and sun phase, grouping with

@@ -14,9 +14,11 @@ mod daemon;
 use std::time::Duration;
 
 use ksni::blocking::TrayMethods;
+use ksni::menu::Disposition;
+use ksni::menu::Disposition::{Alert, Informative, Warning};
 use ksni::menu::{CheckmarkItem, StandardItem};
 use ksni::{MenuItem, ToolTip};
-use nightlightd_core::transition::Band;
+use nightlightd_core::transition::{Band, phase};
 
 use crate::daemon::{Client, Status};
 
@@ -187,70 +189,61 @@ impl ksni::Tray for NightLight {
         }
     }
 
-    /// Right click: toggle, return to the sun, and quit. The toggle label
-    /// reflects the current state so it reads as an action, not a question.
+    /// Right click. The toggle label reflects the current state so it reads
+    /// as an action rather than a question, and the whole menu keeps one
+    /// shape whatever the daemon is doing (#46).
+    ///
+    /// The ceiling, stated where someone will next be tempted to raise it:
+    /// this menu is drawn by the desktop's own panel. Fonts, colours,
+    /// spacing and how a disabled item looks all belong to the GTK theme and
+    /// cannot be reached from here. What we do control is which items exist,
+    /// what order they come in, where the separators fall, which icon names
+    /// they carry, and each item's `Disposition` — the one hint the protocol
+    /// gives about how a line should feel. Everything below is those levers.
     fn menu(&self) -> Vec<MenuItem<Self>> {
-        // No daemon on the bus at all (#43): every filter action would be a
-        // call to nobody, so the menu offers the one thing that helps.
-        if self.status.is_none() && !self.mismatch {
-            return vec![
-                StandardItem {
-                    label: "Start the daemon".into(),
-                    activate: Box::new(|this: &mut Self| this.start_daemon()),
-                    ..Default::default()
-                }
-                .into(),
-                StandardItem {
-                    label: "Settings…".into(),
-                    activate: Box::new(|_| open_panel()),
-                    ..Default::default()
-                }
-                .into(),
-                MenuItem::Separator,
-                StandardItem {
-                    label: "Quit".into(),
-                    icon_name: "application-exit".into(),
-                    activate: Box::new(|_| std::process::exit(0)),
-                    ..Default::default()
-                }
-                .into(),
-            ];
+        // Three blocks, always in this order: what is happening, what you can
+        // do about it, and the application itself (#46). The menu had grown
+        // by accretion — #42, #43 and #44 each pushed an item onto one flat
+        // pile — and a pile that changes length every time it opens is a menu
+        // nobody builds muscle memory for.
+        let mut items: Vec<MenuItem<Self>> = vec![self.readout()];
+        if let Some(band) = self.band_line() {
+            items.push(band);
         }
+        items.push(MenuItem::Separator);
 
+        // The filter's own controls. Unreachable during a version mismatch
+        // (#42), and disabled rather than hidden, because the line above says
+        // exactly why — hiding is for a control whose absence cannot be
+        // explained, like the fade switch against a daemon that has never
+        // heard of it.
+        let reachable = self.status.is_some();
         let on = self.status.as_ref().is_some_and(|status| status.enabled);
         // The item promises a direction, so send that direction — a blind
         // Toggle against status gone stale would do the opposite of the label.
         let turn_on = !on;
-        let mut items: Vec<MenuItem<Self>> = vec![
+        items.push(
             StandardItem {
                 label: if turn_on { "Turn on" } else { "Turn off" }.into(),
+                enabled: reachable,
                 activate: Box::new(move |this: &mut Self| this.set_enabled(turn_on)),
                 ..Default::default()
             }
             .into(),
+        );
+        items.push(
             CheckmarkItem {
                 label: "Automatic".into(),
+                enabled: reachable,
                 checked: self.status.as_ref().is_some_and(|status| status.following),
                 activate: Box::new(|this: &mut Self| this.toggle_follow()),
                 ..Default::default()
             }
             .into(),
-        ];
-        // The user-clicked half of the #42 recovery: a daemon still running
-        // its pre-update binary is fixed by a restart, and clicking is the
-        // user's decision in a way an automatic kill never could be.
-        if self.mismatch {
-            items.push(
-                StandardItem {
-                    label: "Restart the daemon".into(),
-                    activate: Box::new(|this: &mut Self| this.restart_daemon()),
-                    ..Default::default()
-                }
-                .into(),
-            );
-        }
+        );
         // The fade switch (#44) earns an item only when the daemon can
-        // answer for it; a checkbox nobody reads behind would lie.
+        // answer for it; a checkbox nobody reads behind would lie, and a
+        // greyed one would invite a click that can never work.
         if let Some(fade) = self.fade {
             items.push(
                 CheckmarkItem {
@@ -262,9 +255,38 @@ impl ksni::Tray for NightLight {
                 .into(),
             );
         }
+        items.push(MenuItem::Separator);
+
+        // The daemon's own lifecycle: whichever of the two repairs applies.
+        // Starting a daemon that is not there (#43), or restarting one still
+        // running its pre-update binary (#42) — the user-clicked half of that
+        // recovery, a decision an automatic kill could never make for them.
+        if self.status.is_none() {
+            let (label, icon, restart) = if self.mismatch {
+                ("Restart the daemon", "view-refresh", true)
+            } else {
+                ("Start the daemon", "media-playback-start", false)
+            };
+            items.push(
+                StandardItem {
+                    label: label.into(),
+                    icon_name: icon.into(),
+                    activate: Box::new(move |this: &mut Self| {
+                        if restart {
+                            this.restart_daemon()
+                        } else {
+                            this.start_daemon()
+                        }
+                    }),
+                    ..Default::default()
+                }
+                .into(),
+            );
+        }
         items.extend([
             StandardItem {
                 label: "Settings…".into(),
+                icon_name: "preferences-system".into(),
                 activate: Box::new(|_| open_panel()),
                 ..Default::default()
             }
@@ -279,6 +301,73 @@ impl ksni::Tray for NightLight {
             .into(),
         ]);
         items
+    }
+}
+
+impl NightLight {
+    /// The top line of the menu: what the screen is doing, as something you
+    /// cannot click. The tooltip has carried this since the beginning, but a
+    /// tooltip needs a hover held over a 22-pixel icon, and several desktops
+    /// show it late or not at all. Opening the menu is the deliberate act;
+    /// the answer should be waiting there.
+    fn readout(&self) -> MenuItem<Self> {
+        let (label, disposition) = readout_label(self.status.as_ref(), self.mismatch, self.band);
+        StandardItem {
+            label,
+            enabled: false,
+            disposition,
+            ..Default::default()
+        }
+        .into()
+    }
+
+    /// The band under the readout, by the rule the status line uses: the
+    /// default earns no ink. Someone who has never touched it never learns
+    /// the word; someone who has can check it without opening anything.
+    fn band_line(&self) -> Option<MenuItem<Self>> {
+        if self.status.is_none() || self.band == Band::default() {
+            return None;
+        }
+        Some(
+            StandardItem {
+                label: format!(
+                    "Band · day above {:+.1}°, night below {:+.1}°",
+                    self.band.day_elevation, self.band.night_elevation
+                ),
+                enabled: false,
+                disposition: Informative,
+                ..Default::default()
+            }
+            .into(),
+        )
+    }
+}
+
+/// The readout's words, kept out of the menu item so they can be tested:
+/// a `MenuItem` carries closures and cannot be read back. Order matters —
+/// "off" outranks everything, because a filter that is off is the answer to
+/// the question no matter where the sun is, and "manual" outranks the phase,
+/// because a pinned temperature is not following anything.
+fn readout_label(status: Option<&Status>, mismatch: bool, band: Band) -> (String, Disposition) {
+    match status {
+        Some(status) if !status.enabled => (format!("{} K · off", status.temperature), Informative),
+        Some(status) if !status.following => {
+            (format!("{} K · manual", status.temperature), Informative)
+        }
+        Some(status) if status.has_location => (
+            format!(
+                "{} K · {}",
+                status.temperature,
+                phase(status.elevation, band)
+            ),
+            Informative,
+        ),
+        Some(status) => (
+            format!("{} K · no location", status.temperature),
+            Informative,
+        ),
+        None if mismatch => ("Update needed · versions differ".to_string(), Alert),
+        None => ("Daemon not running".to_string(), Warning),
     }
 }
 
@@ -386,5 +475,93 @@ fn main() {
     loop {
         std::thread::sleep(REFRESH);
         handle.update(NightLight::refresh);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn following_at(elevation: f64) -> Status {
+        Status {
+            enabled: true,
+            temperature: 4200,
+            source: "auto".into(),
+            elevation,
+            has_location: true,
+            latitude: 41.02,
+            longitude: 28.97,
+            following: true,
+            day_temp: 6500,
+            night_temp: 1700,
+            gamma: 1.0,
+            brightness: 1.0,
+            day_brightness: 1.0,
+            night_brightness: 1.0,
+        }
+    }
+
+    /// The line has to answer "what is my screen doing" in every state the
+    /// tray can be in, and never answer it with the sun when the sun is not
+    /// what is driving the screen.
+    #[test]
+    fn the_readout_answers_for_every_state() {
+        let sunny = following_at(-6.5);
+        assert_eq!(
+            readout_label(Some(&sunny), false, Band::default()).0,
+            "4200 K · night"
+        );
+        // The same instant under a band that reaches deeper into dusk.
+        let deep = Band {
+            day_elevation: 3.0,
+            night_elevation: -14.0,
+        };
+        assert_eq!(
+            readout_label(Some(&sunny), false, deep).0,
+            "4200 K · transition"
+        );
+
+        let mut off = sunny.clone();
+        off.enabled = false;
+        assert_eq!(
+            readout_label(Some(&off), false, Band::default()).0,
+            "4200 K · off"
+        );
+
+        let mut manual = sunny.clone();
+        manual.following = false;
+        assert_eq!(
+            readout_label(Some(&manual), false, Band::default()).0,
+            "4200 K · manual"
+        );
+
+        let mut placeless = sunny.clone();
+        placeless.has_location = false;
+        assert_eq!(
+            readout_label(Some(&placeless), false, Band::default()).0,
+            "4200 K · no location"
+        );
+    }
+
+    /// The two daemon-shaped absences must not read alike: one is fixed by
+    /// starting something, the other by installing something (#42).
+    #[test]
+    fn an_absent_daemon_and_a_stale_one_read_differently() {
+        let (stopped, stopped_tone) = readout_label(None, false, Band::default());
+        let (stale, stale_tone) = readout_label(None, true, Band::default());
+        assert_ne!(stopped, stale);
+        assert_eq!(stopped_tone, Warning);
+        assert_eq!(stale_tone, Alert);
+    }
+
+    /// An off filter is off whatever the sun is doing: the phase word must
+    /// not leak into a line about a screen nothing is filtering.
+    #[test]
+    fn a_disabled_filter_does_not_report_the_sun() {
+        let mut off = following_at(45.0);
+        off.enabled = false;
+        let (label, _) = readout_label(Some(&off), false, Band::default());
+        assert!(!label.contains("day"));
+        assert!(label.ends_with("off"));
     }
 }
