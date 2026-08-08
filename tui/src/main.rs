@@ -20,7 +20,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use nightlightd_core::color::temperature_to_rgb;
 use nightlightd_core::location::nearest_zone;
 use nightlightd_core::solar::solar_elevation;
-use nightlightd_core::transition::{Band, target_temperature};
+use nightlightd_core::transition::{Band, phase, target_temperature};
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Alignment, Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Style};
@@ -71,9 +71,14 @@ const DEMO_SCRIPT: &[(f64, KeyCode, &str)] = &[
 const TABS: &[&str] = &["now", "today", "location", "outputs", "settings"];
 const LOCATION_TAB: usize = 2;
 /// The settings tab's index and its selectable rows: day, night, gamma,
-/// night dim, fade, theme, login.
+/// night dim, fade, theme, login. The transition band is deliberately not
+/// here (#45): it changes the shape of the curve, so it is edited over the
+/// curve, with `b`, where the change can be watched.
 const SETTINGS_TAB: usize = 4;
 const SETTINGS_ITEMS: usize = 7;
+/// The tabs that draw the schedule, and so accept `b`.
+const NOW_TAB: usize = 0;
+const TODAY_TAB: usize = 1;
 
 /// The gamma slider's on-screen band. Core accepts 0.1 to 10, but a slider
 /// spanning that would bury the useful calibration range in its first
@@ -83,8 +88,121 @@ const GAMMA_UI_MAX: f64 = 1.5;
 /// One arrow press of gamma or brightness.
 const FACTOR_STEP: f64 = 0.05;
 
+/// One arrow press of a transition bound (#45), in degrees of elevation.
+const BAND_STEP: f64 = 0.5;
+/// The band rows' on-screen window. The floor is astronomical twilight,
+/// below which there is no more night to find; the ceiling is daylight
+/// nobody filters through. A hand-written config value outside this still
+/// applies and still draws, the arrows just cannot produce one.
+const BAND_UI_MIN: f64 = -18.0;
+const BAND_UI_MAX: f64 = 6.0;
+/// The narrowest the arrows may pinch the band. A bound may move, the pair
+/// may never cross.
+const MIN_BAND_WIDTH: f64 = 0.5;
+
 /// A settings slider rail: (value, min, max) for the row underneath.
 type Rail = (f64, f64, f64);
+
+/// One line of the help popup: the key, and what it does.
+type KeyRow = (&'static str, &'static str);
+
+/// The help popup's sections, folded like an accordion so one is open at a
+/// time. The footer keeps three keys and no more, which makes this the only
+/// place the rest are written down — and twenty keys in one flat column is a
+/// wall, not a reference.
+const HELP: [(&str, &[KeyRow]); 4] = [
+    (
+        "everywhere",
+        &[
+            ("⇥ · 1-5", "switch tab"),
+            ("t", "toggle the filter"),
+            ("a", "back to automatic"),
+            ("↑↓", "nudge the night temperature"),
+            ("T", "cycle the theme"),
+            ("s", "sun details"),
+            ("r", "start or restart a silent daemon"),
+            ("?", "this help"),
+            ("q", "quit"),
+        ],
+    ),
+    (
+        "now · today",
+        &[
+            ("b", "the transition band"),
+            ("↑↓", "pick a bound"),
+            ("‹›", "move it half a degree"),
+            ("⏎", "apply · esc reverts"),
+        ],
+    ),
+    (
+        "location",
+        &[
+            ("⏎", "pick a spot · pin it"),
+            ("m", "the map, full size"),
+            ("c", "back to the timezone"),
+        ],
+    ),
+    (
+        "settings",
+        &[("↑↓", "select a row"), ("‹›", "adjust it"), ("⏎", "toggle")],
+    ),
+];
+
+/// The band editor's state (#45). The arrows build a draft that the curve
+/// draws immediately and the daemon never hears about; the screen changes
+/// on apply, and only then. The same bargain the panel's drag makes, for
+/// the same reason: a walk to the value you meant crosses a dozen you did
+/// not, and each one would be a write to disk and a lurch on the screen.
+struct BandEdit {
+    /// The band the editor opened with, and what revert goes back to.
+    original: Band,
+    /// The band the arrows have built so far.
+    draft: Band,
+    /// Which bound the arrows move: 0 the day bound, 1 the night bound.
+    selected: usize,
+    /// Set by escaping with an unapplied draft: the panel stops offering
+    /// bounds and asks the one question left.
+    confirming: bool,
+}
+
+impl BandEdit {
+    fn touched(&self) -> bool {
+        self.draft != self.original
+    }
+}
+
+/// One arrow press on a transition bound: the next half-degree in the
+/// direction pressed, not half a degree from wherever the value happens to
+/// sit. A bound dragged on the panel's curve lands on whatever elevation the
+/// pointer was over, and stepping from -13.9578 would only ever produce more
+/// numbers like it. The first press tidies, the rest walk the grid.
+/// One arrow press on the band editor: move `day` or the night bound by a
+/// step, then hold the two rules a keypress must never break. The pair may
+/// not cross — a bound stops half a degree from its neighbour, which is
+/// still a hard switch but at least a well-defined one — and neither bound
+/// leaves the window the rails draw, so what the row shows is what the value
+/// is. Pure, because these are the rules worth a test rather than an eye.
+fn nudged_band(band: Band, day: bool, increase: bool) -> Band {
+    let mut next = band;
+    if day {
+        next.day_elevation = nudge(next.day_elevation, increase)
+            .clamp(next.night_elevation + MIN_BAND_WIDTH, BAND_UI_MAX);
+    } else {
+        next.night_elevation = nudge(next.night_elevation, increase)
+            .clamp(BAND_UI_MIN, next.day_elevation - MIN_BAND_WIDTH);
+    }
+    next
+}
+
+fn nudge(value: f64, increase: bool) -> f64 {
+    let steps = value / BAND_STEP;
+    let next = if increase {
+        (steps + 1e-9).floor() + 1.0
+    } else {
+        (steps - 1e-9).ceil() - 1.0
+    };
+    next * BAND_STEP
+}
 
 /// Picker steps in degrees — coarse on purpose; braille map cells are chunky.
 const PICK_LAT_STEP: f64 = 3.0;
@@ -109,6 +227,11 @@ struct App {
     /// curve and schedule drawn here matches what the screen actually does;
     /// the default against a daemon that cannot answer.
     band: Band,
+    /// Whether that band came from the daemon or is the drawing fallback.
+    /// The settings rows (#45) show blanks when it is the fallback: a v0.2.1
+    /// daemon answers `GetStatus` but knows nothing of a band, and offering
+    /// arrows that change nothing is the lie the fade row already refuses.
+    band_known: bool,
     last_poll: Option<Instant>,
     offset_secs: i32,
     theme_index: usize,
@@ -116,8 +239,12 @@ struct App {
     settings_selected: usize,
     /// The theme picker popup: `Some(highlighted index)` while open.
     theme_popup: Option<usize>,
+    /// The `b` band editor (#45) while it is open.
+    band_edit: Option<BandEdit>,
     /// The `?` overlay: every key in one place.
     help_popup: bool,
+    /// Which of the help popup's sections is unfolded.
+    help_section: usize,
     /// The `s` overlay: the solar facts behind the dashboard's summaries.
     sun_popup: bool,
     /// The `m` overlay: the world map at full size.
@@ -199,13 +326,16 @@ fn main() -> io::Result<()> {
         fade: None,
         mismatch: false,
         band: Band::default(),
+        band_known: false,
         last_poll: None,
         offset_secs: local_offset_seconds(),
         theme_index,
         tab,
         settings_selected: 0,
         theme_popup: None,
+        band_edit: None,
         help_popup: false,
+        help_section: 0,
         sun_popup: false,
         map_popup: false,
         start_at_login: autostart::enabled(),
@@ -286,17 +416,19 @@ impl App {
                 self.status = self.client.status();
                 self.outputs = self.client.outputs();
                 self.fade = self.client.fade();
-                self.band = self
-                    .client
-                    .band()
-                    .map(|(day, night)| {
-                        Band {
-                            day_elevation: day,
-                            night_elevation: night,
-                        }
-                        .sane()
-                    })
-                    .unwrap_or_default();
+                let reported = self.client.band().map(|(day, night)| {
+                    Band {
+                        day_elevation: day,
+                        night_elevation: night,
+                    }
+                    .sane()
+                });
+                // The schedule still needs a band to draw with, so it falls
+                // back to the default; the settings rows need to know it was
+                // a fallback, or they would offer to edit a band the daemon
+                // has never heard of.
+                self.band = reported.unwrap_or_default();
+                self.band_known = reported.is_some();
                 self.mismatch = self.status.is_none() && self.client.daemon_on_bus();
                 self.last_poll = Some(Instant::now());
             }
@@ -342,6 +474,12 @@ impl App {
             self.popup_key(code);
             return false;
         }
+        // The band editor is modal too, but deliberately not a curtain: it
+        // sits in a corner of the curve so the shape it edits stays visible.
+        if self.band_edit.is_some() {
+            self.band_key(code);
+            return false;
+        }
         // The big map is a working surface, not just a view: the picker runs
         // inside it. `m` always closes; the rest belongs to the pick.
         if self.map_popup {
@@ -371,16 +509,28 @@ impl App {
             }
             return false;
         }
-        if self.help_popup || self.sun_popup {
+        // The help popup is a reference you walk through: one section open at
+        // a time, the others folded to their titles.
+        if self.help_popup {
+            match code {
+                KeyCode::Up | KeyCode::Left => {
+                    self.help_section = (self.help_section + HELP.len() - 1) % HELP.len();
+                }
+                KeyCode::Down | KeyCode::Right | KeyCode::Tab => {
+                    self.help_section = (self.help_section + 1) % HELP.len();
+                }
+                KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') | KeyCode::Char('?') => {
+                    self.help_popup = false;
+                }
+                _ => {}
+            }
+            return false;
+        }
+        if self.sun_popup {
             if matches!(
                 code,
-                KeyCode::Esc
-                    | KeyCode::Enter
-                    | KeyCode::Char('q')
-                    | KeyCode::Char('?')
-                    | KeyCode::Char('s')
+                KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') | KeyCode::Char('s')
             ) {
-                self.help_popup = false;
                 self.sun_popup = false;
             }
             return false;
@@ -406,6 +556,19 @@ impl App {
             KeyCode::Char('?') => self.help_popup = true,
             KeyCode::Char('s') => self.sun_popup = true,
             KeyCode::Char('r') => self.revive_daemon(),
+            // Only where a curve is drawn, and only against a daemon that
+            // has a band to edit: arrows that change nothing are worse than
+            // no arrows.
+            KeyCode::Char('b') if self.band_known && matches!(self.tab, NOW_TAB | TODAY_TAB) => {
+                self.band_edit = Some(BandEdit {
+                    original: self.band,
+                    draft: self.band,
+                    // The night bound first: it is the one people come to
+                    // move, and the one both reviews complained about.
+                    selected: 1,
+                    confirming: false,
+                });
+            }
             KeyCode::Tab => {
                 self.tab = (self.tab + 1) % TABS.len();
             }
@@ -511,6 +674,62 @@ impl App {
             6 => self.toggle_login(),
             _ => {}
         }
+    }
+
+    /// The band editor's keys (#45), over the curve they reshape: up and down
+    /// pick a bound, left and right walk it half a degree at a time, enter
+    /// applies, escape goes back. The curve redraws on the same frame as the
+    /// press, which is the whole reason this is not a settings row.
+    fn band_key(&mut self, code: KeyCode) {
+        let Some(edit) = self.band_edit.as_mut() else {
+            return;
+        };
+        // Escaping with an unapplied draft asks rather than throws the work
+        // away; the question is the whole panel until it is answered.
+        if edit.confirming {
+            match code {
+                KeyCode::Enter | KeyCode::Char('y') => self.apply_band(),
+                KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('q') => self.band_edit = None,
+                // Anything else is a change of mind about leaving.
+                _ => edit.confirming = false,
+            }
+            return;
+        }
+        match code {
+            KeyCode::Up => edit.selected = 0,
+            KeyCode::Down => edit.selected = 1,
+            KeyCode::Left | KeyCode::Right => {
+                edit.draft = nudged_band(edit.draft, edit.selected == 0, code == KeyCode::Right);
+            }
+            KeyCode::Enter => self.apply_band(),
+            KeyCode::Esc | KeyCode::Char('b') | KeyCode::Char('q') => {
+                if edit.touched() {
+                    edit.confirming = true;
+                } else {
+                    self.band_edit = None;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Sends the draft and closes. Adopted locally too, so the schedule
+    /// answers before the next poll confirms it.
+    fn apply_band(&mut self) {
+        let Some(edit) = self.band_edit.take() else {
+            return;
+        };
+        self.client
+            .set_band(edit.draft.day_elevation, edit.draft.night_elevation);
+        self.band = edit.draft;
+        self.last_poll = None;
+    }
+
+    /// The band every curve and schedule here is drawn with: the editor's
+    /// unapplied draft while it is open, the daemon's band otherwise. One
+    /// place, so the picture can never disagree with itself.
+    fn shown_band(&self) -> Band {
+        self.band_edit.as_ref().map_or(self.band, |edit| edit.draft)
     }
 
     /// `r` on the no-daemon banner: start a stopped daemon (#43) or restart
@@ -1046,6 +1265,15 @@ impl App {
             ),
         ];
 
+        // Every row costs a line, a rail row one more beneath it, and a blank
+        // between rows when the card can afford one. It cannot always: the two
+        // band rows (#45) pushed the list past a short terminal, and a clipped
+        // settings list hides the row you were reaching for. Breathing room is
+        // the first thing to go, the rows themselves the last.
+        let rails = rows.iter().filter(|(.., rail)| rail.is_some()).count() as u16;
+        let dense = SETTINGS_ITEMS as u16 + rails + 2;
+        let roomy = inner.height >= dense + SETTINGS_ITEMS as u16;
+
         let mut lines: Vec<Line<'_>> = Vec::new();
         let mut sliders: Vec<(u16, Rail, bool)> = Vec::new();
         for (index, (label, val, hint, slider)) in rows.into_iter().enumerate() {
@@ -1066,7 +1294,9 @@ impl App {
                 sliders.push((inner.y + lines.len() as u16, rail, selected));
                 lines.push(Line::default());
             }
-            lines.push(Line::default());
+            if roomy {
+                lines.push(Line::default());
+            }
         }
         lines.push(Line::from(Span::styled(
             format!(" config  {}", config_path_display()),
@@ -1184,38 +1414,12 @@ impl App {
         };
         frame.render_widget(Paragraph::new(lamp), area);
 
-        let pairs: Vec<(&str, &str)> = if self.tab == SETTINGS_TAB {
-            vec![
-                ("⇥", "tab"),
-                ("↑↓", "select"),
-                ("‹›", "adjust"),
-                ("⏎", "apply"),
-                ("s", "sun"),
-                ("?", "help"),
-                ("q", "quit"),
-            ]
-        } else if self.tab == LOCATION_TAB {
-            vec![
-                ("⇥", "tab"),
-                ("⏎", "pick"),
-                ("m", "map"),
-                ("c", "timezone"),
-                ("s", "sun"),
-                ("?", "help"),
-                ("q", "quit"),
-            ]
-        } else {
-            vec![
-                ("⇥", "tab"),
-                ("t", "toggle"),
-                ("a", "auto"),
-                ("↑↓", "night temp"),
-                ("T", "theme"),
-                ("s", "sun"),
-                ("?", "help"),
-                ("q", "quit"),
-            ]
-        };
+        // Three keys, the same three on every tab. The footer had grown to
+        // nine and read as a toolbar; the full set lives behind `?` now,
+        // where it can be laid out properly instead of queued along one row.
+        // What stays is what you need before you know anything: how to move
+        // between tabs, how to find the rest, how to leave.
+        let pairs = [("⇥", "tab"), ("?", "keys"), ("q", "quit")];
         let mut spans = Vec::new();
         for (index, (key, label)) in pairs.into_iter().enumerate() {
             if index > 0 {
@@ -1234,6 +1438,99 @@ impl App {
         frame.render_widget(
             Paragraph::new(Line::from(spans)).alignment(Alignment::Right),
             area,
+        );
+    }
+
+    /// The band editor (#45): the two transition bounds, live over the curve
+    /// they reshape. Anchored to the top left of the curve instead of centred
+    /// like every other popup, because here the feedback *is* the point — a
+    /// centred panel would cover the only thing worth watching. That corner
+    /// is the emptiest part of both pictures: midnight sits at the left edge,
+    /// where the schedule is at full night and the line is on the floor.
+    fn draw_band_editor(&self, frame: &mut Frame<'_>, area: Rect, pal: &Palette) {
+        let Some(edit) = self.band_edit.as_ref() else {
+            return;
+        };
+        let (width, height) = (32.min(area.width), 6.min(area.height));
+        if width < 24 || height < 6 {
+            return;
+        }
+        let popup = Rect {
+            x: area.x + 1,
+            y: area.y + 1,
+            width,
+            height,
+        };
+        frame.render_widget(Clear, popup);
+        frame.render_widget(
+            Block::new().style(Style::default().bg(pal.overlay).fg(pal.text)),
+            popup,
+        );
+
+        let bound = |label: &str, degrees: f64, picked: bool| {
+            let reading = format!("{degrees:+.1}°");
+            let (open, close) = if picked {
+                ("‹ ", " ›")
+            } else {
+                ("  ", "  ")
+            };
+            let tint = if picked { pal.accent } else { pal.text };
+            Line::from(vec![
+                Span::styled(format!(" {label:<12}"), Style::default().fg(pal.muted)),
+                Span::styled(open.to_string(), Style::default().fg(pal.accent)),
+                Span::styled(format!("{reading:>6}"), Style::default().fg(tint)),
+                Span::styled(close.to_string(), Style::default().fg(pal.accent)),
+            ])
+        };
+        let title = Line::from(Span::styled(
+            " transition band",
+            Style::default().fg(pal.accent2),
+        ));
+        let hint = |text: &str| {
+            Line::from(Span::styled(
+                format!(" {text}"),
+                Style::default().fg(pal.faint),
+            ))
+        };
+        let lines = if edit.confirming {
+            vec![
+                title,
+                Line::from(Span::styled(
+                    " not applied yet",
+                    Style::default().fg(pal.accent),
+                )),
+                Line::from(Span::styled(
+                    " apply the new band?",
+                    Style::default().fg(pal.text),
+                )),
+                hint("⏎ apply · esc revert"),
+            ]
+        } else {
+            vec![
+                title,
+                bound("day above", edit.draft.day_elevation, edit.selected == 0),
+                bound(
+                    "night below",
+                    edit.draft.night_elevation,
+                    edit.selected == 1,
+                ),
+                // The draft is drawn but unsent, so the keys have to say
+                // which one commits it.
+                hint(if edit.touched() {
+                    "⏎ apply · esc revert"
+                } else {
+                    "↑↓ pick · ‹› adjust"
+                }),
+            ]
+        };
+        frame.render_widget(
+            Paragraph::new(lines),
+            Rect {
+                x: popup.x + 1,
+                y: popup.y + 1,
+                width: popup.width.saturating_sub(2),
+                height: popup.height.saturating_sub(2),
+            },
         );
     }
 
@@ -1283,50 +1580,63 @@ impl App {
         );
     }
 
-    /// `?`: every key in one place, grouped by where it works.
+    /// `?`: every key in one place, folded into an accordion. Section titles
+    /// are always visible so the shape of the thing is legible at a glance;
+    /// the open one shows its keys. Sized to the tallest section, so walking
+    /// through them never resizes the box under the eye.
     fn draw_help_popup(&self, frame: &mut Frame<'_>, area: Rect, pal: &Palette) {
-        let key = |k: &str, label: &str| {
-            Line::from(vec![
-                Span::styled(format!("{k:<8}"), Style::default().fg(pal.accent).bold()),
-                Span::styled(label.to_string(), Style::default().fg(pal.muted)),
-            ])
-        };
-        let section = |name: &str| {
-            Line::from(Span::styled(
-                name.to_string(),
-                Style::default().fg(pal.accent2),
-            ))
-        };
-        let mut lines = vec![Line::default(), Line::default(), section("everywhere")];
-        lines.push(key("⇥ · 1-5", "switch tab"));
-        lines.push(key("t", "toggle the filter"));
-        lines.push(key("a", "back to automatic"));
-        lines.push(key("↑↓", "nudge the night temperature"));
-        lines.push(key("T", "cycle the theme"));
-        lines.push(key("s", "sun details"));
-        lines.push(key("r", "start or restart a silent daemon"));
-        lines.push(key("?", "this help"));
-        lines.push(key("q", "quit"));
-        lines.push(Line::default());
-        lines.push(section("location"));
-        lines.push(key("⏎", "pick a spot · pin it"));
-        lines.push(key("m", "the map, full size"));
-        lines.push(key("c", "back to the timezone"));
-        lines.push(Line::default());
-        lines.push(section("settings"));
-        lines.push(key("↑↓ ‹›", "select · adjust"));
-        lines.push(key("⏎", "apply the row"));
-        lines.push(Line::default());
-        lines.push(Line::from(Span::styled(
-            format!(
-                "v{} · github.com/umutdinceryananer/nightlightd",
-                env!("CARGO_PKG_VERSION")
-            ),
-            Style::default().fg(pal.faint),
-        )));
-        let inner = Self::overlay(frame, area, 52, lines.len() as u16 + 2, pal);
-        Self::overlay_title(frame, inner, "keys", "esc", pal);
-        frame.render_widget(Paragraph::new(lines), inner);
+        let tallest = HELP.iter().map(|(_, keys)| keys.len()).max().unwrap_or(0);
+        let content = 2 + HELP.len() + tallest + 2;
+        let inner = Self::overlay(frame, area, 52, content as u16 + 2, pal);
+        Self::overlay_title(frame, inner, "keys", "↑↓ section · esc", pal);
+
+        let mut lines = vec![Line::default()];
+        for (index, (title, keys)) in HELP.iter().enumerate() {
+            let open = index == self.help_section;
+            let (marker, tint) = if open {
+                ("▾ ", pal.accent2)
+            } else {
+                ("▸ ", pal.muted)
+            };
+            lines.push(Line::from(vec![
+                Span::styled(marker, Style::default().fg(tint)),
+                Span::styled(title.to_string(), Style::default().fg(tint)),
+            ]));
+            if !open {
+                continue;
+            }
+            for (key, label) in keys.iter() {
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        format!("    {key:<8}"),
+                        Style::default().fg(pal.accent).bold(),
+                    ),
+                    Span::styled(label.to_string(), Style::default().fg(pal.muted)),
+                ]));
+            }
+        }
+        frame.render_widget(
+            Paragraph::new(lines),
+            Rect {
+                y: inner.y + 1,
+                height: inner.height.saturating_sub(2),
+                ..inner
+            },
+        );
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                format!(
+                    "v{} · github.com/umutdinceryananer/nightlightd",
+                    env!("CARGO_PKG_VERSION")
+                ),
+                Style::default().fg(pal.faint),
+            ))),
+            Rect {
+                y: inner.y + inner.height.saturating_sub(1),
+                height: 1,
+                ..inner
+            },
+        );
     }
 
     /// `s`: the solar facts behind the dashboard's summaries — day length and
@@ -1356,7 +1666,7 @@ impl App {
                 status.latitude,
                 status.longitude,
                 midnight + offset_days * 86_400.0,
-                self.band,
+                self.shown_band(),
                 status.day_temp,
                 status.night_temp,
             )
@@ -1665,7 +1975,7 @@ impl App {
         let width = usize::from(area.width).saturating_sub(4);
         let mut lines: Vec<Line<'_>> = Vec::new();
         if let Some(status) = self.status.as_ref().filter(|s| s.has_location) {
-            let phase = sun_phase(status.elevation);
+            let phase = phase(status.elevation, self.shown_band());
             let icon = match phase {
                 "day" => "☀",
                 "night" => "☾",
@@ -1744,6 +2054,7 @@ impl App {
         self.draw_now_card(frame, now_card, pal);
         self.draw_sun_card(frame, sun_card, pal);
         self.draw_curve_card(frame, curve, pal);
+        self.draw_band_editor(frame, curve, pal);
     }
 
     /// Tab 2: the day's solar milestones, derived from the real curve, with
@@ -1766,7 +2077,7 @@ impl App {
             status.latitude,
             status.longitude,
             midnight,
-            self.band,
+            self.shown_band(),
             status.day_temp,
             status.night_temp,
         );
@@ -1840,6 +2151,12 @@ impl App {
             let chart_area = arc.inner(curve_area);
             frame.render_widget(arc, curve_area);
             self.draw_sun_arc(frame, chart_area, pal);
+            self.draw_band_editor(frame, curve_area, pal);
+        } else {
+            // No arc to sit over on a short terminal, but the keys are still
+            // captured — the editor has to appear somewhere or it is a
+            // keyboard trap.
+            self.draw_band_editor(frame, area, pal);
         }
     }
 
@@ -1887,6 +2204,7 @@ impl App {
         // default, not a dash.
         self.fade = Some(true);
         self.band = Band::default();
+        self.band_known = true;
         let mut status = self
             .status
             .take()
@@ -1955,7 +2273,7 @@ impl App {
                         format!(
                             " sun {:+.1}° ({}) · day {} K / night {} K",
                             status.elevation,
-                            sun_phase(status.elevation),
+                            phase(status.elevation, self.shown_band()),
                             status.day_temp,
                             status.night_temp,
                         ),
@@ -2084,7 +2402,7 @@ impl App {
         ])
         .areas(left);
 
-        let phase = sun_phase(status.elevation);
+        let phase = phase(status.elevation, self.shown_band());
         let (daylight_ratio, daylight_short, daylight_label, endpoints) = self.daylight(status);
         // The long label leads with its own icon; give the icon the accent
         // and the words the text tone. Narrow cards get the short wording.
@@ -2201,7 +2519,7 @@ impl App {
             status.latitude,
             status.longitude,
             midnight,
-            self.band,
+            self.shown_band(),
             status.day_temp,
             status.night_temp,
         );
@@ -2298,7 +2616,7 @@ impl App {
         let kelvin_at = |hour: f64| -> f64 {
             f64::from(target_temperature(
                 elev_at(hour),
-                self.band,
+                self.shown_band(),
                 status.day_temp,
                 status.night_temp,
             ))
@@ -2476,10 +2794,13 @@ impl App {
         }
     }
 
-    /// The sun's arc for the today tab (#35): the day's elevation in braille —
-    /// the smooth thing the schedule is derived from — cut into runs tinted by
-    /// the temperature phase, over a dashed horizon rule, with the now
-    /// crosshair. The now tab's curve shows the schedule; this shows why.
+    /// The sun's arc for the today tab (#35): the day's elevation across the
+    /// hours — the smooth thing the schedule is derived from — drawn with the
+    /// now tab's hand (#45), because two pictures of the same day in two
+    /// different styles read as two unrelated widgets. Same box-drawn step,
+    /// same per-hour tint, same floor strip, same bead at now; only the
+    /// quantity differs. The now tab's curve shows the schedule; this shows
+    /// why, and a dashed horizon rule marks where the sun crosses it.
     fn draw_sun_arc(&self, frame: &mut Frame<'_>, area: Rect, pal: &Palette) {
         let Some(status) = self.status.as_ref().filter(|s| s.has_location) else {
             return;
@@ -2488,13 +2809,14 @@ impl App {
         let elev_at = |hour: f64| -> f64 {
             solar_elevation(status.latitude, status.longitude, midnight + hour * 3600.0)
         };
-        let kelvin_at = |hour: f64| -> f64 {
-            f64::from(target_temperature(
+        let tint_at = |hour: f64| -> Color {
+            let kelvin = target_temperature(
                 elev_at(hour),
-                self.band,
+                self.shown_band(),
                 status.day_temp,
                 status.night_temp,
-            ))
+            );
+            theme::display_tint(kelvin)
         };
 
         let [top, x_row] =
@@ -2505,96 +2827,98 @@ impl App {
         if w < 8 || plot.height < 3 {
             return;
         }
+        // The floor carries the tint strip, exactly as it does on the now
+        // tab; the arc itself lives in the rows above it.
+        let strip_y = plot.y + plot.height - 1;
+        let (top_row, bottom_row) = (plot.y, strip_y - 1);
 
-        let samples = 2 * w;
-        let arc: Vec<(f64, f64)> = (0..=samples)
-            .map(|i| {
-                let hour = i as f64 / samples as f64 * 24.0;
-                (hour, elev_at(hour))
-            })
-            .collect();
-        let (emin, emax) = arc.iter().fold((f64::MAX, f64::MIN), |(lo, hi), &(_, e)| {
-            (lo.min(e), hi.max(e))
-        });
+        // Padded bounds so the peak and the trough never touch the edges.
+        let hour_at = |x: usize| (x as f64 + 0.5) / w as f64 * 24.0;
+        let elevations: Vec<f64> = (0..w).map(|x| elev_at(hour_at(x))).collect();
+        let (emin, emax) = elevations
+            .iter()
+            .fold((f64::MAX, f64::MIN), |(lo, hi), &e| (lo.min(e), hi.max(e)));
         let (lo, hi) = (emin - 3.0, emax + 3.0);
-
-        let day = f64::from(status.day_temp);
-        let night = f64::from(status.night_temp);
-        let phase_of = |kelvin: f64| {
-            if kelvin >= day - 0.5 {
-                0
-            } else if kelvin <= night + 0.5 {
-                2
-            } else {
-                1
-            }
+        let rows = f64::from(bottom_row - top_row);
+        let row_of = |elevation: f64| -> u16 {
+            let frac = ((elevation - lo) / (hi - lo)).clamp(0.0, 1.0);
+            bottom_row - (frac * rows).round() as u16
         };
-        let tints = [
-            theme::display_tint(status.day_temp),
-            theme::display_tint((status.day_temp + status.night_temp) / 2),
-            theme::display_tint(status.night_temp),
-        ];
-        let mut runs: Vec<(usize, Vec<(f64, f64)>)> = Vec::new();
-        for &(hour, elev) in &arc {
-            let phase = phase_of(kelvin_at(hour));
-            match runs.last_mut() {
-                Some((previous, run)) if *previous == phase => run.push((hour, elev)),
-                _ => {
-                    // Bridge from the previous run so the arc never gaps.
-                    let mut run = Vec::new();
-                    if let Some(&bridge) = runs.last().and_then(|(_, r)| r.last()) {
-                        run.push(bridge);
+        let columns: Vec<u16> = elevations.iter().map(|&e| row_of(e)).collect();
+
+        // The horizon first, so the arc is drawn over it rather than under.
+        let horizon_row = (emin < 0.0 && emax > 0.0).then(|| row_of(0.0));
+        if let Some(row) = horizon_row {
+            let buf = frame.buffer_mut();
+            for x in (0..w).step_by(2) {
+                if let Some(cell) = buf.cell_mut(Position::new(plot.x + x as u16, row)) {
+                    cell.set_symbol("·").set_fg(pal.faint);
+                }
+            }
+            let word = "horizon";
+            if w > word.len() + 4 {
+                let start = plot.x + (w - word.len() - 1) as u16;
+                for (offset, glyph) in word.chars().enumerate() {
+                    if let Some(cell) = buf.cell_mut(Position::new(start + offset as u16, row)) {
+                        cell.set_symbol(&glyph.to_string()).set_fg(pal.muted);
                     }
-                    run.push((hour, elev));
-                    runs.push((phase, run));
                 }
             }
         }
 
-        // The dashed horizon rule and the now crosshair, as spaced scatter
-        // dots; the Chart drops any point outside its bounds, so a polar day
-        // or night simply loses the horizon instead of breaking.
-        let horizon: Vec<(f64, f64)> = (0..=60).map(|i| (f64::from(i) * 0.4, 0.0)).collect();
-        let now_line: Vec<(f64, f64)> = (0..=20)
-            .map(|i| (now_hour, lo + f64::from(i) / 20.0 * (hi - lo)))
-            .collect();
-        let now_point = [(now_hour, elev_at(now_hour))];
-
-        let mut datasets = vec![
-            Dataset::default()
-                .marker(Marker::Braille)
-                .graph_type(GraphType::Scatter)
-                .style(Style::default().fg(pal.faint))
-                .data(&horizon),
-            Dataset::default()
-                .marker(Marker::Braille)
-                .graph_type(GraphType::Scatter)
-                .style(Style::default().fg(pal.faint))
-                .data(&now_line),
-        ];
-        for (phase, run) in &runs {
-            datasets.push(
-                Dataset::default()
-                    .marker(Marker::Braille)
-                    .graph_type(GraphType::Line)
-                    .style(Style::default().fg(tints[*phase]))
-                    .data(run),
-            );
+        // The arc as a step: one cell per column at the row its elevation
+        // maps to, wearing the colour the screen will be at that hour, then
+        // corners and a vertical run wherever neighbours disagree.
+        let buf = frame.buffer_mut();
+        for (x, &row) in columns.iter().enumerate() {
+            if let Some(cell) = buf.cell_mut(Position::new(plot.x + x as u16, row)) {
+                cell.set_symbol("─").set_fg(tint_at(hour_at(x)));
+            }
         }
-        datasets.push(
-            Dataset::default()
-                .marker(Marker::Dot)
-                .style(Style::default().fg(pal.text))
-                .data(&now_point),
-        );
-        let chart = Chart::new(datasets)
-            .style(Style::default().bg(pal.surface))
-            .x_axis(Axis::default().bounds([0.0, 24.0]))
-            .y_axis(Axis::default().bounds([lo, hi]));
-        frame.render_widget(chart, plot);
+        for x in 0..w.saturating_sub(1) {
+            let (from, to) = (columns[x], columns[x + 1]);
+            if from == to {
+                continue;
+            }
+            let col = plot.x + (x + 1) as u16;
+            let colour = tint_at((hour_at(x) + hour_at(x + 1)) / 2.0);
+            let (top_sym, bottom_sym) = if to > from {
+                ("╮", "╰")
+            } else {
+                ("╭", "╯")
+            };
+            let (high, low) = (from.min(to), from.max(to));
+            if let Some(cell) = buf.cell_mut(Position::new(col, high)) {
+                cell.set_symbol(top_sym).set_fg(colour);
+            }
+            if let Some(cell) = buf.cell_mut(Position::new(col, low)) {
+                cell.set_symbol(bottom_sym).set_fg(colour);
+            }
+            for row in high + 1..low {
+                if let Some(cell) = buf.cell_mut(Position::new(col, row)) {
+                    cell.set_symbol("│").set_fg(colour);
+                }
+            }
+        }
 
-        // Degree labels in the gutter; the horizon label only when the rule
-        // actually crosses the plot (a polar day or night has no horizon).
+        // The floor strip: every column wears the hour's screen colour.
+        for x in 0..w {
+            if let Some(cell) = buf.cell_mut(Position::new(plot.x + x as u16, strip_y)) {
+                cell.set_symbol("▂").set_fg(tint_at(hour_at(x)));
+            }
+        }
+
+        // Now, riding the arc — the row comes from the drawn line, never
+        // recomputed, so the bead cannot land beside it.
+        let now_x = (now_hour / 24.0 * w as f64 - 0.5)
+            .round()
+            .clamp(0.0, (w - 1) as f64) as usize;
+        if let Some(cell) = buf.cell_mut(Position::new(plot.x + now_x as u16, columns[now_x])) {
+            cell.set_symbol("●").set_fg(pal.text);
+        }
+
+        // Degree labels in the gutter; the horizon's only when the rule is
+        // actually on the plot (a polar day or night has no horizon).
         let mut y_label = |text: String, y: u16| {
             frame.render_widget(
                 Paragraph::new(Line::from(Span::styled(
@@ -2610,26 +2934,13 @@ impl App {
                 },
             );
         };
-        y_label(format!("{emax:+.0}°"), plot.y);
-        y_label(format!("{emin:+.0}°"), plot.y + plot.height - 1);
-        if emin < 0.0 && emax > 0.0 {
-            let horizon_row =
-                plot.y + ((hi / (hi - lo)) * f64::from(plot.height - 1)).round() as u16;
-            if horizon_row > plot.y && horizon_row < plot.y + plot.height - 1 {
-                y_label("0°".into(), horizon_row);
-                let word = "horizon";
-                if w > word.len() + 4 {
-                    let start = plot.x + (w - word.len() - 1) as u16;
-                    let buf = frame.buffer_mut();
-                    for (offset, glyph) in word.chars().enumerate() {
-                        if let Some(cell) =
-                            buf.cell_mut(Position::new(start + offset as u16, horizon_row))
-                        {
-                            cell.set_symbol(&glyph.to_string()).set_fg(pal.muted);
-                        }
-                    }
-                }
-            }
+        y_label(format!("{emax:+.0}°"), top_row);
+        y_label(format!("{emin:+.0}°"), bottom_row);
+        if let Some(row) = horizon_row
+            && row > top_row
+            && row < bottom_row
+        {
+            y_label("0°".into(), row);
         }
         hour_labels(frame, plot, x_row.y, pal);
     }
@@ -2804,18 +3115,6 @@ fn relative(delta_hours: f64) -> String {
     }
 }
 
-/// Names the part of the day for a solar elevation, matching the daemon's
-/// transition thresholds (full day at +3°, full night at -6°).
-fn sun_phase(elevation: f64) -> &'static str {
-    if elevation >= 3.0 {
-        "day"
-    } else if elevation <= -6.0 {
-        "night"
-    } else {
-        "transition"
-    }
-}
-
 /// The local clock's offset from UTC in seconds, read once from `date +%z`
 /// (e.g. `+0300` → 10800). Zero on any failure — the curve then reads in UTC,
 /// which is wrong by the offset but never crashes.
@@ -2833,4 +3132,103 @@ fn local_offset_seconds() -> i32 {
     let hours: i32 = text[1..3].parse().unwrap_or(0);
     let minutes: i32 = text[3..5].parse().unwrap_or(0);
     sign * (hours * 3600 + minutes * 60)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn approx(a: f64, b: f64) -> bool {
+        (a - b).abs() < 1e-9
+    }
+
+    /// A bound dragged on the panel's curve lands on an arbitrary elevation.
+    /// The first arrow press tidies it onto the half-degree grid; every press
+    /// after that is a clean step, in both directions and across zero.
+    #[test]
+    fn an_arrow_press_lands_on_the_half_degree_grid() {
+        assert!(approx(nudge(-13.957_860_553_564_76, true), -13.5));
+        assert!(approx(nudge(-13.957_860_553_564_76, false), -14.0));
+        assert!(approx(nudge(-6.0, true), -5.5));
+        assert!(approx(nudge(-6.0, false), -6.5));
+        assert!(approx(nudge(0.0, true), 0.5));
+        assert!(approx(nudge(-0.25, true), 0.0));
+        assert!(approx(nudge(3.0, false), 2.5));
+    }
+
+    /// The pair may never cross. Walking the night bound up runs it into the
+    /// day bound and stops half a degree short, however long you lean on the
+    /// key; the day bound is stopped the same way from below.
+    #[test]
+    fn the_bounds_stop_before_they_meet() {
+        let mut band = Band::default();
+        for _ in 0..40 {
+            band = nudged_band(band, false, true);
+        }
+        assert!(approx(
+            band.night_elevation,
+            band.day_elevation - MIN_BAND_WIDTH
+        ));
+        assert!(
+            band.day_elevation > band.night_elevation,
+            "the pair crossed"
+        );
+
+        let mut band = Band::default();
+        for _ in 0..40 {
+            band = nudged_band(band, true, false);
+        }
+        assert!(approx(
+            band.day_elevation,
+            band.night_elevation + MIN_BAND_WIDTH
+        ));
+        assert!(band.sane() == band, "a pinched band must still be sane");
+    }
+
+    /// Neither bound leaves the window its rail draws, so the reading and
+    /// the rail can never describe different values.
+    #[test]
+    fn the_bounds_stay_inside_the_drawn_window() {
+        let mut band = Band::default();
+        for _ in 0..80 {
+            band = nudged_band(band, true, true);
+            band = nudged_band(band, false, false);
+        }
+        assert!(approx(band.day_elevation, BAND_UI_MAX));
+        assert!(approx(band.night_elevation, BAND_UI_MIN));
+    }
+
+    /// What escape asks about: a draft that has not moved needs no question,
+    /// and one that has must not be thrown away silently.
+    #[test]
+    fn an_untouched_draft_has_nothing_to_confirm() {
+        let mut edit = BandEdit {
+            original: Band::default(),
+            draft: Band::default(),
+            selected: 1,
+            confirming: false,
+        };
+        assert!(!edit.touched());
+        edit.draft = nudged_band(edit.draft, false, false);
+        assert!(edit.touched());
+        // Walked back onto its own starting value, it is untouched again —
+        // the question is about difference, not about history.
+        edit.draft = nudged_band(edit.draft, false, true);
+        assert!(!edit.touched());
+    }
+
+    /// Pressing one way then the other must return the value it started
+    /// from, once it is on the grid — an arrow that drifts is a bug the eye
+    /// only catches after a dozen presses.
+    #[test]
+    fn opposite_presses_cancel_on_the_grid() {
+        let mut value = -6.0;
+        for _ in 0..8 {
+            value = nudge(value, false);
+        }
+        for _ in 0..8 {
+            value = nudge(value, true);
+        }
+        assert!(approx(value, -6.0));
+    }
 }
