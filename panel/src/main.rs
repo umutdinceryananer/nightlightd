@@ -290,6 +290,29 @@ impl eframe::App for Panel {
             }
             None => {}
         }
+        // Under the curve, the band in numbers (#48). The curve names its
+        // bounds only while a pointer is on them, which left the one setting
+        // you can reach from three places readable from one. Silent at the
+        // default, the same rule `--status` uses, and beside it the only road
+        // back — the drag and the arrows both stop half a degree short of
+        // inverting the pair, so pinching the transition into a hard switch
+        // is easy and undoing it used to mean opening a terminal.
+        if self.staged_band.is_none() && !self.staged_temps && self.band != Band::default() {
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.weak(format!(
+                    "day above {:+.1}°, night below {:+.1}°",
+                    self.band.day_elevation, self.band.night_elevation
+                ));
+                if ui.button("Default band").clicked() {
+                    let fresh = Band::default();
+                    self.client
+                        .set_band(fresh.day_elevation, fresh.night_elevation);
+                    self.band = fresh;
+                    self.last_poll = None;
+                }
+            });
+        }
         // The decision row, present only while the curve holds something
         // unsent. Buttons first, the reading after — the numbers change under
         // the drag and the buttons must not wander while they do.

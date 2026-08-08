@@ -131,6 +131,7 @@ const HELP: [(&str, &[KeyRow]); 4] = [
             ("b", "the transition band"),
             ("↑↓", "pick a bound"),
             ("‹›", "move it half a degree"),
+            ("d", "back to the default band"),
             ("⏎", "apply · esc reverts"),
         ],
     ),
@@ -701,6 +702,10 @@ impl App {
             KeyCode::Left | KeyCode::Right => {
                 edit.draft = nudged_band(edit.draft, edit.selected == 0, code == KeyCode::Right);
             }
+            // Back to redshift's band (#48). It fills the draft rather than
+            // sending, so it arrives the same way every other change does:
+            // drawn first, applied on enter, and escapable.
+            KeyCode::Char('d') => edit.draft = Band::default(),
             KeyCode::Enter => self.apply_band(),
             KeyCode::Esc | KeyCode::Char('b') | KeyCode::Char('q') => {
                 if edit.touched() {
@@ -1451,13 +1456,17 @@ impl App {
         let Some(edit) = self.band_edit.as_ref() else {
             return;
         };
-        let (width, height) = (32.min(area.width), 6.min(area.height));
-        if width < 24 || height < 6 {
+        let (width, height) = (32u16, 7u16);
+        if area.width < width || area.height < height {
             return;
         }
+        // Inset by one where there is room to spare, flush to the corner
+        // where there is not — the card can be exactly the panel's size, and
+        // a panel hanging over the edge of its own card is worse than a
+        // panel with no margin.
         let popup = Rect {
-            x: area.x + 1,
-            y: area.y + 1,
+            x: (area.x + 1).min(area.right() - width),
+            y: (area.y + 1).min(area.bottom() - height),
             width,
             height,
         };
@@ -1504,6 +1513,7 @@ impl App {
                     Style::default().fg(pal.text),
                 )),
                 hint("⏎ apply · esc revert"),
+                Line::default(),
             ]
         } else {
             vec![
@@ -1514,12 +1524,14 @@ impl App {
                     edit.draft.night_elevation,
                     edit.selected == 1,
                 ),
-                // The draft is drawn but unsent, so the keys have to say
-                // which one commits it.
+                // Two hint rows rather than one crowded line: the keys that
+                // move things, then the keys that decide. The draft is drawn
+                // but unsent, so which one commits it has to be said.
+                hint("↑↓ ‹› adjust · d default"),
                 hint(if edit.touched() {
                     "⏎ apply · esc revert"
                 } else {
-                    "↑↓ pick · ‹› adjust"
+                    "esc close"
                 }),
             ]
         };
@@ -3215,6 +3227,35 @@ mod tests {
         // the question is about difference, not about history.
         edit.draft = nudged_band(edit.draft, false, true);
         assert!(!edit.touched());
+    }
+
+    /// The road back (#48). Filling the draft with the default makes the
+    /// editor offer apply, so returning is a change like any other — and
+    /// pressing it on a band that is already the default changes nothing,
+    /// so escape still leaves without a question.
+    #[test]
+    fn the_default_band_is_a_draft_like_any_other() {
+        let pinched = Band {
+            day_elevation: 3.0,
+            night_elevation: 2.5,
+        };
+        let mut edit = BandEdit {
+            original: pinched,
+            draft: pinched,
+            selected: 1,
+            confirming: false,
+        };
+        edit.draft = Band::default();
+        assert!(edit.touched(), "returning is a change worth confirming");
+
+        let mut edit = BandEdit {
+            original: Band::default(),
+            draft: Band::default(),
+            selected: 1,
+            confirming: false,
+        };
+        edit.draft = Band::default();
+        assert!(!edit.touched(), "already there is not a change");
     }
 
     /// Pressing one way then the other must return the value it started
