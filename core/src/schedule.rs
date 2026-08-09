@@ -95,6 +95,21 @@ pub fn milestones(
     events
 }
 
+/// The hour of a named milestone, if the day has one.
+pub fn hour_of(events: &[Milestone], name: &str) -> Option<f64> {
+    events.iter().find(|e| e.name == name).map(|e| e.hour)
+}
+
+/// How long the sun spends above the horizon, in hours.
+///
+/// [`None`] on a day it never crosses at all. A polar day and a polar night
+/// both look like "no sunrise and no sunset" from here, and neither has a
+/// length this function could honestly return — the caller knows which one it
+/// is looking at from the elevation, and this does not pretend to.
+pub fn day_length(events: &[Milestone]) -> Option<f64> {
+    Some(hour_of(events, "sunset")? - hour_of(events, "sunrise")?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -140,6 +155,46 @@ mod tests {
             .find(|e| e.name == "full day")
             .expect("full day");
         assert_eq!(full_day.kelvin, 6500);
+    }
+
+    /// The longest day of the year in Istanbul is a shade under fifteen
+    /// hours, the shortest a shade over nine. Two solstices six months apart
+    /// are the cheapest way to catch a day length that is inverted, off by a
+    /// timezone, or measuring the wrong pair of crossings.
+    ///
+    /// A few minutes short of what an almanac prints, and correctly so: this
+    /// crosses on the sun's geometric centre, where published tables add
+    /// about -0.833° for refraction and the upper limb. Widening the bounds
+    /// to swallow that difference would only hide the day it stops being the
+    /// explanation.
+    #[test]
+    fn the_day_is_longest_at_midsummer_and_shortest_at_midwinter() {
+        let day_at = |midnight: f64| {
+            day_length(&milestones(
+                ISTANBUL_LAT,
+                ISTANBUL_LON,
+                midnight,
+                Band::default(),
+                6500,
+                2800,
+            ))
+        };
+        // 2021-12-21 00:00 in Istanbul (+03) as unix time.
+        const WINTER_MIDNIGHT: f64 = 1_640_034_000.0;
+        let summer = day_at(SUMMER_MIDNIGHT).expect("midsummer has a sunrise");
+        let winter = day_at(WINTER_MIDNIGHT).expect("midwinter has a sunrise");
+        assert!((14.8..15.1).contains(&summer), "midsummer was {summer}h");
+        assert!((8.9..9.2).contains(&winter), "midwinter was {winter}h");
+    }
+
+    /// Above the Arctic circle in June the sun never sets, so there is no
+    /// length to report — and the honest answer is nothing, not zero and not
+    /// twenty-four.
+    #[test]
+    fn a_polar_day_has_no_length_to_give() {
+        let events = milestones(78.22, 15.65, SUMMER_MIDNIGHT, Band::default(), 6500, 2800);
+        assert_eq!(day_length(&events), None);
+        assert_eq!(hour_of(&events, "sunrise"), None);
     }
 
     #[test]
