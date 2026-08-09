@@ -101,6 +101,46 @@ mod tests {
     const DAY: u32 = 6500;
     const NIGHT: u32 = 3500;
 
+    /// #39 promised that a nonsensical band degrades to the default quietly,
+    /// and the whole of that promise is this one function — the daemon
+    /// carries the pair verbatim so a hand-written config comes back as
+    /// written, and every reader repairs it here instead. Nothing pinned it
+    /// until a dogfood run went looking.
+    ///
+    /// The equal case is the one that matters most: it is not merely odd, it
+    /// is a zero span, and a zero span divides by zero a line later.
+    #[test]
+    fn a_band_that_could_not_be_meant_becomes_the_default() {
+        let sensible = Band {
+            day_elevation: 5.0,
+            night_elevation: -14.0,
+        };
+        assert_eq!(sensible.sane(), sensible, "a good band passes through");
+
+        let nonsense = [
+            (-20.0, 10.0),                      // inverted
+            (0.0, 0.0),                         // no span at all
+            (f64::NAN, -6.0),                   // not a number
+            (3.0, f64::NEG_INFINITY),           // no floor
+            (f64::INFINITY, f64::NEG_INFINITY), // ordered, and still meaningless
+        ];
+        for (day_elevation, night_elevation) in nonsense {
+            let band = Band {
+                day_elevation,
+                night_elevation,
+            };
+            assert_eq!(
+                band.sane(),
+                Band::default(),
+                "{day_elevation}/{night_elevation} should have degraded"
+            );
+            // The point of degrading at all: what follows must stay usable.
+            let alpha = daylight_alpha(0.0, band);
+            assert!(alpha.is_finite(), "{day_elevation}/{night_elevation}");
+            assert!((0.0..=1.0).contains(&alpha));
+        }
+    }
+
     #[test]
     fn full_day_at_and_above_threshold() {
         assert_eq!(target_temperature(3.0, Band::default(), DAY, NIGHT), DAY); // exact endpoint

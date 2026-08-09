@@ -376,7 +376,7 @@ fn parse_args() -> Result<(Option<usize>, usize, bool), String> {
     };
     let usage = || {
         format!(
-            "usage: nightlight-tui [--theme <{}>] [--tab <{}>] [--demo]",
+            "usage: nightlight-tui [--version] [--help] [--theme <{}>] [--tab <{}>] [--demo]",
             theme_names(),
             TABS.join(", ")
         )
@@ -388,6 +388,18 @@ fn parse_args() -> Result<(Option<usize>, usize, bool), String> {
     let mut args = std::env::args().skip(1);
     while let Some(argument) = args.next() {
         match argument.as_str() {
+            // Answered here rather than left to fall through to the usage
+            // error: `--version` is the first thing a packager or a bug
+            // report runs, and until now it got a complaint instead of an
+            // answer.
+            "--version" | "-V" => {
+                println!("nightlight-tui {}", env!("CARGO_PKG_VERSION"));
+                std::process::exit(0);
+            }
+            "--help" | "-h" => {
+                println!("{}", usage());
+                std::process::exit(0);
+            }
             "--theme" | "-t" => {
                 let name = args.next().ok_or_else(usage)?;
                 theme_index = Some(theme::index_of(&name).ok_or_else(|| {

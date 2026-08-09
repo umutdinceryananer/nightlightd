@@ -2114,7 +2114,38 @@ fn local_offset_seconds() -> i32 {
     sign * (hours * 3600 + minutes * 60)
 }
 
+const USAGE: &str = "usage: nightlight-panel [--version] [--help]
+
+The settings window: the day/night curve, the schedule, the map, the
+outputs and the knobs. Takes no options; everything is set inside it.";
+
+/// Answers `--version` and `--help` before a window exists, and refuses
+/// anything else.
+///
+/// The panel parsed nothing at all, so any flag handed to it simply opened
+/// the window — `--version` included. A packager or a bug report runs that
+/// first, and a mistyped option deserves a complaint rather than a window.
+///
+/// Returns true when the argument was the whole of the job.
+fn cli_only() -> bool {
+    let Some(argument) = std::env::args().nth(1) else {
+        return false;
+    };
+    match argument.as_str() {
+        "--version" | "-V" => println!("nightlight-panel {}", env!("CARGO_PKG_VERSION")),
+        "--help" | "-h" => println!("{USAGE}"),
+        other => {
+            eprintln!("nightlight-panel: unknown option {other:?}\n\n{USAGE}");
+            std::process::exit(2);
+        }
+    }
+    true
+}
+
 fn main() -> eframe::Result<()> {
+    if cli_only() {
+        return Ok(());
+    }
     // Single instance: if a panel is already open, ask it to come forward and
     // exit instead of opening a second window.
     let focus = Arc::new(AtomicBool::new(false));

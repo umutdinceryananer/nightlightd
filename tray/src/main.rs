@@ -412,7 +412,40 @@ fn open_panel() {
     let _ = std::process::Command::new(sibling("nightlight-panel")).spawn();
 }
 
+const USAGE: &str = "usage: nightlight-tray [--version] [--help]
+
+Puts the filter's state and its controls in the notification area.
+Takes no options; everything else is set from the menu.";
+
+/// Answers `--version` and `--help` before anything is drawn, and refuses
+/// anything else.
+///
+/// The daemon has answered `--version` since it had a `main`, because clap
+/// gives it away; the three clients parsed nothing and so quietly *started* on
+/// any flag they were handed. That is the worst of the three possible
+/// answers — a packager or a bug report runs `--version` first, and a typo
+/// deserves a complaint rather than a window.
+///
+/// Returns true when the argument was the whole of the job.
+fn cli_only() -> bool {
+    let Some(argument) = std::env::args().nth(1) else {
+        return false;
+    };
+    match argument.as_str() {
+        "--version" | "-V" => println!("nightlight-tray {}", env!("CARGO_PKG_VERSION")),
+        "--help" | "-h" => println!("{USAGE}"),
+        other => {
+            eprintln!("nightlight-tray: unknown option {other:?}\n\n{USAGE}");
+            std::process::exit(2);
+        }
+    }
+    true
+}
+
 fn main() {
+    if cli_only() {
+        return;
+    }
     // The bus connection is what must exist; the daemon may come and go, and
     // each read reports that. If even the session bus is absent there is no
     // desktop to draw into, so there is nothing useful to do.
