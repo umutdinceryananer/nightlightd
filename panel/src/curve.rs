@@ -10,8 +10,6 @@
 //! bounds and drag sideways. Nothing here talks to the daemon: a drag returns
 //! a proposal and the caller stages it behind Apply and Revert.
 
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use eframe::egui::{self, Pos2, Stroke};
 use nightlightd_core::solar::solar_elevation;
 use nightlightd_core::transition::{Band, target_temperature};
@@ -98,12 +96,6 @@ fn held_band(band: Band, elevation: f64, day: bool) -> Band {
     next
 }
 
-/// Draws the curve. `status` supplies the location; `band`, `day_temp` and
-/// `night_temp` come from the panel's live values so the shape follows a drag
-/// before the daemon has been told. Shows a placeholder when no location is
-/// known (the curve is meaningless without one). `offset_secs` is the local
-/// UTC offset, used to place "now" and the hour axis on local time. `held`
-/// carries the current gesture's handle across frames.
 /// Everything the curve draws itself from. Gathered into one value because
 /// they arrive together and mean nothing apart: the panel's live band and
 /// bounds, so the shape follows a hand before the daemon has been told, and
@@ -113,7 +105,12 @@ pub struct View<'a> {
     pub band: Band,
     pub day_temp: u32,
     pub night_temp: u32,
-    pub offset_secs: i32,
+    /// Local midnight as a unix time, and the hour of "now" within that day.
+    /// Handed down rather than read here: the panel already works both out
+    /// for the schedule, and a demo run needs "now" to be a clock it drives
+    /// rather than the one on the wall.
+    pub midnight: f64,
+    pub now_hour: f32,
     pub pal: &'a Palette,
     /// The height the caller has spare for the chart, floored at
     /// [`MIN_HEIGHT`]. Measured from what the controls needed last frame.
@@ -126,7 +123,8 @@ pub fn show(ui: &mut egui::Ui, view: View<'_>, held: &mut Option<Handle>) -> Opt
         band,
         day_temp,
         night_temp,
-        offset_secs,
+        midnight,
+        now_hour,
         pal,
         height,
     } = view;
@@ -134,14 +132,6 @@ pub fn show(ui: &mut egui::Ui, view: View<'_>, held: &mut Option<Handle>) -> Opt
         ui.weak("Waiting for the daemon / location…");
         return None;
     };
-
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs_f64())
-        .unwrap_or(0.0);
-    let secs_into_day = (now as i64 + i64::from(offset_secs)).rem_euclid(86_400) as f64;
-    let midnight = now - secs_into_day;
-    let now_hour = (secs_into_day / 3600.0) as f32;
 
     // Kelvin at a given local hour today, from the same maths the daemon runs.
     let kelvin_at = |hour: f32| -> f32 {

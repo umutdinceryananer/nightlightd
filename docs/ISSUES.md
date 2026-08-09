@@ -920,6 +920,44 @@ already at the default leaves nothing to confirm.
 - **Depends on:** #34, #45, #47
 - **Target:** v0.3 or later
 
+### #50 Interfaces you did not ask for
+
+- **What:** Stop making one install carry all four binaries. Split the
+  `.deb` into `nightlightd` (daemon, CLI, systemd unit),
+  `nightlightd-tui` (the dashboard) and `nightlightd-gui` (the panel
+  and the tray, plus the autostart entry).
+- **Why:** `cli/Cargo.toml` declares, for everybody:
+
+  ```
+  depends = "$auto, libgl1, libegl1, libxkbcommon0, libxkbcommon-x11-0,
+             libx11-6, libxcursor1, libxrandr2, libxi6"
+  ```
+
+  Eight libraries, every one of them there because eframe and winit
+  `dlopen` them for the *panel*. They cannot be discovered by `ldd`,
+  which is why they are hand-written. So today someone who wants only
+  the daemon, or only the terminal dashboard, drags in the whole GL
+  stack — and a Debian package's dependencies are declared per package,
+  so a single package can only declare the union.
+- **Not the AUR, or not yet.** Arch supports split packages from one
+  PKGBUILD, but the win there is mostly cosmetic: an Arch desktop
+  already has the GL stack, and the minority without it builds from
+  source anyway. What a split would definitely triple is the
+  maintenance surface of a package that is *already a release behind*
+  (the AUR carries 0.2.0 against 0.2.1 released). Fix the lag before
+  adding package names to it.
+- **Detail:** `cargo deb` does this with
+  `[package.metadata.deb.variants]` — three invocations in the release
+  workflow instead of one, each with its own `depends`. The GUI and TUI
+  packages `Depends: nightlightd`, so the daemon arrives either way.
+  The musl tarball already ships daemon + dashboard only, which is
+  half of this story shipping today without anyone being told.
+- **Done when:** `apt install nightlightd` on a headless box installs
+  no GL library, and `apt install nightlightd-gui` still gets a working
+  panel on a minimal Mint.
+- **Difficulty:** Medium
+- **Target:** v0.4
+
 ---
 
 ## Ordering summary

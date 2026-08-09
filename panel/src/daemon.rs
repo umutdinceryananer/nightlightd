@@ -64,6 +64,12 @@ pub struct Client {
     /// The bus's own interface, for one question: does anything own the
     /// daemon's name (#42)?
     fdo: zbus::blocking::fdo::DBusProxy<'static>,
+    /// Whether writes are swallowed at the door. A demo run is a recording,
+    /// not a session: its scripted tour drags the curve and changes the
+    /// bounds, and without this the reel would rewrite the config of whoever
+    /// is recording it. Gated here rather than at each call site because
+    /// there are a dozen of those and one of them would eventually be missed.
+    muted: bool,
 }
 
 impl Client {
@@ -74,7 +80,17 @@ impl Client {
         let connection = Connection::session()?;
         let proxy = DaemonProxyBlocking::new(&connection)?;
         let fdo = zbus::blocking::fdo::DBusProxy::new(&connection)?;
-        Ok(Self { proxy, fdo })
+        Ok(Self {
+            proxy,
+            fdo,
+            muted: false,
+        })
+    }
+
+    /// Stops every write reaching the daemon, for the length of the process.
+    /// One-way on purpose: a demo run has no business un-muting itself.
+    pub fn mute(&mut self) {
+        self.muted = true;
     }
 
     /// Whether something owns the daemon's bus name right now. Asked only
@@ -96,12 +112,18 @@ impl Client {
     /// Pins a manual temperature and turns the filter on. Errors (a stopped
     /// daemon) are swallowed — dragging the slider must never crash the panel.
     pub fn set_temperature(&self, kelvin: u32) {
+        if self.muted {
+            return;
+        }
         let _ = self.proxy.set_temperature(kelvin);
     }
 
     /// Hands control back to the sun. The daemon's "auto" clears the override
     /// and turns the filter on itself, so one call carries the whole intent.
     pub fn follow_the_sun(&self) {
+        if self.muted {
+            return;
+        }
         let _ = self.proxy.set_mode("auto");
     }
 
@@ -109,36 +131,54 @@ impl Client {
     /// showed rather than blindly flipping whatever the daemon holds. Errors
     /// swallowed, like every other write here.
     pub fn set_enabled(&self, enabled: bool) {
+        if self.muted {
+            return;
+        }
         let _ = self.proxy.set_enabled(enabled);
     }
 
     /// Sets the daytime target temperature (the top of the curve); persisted by
     /// the daemon. Errors swallowed.
     pub fn set_day_temp(&self, kelvin: u32) {
+        if self.muted {
+            return;
+        }
         let _ = self.proxy.set_day_temp(kelvin);
     }
 
     /// Sets the night target temperature (the bottom of the curve); persisted by
     /// the daemon. Errors swallowed.
     pub fn set_night_temp(&self, kelvin: u32) {
+        if self.muted {
+            return;
+        }
         let _ = self.proxy.set_night_temp(kelvin);
     }
 
     /// Sets the gamma exponent; the daemon clamps and persists it. Errors
     /// swallowed.
     pub fn set_gamma(&self, gamma: f64) {
+        if self.muted {
+            return;
+        }
         let _ = self.proxy.set_gamma(gamma);
     }
 
     /// Sets the brightness bounds; the daemon clamps and persists them. Errors
     /// swallowed.
     pub fn set_brightness(&self, day: f64, night: f64) {
+        if self.muted {
+            return;
+        }
         let _ = self.proxy.set_brightness(day, night);
     }
 
     /// Turns the fade walk (#44) on or off; the daemon persists it. Errors
     /// swallowed.
     pub fn set_fade(&self, fade: bool) {
+        if self.muted {
+            return;
+        }
         let _ = self.proxy.set_fade(fade);
     }
 
@@ -166,18 +206,27 @@ impl Client {
     /// Pins a location by hand, overriding whatever the timezone resolved to.
     /// The daemon persists it. Errors swallowed.
     pub fn set_location(&self, latitude: f64, longitude: f64) {
+        if self.muted {
+            return;
+        }
         let _ = self.proxy.set_location(latitude, longitude);
     }
 
     /// Drops a hand-set location and lets the timezone answer again — the
     /// road back from a pin dropped in the wrong ocean.
     pub fn clear_location(&self) {
+        if self.muted {
+            return;
+        }
         let _ = self.proxy.clear_location();
     }
 
     /// Sets the transition band (#45); the daemon carries the pair verbatim
     /// and persists it. Errors swallowed.
     pub fn set_band(&self, day: f64, night: f64) {
+        if self.muted {
+            return;
+        }
         let _ = self.proxy.set_transition_band(day, night);
     }
 }

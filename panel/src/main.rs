@@ -20,7 +20,7 @@ use eframe::egui;
 use nightlightd_core::location::nearest_zone;
 use nightlightd_core::schedule::{Milestone, day_length, hour_of, milestones};
 use nightlightd_core::solar::solar_elevation;
-use nightlightd_core::transition::{Band, phase};
+use nightlightd_core::transition::{Band, phase, target_temperature};
 use nightlightd_core::world::COASTLINE;
 
 use crate::daemon::{Client, Status};
@@ -77,6 +77,60 @@ const THEME_WIDTH: f32 = 130.0;
 /// business, and the dashboard keeps its choice under another name so a
 /// change made here never reaches into a window that was not open.
 const THEME_FILE: &str = "panel-theme";
+
+/// One demo day, compressed — near enough the dashboard's 28 seconds that the
+/// two reels read as the same day seen twice.
+const DEMO_DAY_SECONDS: f64 = 30.0;
+
+/// Where the demo stands when there is no daemon to say otherwise, and what
+/// it calls the place.
+const DEMO_LAT: f64 = 41.01;
+const DEMO_LON: f64 = 28.98;
+const DEMO_PLACE: &str = "Istanbul";
+
+/// One step of the scripted tour. Actions rather than keystrokes: this window
+/// is driven by a pointer, and a drag cannot honestly be written as a key.
+#[derive(Clone, Copy)]
+enum Act {
+    /// Show a tab, as clicking its name would.
+    Tab(usize),
+    /// Hold the curve's ramp at a band, as a drag would — staged, not sent.
+    Grab(f64, f64),
+    /// Let the ramp go without applying, so the reel changes nothing.
+    LetGo,
+    /// Wear a theme.
+    Theme(usize),
+}
+
+/// The tour, in seconds from the start of the run.
+///
+/// Deliberately not a full walk. The README's stills already show every tab
+/// standing still; what a still cannot show is the day moving and a hand on
+/// the curve. So the reel opens on nothing at all, takes hold of the ramp
+/// early, lets go, and then leaves the sunset to play uninterrupted — the
+/// day starts at noon and a 30-second day puts sunset near the eleventh
+/// second, which is the one moment worth not talking over.
+const DEMO_SCRIPT: &[(f64, Act)] = &[
+    // The ramp, widened a step at a time from the default to -14: full night
+    // lands deeper into dusk and the incline stretches visibly across the
+    // chart. Staged, so Apply and Revert appear beside it.
+    (4.5, Act::Grab(3.0, -7.5)),
+    (5.0, Act::Grab(3.0, -9.0)),
+    (5.5, Act::Grab(3.0, -10.5)),
+    (6.0, Act::Grab(3.0, -12.0)),
+    (6.5, Act::Grab(3.0, -13.5)),
+    (7.0, Act::Grab(3.0, -14.0)),
+    (9.0, Act::LetGo),
+    // Sunset plays here, on the now tab, with nothing happening over it.
+    (13.0, Act::Tab(TODAY_TAB)),
+    (15.5, Act::Tab(LOCATION_TAB)),
+    (18.0, Act::Tab(OUTPUTS_TAB)),
+    // Back to the curve for the last third, so the palettes change over the
+    // one picture that shows what a palette does — and dawn lands under them.
+    (19.5, Act::Tab(NOW_TAB)),
+    (22.0, Act::Theme(3)),
+    (25.0, Act::Theme(0)),
+];
 /// The map's viewport. Antarctica is cropped away — nobody runs a night light
 /// there — and the north is carried past Greenland.
 const MAP_LAT_MIN: f64 = -60.0;
@@ -165,6 +219,12 @@ struct Panel {
     /// written to disk, since indices are a release away from meaning
     /// something else.
     theme_index: usize,
+    /// The demo clock, set by `--demo` and otherwise absent. Its presence is
+    /// the only thing that makes this window synthesise a day rather than
+    /// read one, and it is what mutes every write.
+    demo: Option<Instant>,
+    /// How far through the scripted tour we have got.
+    demo_cursor: usize,
     /// The screens the daemon last wrote a ramp to, polled with the status.
     /// `None` is "could not ask", `Some(empty)` is "asked, nothing yet".
     outputs: Option<Vec<(u32, u16)>>,
@@ -635,13 +695,104 @@ impl Panel {
 
     /// Local midnight as a unix time, and the fractional hour of now — the
     /// two numbers every solar calculation here starts from.
+    ///
+    /// The hour is the one thing a demo run overrides. Everything that says
+    /// "now" — the curve's marker, the schedule's next event, the relative
+    /// times — reads it from here, so driving a compressed day is a matter of
+    /// answering this question differently rather than of teaching each of
+    /// them about the demo.
     fn day_context(&self) -> (f64, f64) {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs_f64())
             .unwrap_or(0.0);
         let secs_into_day = (now as i64 + i64::from(self.offset_secs)).rem_euclid(86_400) as f64;
-        (now - secs_into_day, secs_into_day / 3600.0)
+        let hour = self.demo_hour().unwrap_or(secs_into_day / 3600.0);
+        (now - secs_into_day, hour)
+    }
+
+    /// Where the demo's compressed day has got to, or [`None`] in a normal
+    /// run. Starts at noon so a recording opens in daylight and walks into
+    /// the evening, which is the half worth watching.
+    fn demo_hour(&self) -> Option<f64> {
+        self.demo
+            .map(|start| (12.0 + start.elapsed().as_secs_f64() / DEMO_DAY_SECONDS * 24.0) % 24.0)
+    }
+
+    /// Stands in for the daemon during a demo run.
+    ///
+    /// The one thing this does *not* do is fake the picture: the elevation
+    /// comes from `core::solar` at a real place and the temperature from
+    /// `core::transition` through the band on screen, so a reel shows the
+    /// arithmetic this program actually runs, sped up. An animation that
+    /// merely looked like a sunset would be a lie told in the shop window.
+    fn apply_demo(&mut self) {
+        let Some(hour) = self.demo_hour() else {
+            return;
+        };
+        // Answers the daemon would give, so no tab has to know it is in a
+        // demo: the fade switch is on, nothing is out of date, and there are
+        // two screens to list.
+        self.fade = Some(true);
+        self.mismatch = false;
+        self.outputs = Some(vec![(78, 1024), (79, 1024)]);
+        self.place = Some((DEMO_LAT, DEMO_LON, DEMO_PLACE.to_owned()));
+
+        let (midnight, _) = self.day_context();
+        let elevation = solar_elevation(DEMO_LAT, DEMO_LON, midnight + hour * 3600.0);
+        // The band the window is showing, staged drag and all, so the curve
+        // and the state card agree while the tour is dragging a ramp.
+        let band = self.staged_band.unwrap_or(self.band);
+        self.status = Some(Status {
+            enabled: true,
+            temperature: target_temperature(elevation, band, self.day_temp, self.night_temp),
+            source: "demo".into(),
+            elevation,
+            has_location: true,
+            latitude: DEMO_LAT,
+            longitude: DEMO_LON,
+            following: true,
+            day_temp: self.day_temp,
+            night_temp: self.night_temp,
+            gamma: self.gamma,
+            brightness: 1.0,
+            day_brightness: 1.0,
+            night_brightness: self.night_dim,
+        });
+    }
+
+    /// Plays the scripted tour, one action per due entry.
+    ///
+    /// Actions rather than keystrokes, unlike the dashboard's reel: this
+    /// window is driven by a pointer, and there is no honest way to script a
+    /// drag as a keypress. What each action changes is exactly what a hand
+    /// would have changed — the same staged band, the same tab index — so
+    /// nothing here is a path the user cannot reach.
+    fn run_demo_script(&mut self) {
+        let Some(start) = self.demo else {
+            return;
+        };
+        let elapsed = start.elapsed().as_secs_f64();
+        while self.demo_cursor < DEMO_SCRIPT.len() {
+            let (at, action) = DEMO_SCRIPT[self.demo_cursor];
+            if elapsed < at {
+                break;
+            }
+            match action {
+                Act::Tab(index) => self.tab = index,
+                Act::Grab(day, night) => {
+                    self.staged_band = Some(Band {
+                        day_elevation: day,
+                        night_elevation: night,
+                    });
+                }
+                // Let go without applying: the reel shows the gesture and the
+                // guard, and leaves the recorder's own settings alone.
+                Act::LetGo => self.staged_band = None,
+                Act::Theme(index) => self.theme_index = index,
+            }
+            self.demo_cursor += 1;
+        }
     }
 
     /// Tab 3: where the daemon thinks it is, and how to tell it otherwise.
@@ -1079,6 +1230,7 @@ impl Panel {
         // below do not want. It is the only thing here that grows, because it
         // is the only thing here that is worth more when it is bigger.
         let spare = self.curve_height;
+        let (midnight, now_hour) = self.day_context();
         card(ui, pal.surface, |ui| {
             let shown_band = self.staged_band.unwrap_or(self.band);
             match curve::show(
@@ -1088,7 +1240,8 @@ impl Panel {
                     band: shown_band,
                     day_temp: self.day_temp,
                     night_temp: self.night_temp,
-                    offset_secs: self.offset_secs,
+                    midnight,
+                    now_hour: now_hour as f32,
                     pal,
                     height: spare,
                 },
@@ -1922,9 +2075,17 @@ impl eframe::App for Panel {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
         }
 
+        // A demo run answers its own questions and asks the daemon none of
+        // them, every frame rather than once a second: the compressed day
+        // moves too fast for a one-second cache to look like anything but a
+        // stutter.
+        if self.demo.is_some() {
+            self.apply_demo();
+            self.run_demo_script();
+        }
         // Refresh the snapshot at most once a second (or when an action just
         // invalidated it); every frame in between reuses the cache.
-        if self
+        else if self
             .last_poll
             .is_none_or(|t| t.elapsed() >= Duration::from_secs(1))
         {
@@ -2055,10 +2216,21 @@ impl eframe::App for Panel {
         // panel that scrolls is a panel whose minimum size was guessed.
         self.body(ui, &pal, status);
 
-        // egui is reactive, so ask for a repaint each second to keep the slider
-        // tracking the sun even when the window sits idle.
-        ui.ctx()
-            .request_repaint_after(std::time::Duration::from_secs(1));
+        // egui is reactive: it draws when something asks it to, and an idle
+        // panel asking once a second is exactly right — the sun does not move
+        // faster than that and a settings window has no business burning a
+        // core to prove it.
+        //
+        // A demo run is the one case where that is wrong. Its day is
+        // compressed into half a minute, so once a second is thirty frames
+        // for a whole sunset, and the reel comes out as a slideshow. There it
+        // asks for every frame the display will give.
+        if self.demo.is_some() {
+            ui.ctx().request_repaint();
+        } else {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_secs(1));
+        }
     }
 }
 
@@ -2114,38 +2286,71 @@ fn local_offset_seconds() -> i32 {
     sign * (hours * 3600 + minutes * 60)
 }
 
-const USAGE: &str = "usage: nightlight-panel [--version] [--help]
+/// What the command line asked the window to be.
+struct Options {
+    /// Which tab to open on. A flag rather than a click, so the showcase can
+    /// photograph each tab without anything driving a mouse.
+    tab: usize,
+    /// Run the scripted tour on a compressed day, reading no daemon and
+    /// writing to none.
+    demo: bool,
+}
+
+/// Parses the command line, or answers it and stops.
+///
+/// The panel parsed nothing at all until now, so any flag handed to it simply
+/// opened the window — `--version` included. A packager or a bug report runs
+/// that first, and a mistyped option deserves a complaint rather than a
+/// window. [`None`] means the argument was the whole of the job.
+fn parse_args() -> Option<Options> {
+    let usage = format!(
+        "usage: nightlight-panel [--version] [--help] [--tab <{}>] [--demo]
 
 The settings window: the day/night curve, the schedule, the map, the
-outputs and the knobs. Takes no options; everything is set inside it.";
-
-/// Answers `--version` and `--help` before a window exists, and refuses
-/// anything else.
-///
-/// The panel parsed nothing at all, so any flag handed to it simply opened
-/// the window — `--version` included. A packager or a bug report runs that
-/// first, and a mistyped option deserves a complaint rather than a window.
-///
-/// Returns true when the argument was the whole of the job.
-fn cli_only() -> bool {
-    let Some(argument) = std::env::args().nth(1) else {
-        return false;
+outputs and the knobs. Everything is set inside it; these options only
+choose how it opens.",
+        TABS.join(", ")
+    );
+    let mut options = Options {
+        tab: NOW_TAB,
+        demo: false,
     };
-    match argument.as_str() {
-        "--version" | "-V" => println!("nightlight-panel {}", env!("CARGO_PKG_VERSION")),
-        "--help" | "-h" => println!("{USAGE}"),
-        other => {
-            eprintln!("nightlight-panel: unknown option {other:?}\n\n{USAGE}");
-            std::process::exit(2);
+    let mut args = std::env::args().skip(1);
+    while let Some(argument) = args.next() {
+        match argument.as_str() {
+            "--version" | "-V" => {
+                println!("nightlight-panel {}", env!("CARGO_PKG_VERSION"));
+                return None;
+            }
+            "--help" | "-h" => {
+                println!("{usage}");
+                return None;
+            }
+            "--demo" => options.demo = true,
+            "--tab" => {
+                let Some(name) = args.next() else {
+                    eprintln!("{usage}");
+                    std::process::exit(2);
+                };
+                let Some(index) = TABS.iter().position(|title| **title == name) else {
+                    eprintln!("nightlight-panel: unknown tab {name:?}\n\n{usage}");
+                    std::process::exit(2);
+                };
+                options.tab = index;
+            }
+            other => {
+                eprintln!("nightlight-panel: unknown option {other:?}\n\n{usage}");
+                std::process::exit(2);
+            }
         }
     }
-    true
+    Some(options)
 }
 
 fn main() -> eframe::Result<()> {
-    if cli_only() {
+    let Some(args) = parse_args() else {
         return Ok(());
-    }
+    };
     // Single instance: if a panel is already open, ask it to come forward and
     // exit instead of opening a second window.
     let focus = Arc::new(AtomicBool::new(false));
@@ -2154,13 +2359,19 @@ fn main() -> eframe::Result<()> {
         None => return Ok(()),
     };
 
-    let client = match Client::connect() {
+    let mut client = match Client::connect() {
         Ok(client) => client,
         Err(error) => {
             eprintln!("nightlight-panel: cannot reach the session bus: {error}");
             std::process::exit(1);
         }
     };
+    // A reel must not touch the settings of whoever is recording it. Muted at
+    // the door rather than checked at each send, so no future write can
+    // forget to ask.
+    if args.demo {
+        client.mute();
+    }
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -2216,7 +2427,9 @@ fn main() -> eframe::Result<()> {
                 place: None,
                 theme_index: remembered_theme(),
                 outputs: None,
-                tab: NOW_TAB,
+                tab: args.tab,
+                demo: args.demo.then(Instant::now),
+                demo_cursor: 0,
                 map_center: egui::vec2(0.5, 0.5),
                 curve_height: 160.0,
             }))
