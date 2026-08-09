@@ -2490,7 +2490,7 @@ dependencies = [
 
 [[package]]
 name = "nightlight-panel"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "eframe",
  "nightlightd-core",
@@ -2500,7 +2500,7 @@ dependencies = [
 
 [[package]]
 name = "nightlight-tray"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "ksni",
  "nightlightd-core",
@@ -2510,7 +2510,7 @@ dependencies = [
 
 [[package]]
 name = "nightlight-tui"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "nightlightd-core",
  "ratatui",
@@ -2523,7 +2523,7 @@ dependencies = [
 
 [[package]]
 name = "nightlightd"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "clap",
  "nightlightd-core",
@@ -2539,7 +2539,7 @@ dependencies = [
 
 [[package]]
 name = "nightlightd-core"
-version = "0.2.1"
+version = "0.3.0"
 
 [[package]]
 name = "nix"
