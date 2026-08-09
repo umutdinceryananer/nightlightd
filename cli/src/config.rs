@@ -175,10 +175,7 @@ pub fn save(config: &Config) -> std::io::Result<()> {
 
 /// `$XDG_CONFIG_HOME/nightlightd/config.toml`, or `~/.config/...` as a fallback.
 fn config_path() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))?;
-    Some(base.join("nightlightd").join("config.toml"))
+    nightlightd_core::paths::config_file("config.toml")
 }
 
 #[cfg(test)]

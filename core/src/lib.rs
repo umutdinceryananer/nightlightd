@@ -11,6 +11,7 @@ pub mod color;
 pub mod fade;
 pub mod location;
 pub mod mode;
+pub mod paths;
 pub mod schedule;
 pub mod solar;
 pub mod theme;

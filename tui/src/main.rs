@@ -69,6 +69,12 @@ const DEMO_SCRIPT: &[(f64, KeyCode, &str)] = &[
 
 /// The tab bar, in order. Each holds real content or it does not exist.
 const TABS: &[&str] = &["now", "today", "location", "outputs", "settings"];
+
+/// Where the chosen theme is remembered. Its own file, beside the daemon's
+/// config but not inside it: which colours a terminal wears is the terminal's
+/// business, and the panel keeps its choice under another name so a change
+/// made here never reaches into a window that was not open.
+const THEME_FILE: &str = "tui-theme";
 const LOCATION_TAB: usize = 2;
 /// The settings tab's index and its selectable rows: day, night, gamma,
 /// night dim, fade, theme, login. The transition band is deliberately not
@@ -330,7 +336,9 @@ fn main() -> io::Result<()> {
         band_known: false,
         last_poll: None,
         offset_secs: local_offset_seconds(),
-        theme_index,
+        // The flag is a one-off override, like `--tab`: it dresses this run
+        // without rewriting what you last chose from inside the dashboard.
+        theme_index: theme_index.unwrap_or_else(remembered_theme),
         tab,
         settings_selected: 0,
         theme_popup: None,
@@ -358,7 +366,7 @@ fn main() -> io::Result<()> {
 
 /// Minimal argument parsing: `--theme <name>`, `--tab <name|number>` and
 /// `--demo`. No clap — three flags do not justify a dependency.
-fn parse_args() -> Result<(usize, usize, bool), String> {
+fn parse_args() -> Result<(Option<usize>, usize, bool), String> {
     let theme_names = || {
         THEMES
             .iter()
@@ -373,15 +381,18 @@ fn parse_args() -> Result<(usize, usize, bool), String> {
             TABS.join(", ")
         )
     };
-    let (mut theme_index, mut tab, mut demo) = (0, 0, false);
+    // `None` means the flag was not given, which is different from being
+    // given `live`: the remembered theme fills the gap, and an explicit
+    // `--theme live` overrides it for this run.
+    let (mut theme_index, mut tab, mut demo) = (None, 0, false);
     let mut args = std::env::args().skip(1);
     while let Some(argument) = args.next() {
         match argument.as_str() {
             "--theme" | "-t" => {
                 let name = args.next().ok_or_else(usage)?;
-                theme_index = theme::index_of(&name).ok_or_else(|| {
+                theme_index = Some(theme::index_of(&name).ok_or_else(|| {
                     format!("unknown theme {name:?} — available: {}", theme_names())
-                })?;
+                })?);
             }
             "--tab" => {
                 let name = args.next().ok_or_else(usage)?;
@@ -552,7 +563,7 @@ impl App {
                 self.last_poll = None;
             }
             KeyCode::Char('T') => {
-                self.theme_index = (self.theme_index + 1) % THEMES.len();
+                self.wear_theme((self.theme_index + 1) % THEMES.len());
             }
             KeyCode::Char('?') => self.help_popup = true,
             KeyCode::Char('s') => self.sun_popup = true,
@@ -666,11 +677,11 @@ impl App {
             4 => self.toggle_fade(),
             5 => {
                 let count = THEMES.len();
-                self.theme_index = if increase {
+                self.wear_theme(if increase {
                     (self.theme_index + 1) % count
                 } else {
                     (self.theme_index + count - 1) % count
-                };
+                });
             }
             6 => self.toggle_login(),
             _ => {}
@@ -840,12 +851,21 @@ impl App {
             KeyCode::Up => self.theme_popup = Some(selected.saturating_sub(1)),
             KeyCode::Down => self.theme_popup = Some((selected + 1).min(THEMES.len() - 1)),
             KeyCode::Enter => {
-                self.theme_index = selected;
+                self.wear_theme(selected);
                 self.theme_popup = None;
             }
             KeyCode::Esc | KeyCode::Char('q') => self.theme_popup = None,
             _ => {}
         }
+    }
+
+    /// Wears a theme and remembers it. Three keys reach the theme — `T`, the
+    /// settings row's arrows, the picker's enter — and a save left off any
+    /// one of them is a choice that survives until it happens to be made the
+    /// other way.
+    fn wear_theme(&mut self, index: usize) {
+        self.theme_index = index;
+        remember_theme(index);
     }
 
     fn palette(&self) -> Palette {
@@ -3086,18 +3106,37 @@ fn card<'a>(title: &'a str, pal: &Palette) -> Block<'a> {
 /// Where the daemon's config lives, for the settings tab's info line — the
 /// same XDG derivation the daemon uses.
 fn config_path_display() -> String {
-    std::env::var_os("XDG_CONFIG_HOME")
-        .map(std::path::PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".config"))
-        })
-        .map(|base| {
-            base.join("nightlightd")
-                .join("config.toml")
-                .display()
-                .to_string()
-        })
+    nightlightd_core::paths::config_file("config.toml")
+        .map(|path| path.display().to_string())
         .unwrap_or_else(|| "~/.config/nightlightd/config.toml".into())
+}
+
+/// The theme this dashboard last wore, or `live` when it has never been
+/// asked. Anything unreadable, empty, or naming a theme that no longer exists
+/// lands on the default without complaint — the file is a convenience, and a
+/// night light must not fail to start because somebody typed into it.
+fn remembered_theme() -> usize {
+    nightlightd_core::paths::config_file(THEME_FILE)
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|name| theme::index_of(name.trim()))
+        .unwrap_or(0)
+}
+
+/// Remembers the choice by name rather than by index — an index is one
+/// release away from meaning a different theme. Failure is silence: the
+/// colours still apply for this session, they just will not survive the
+/// dashboard closing.
+fn remember_theme(index: usize) {
+    let Some(name) = THEMES.get(index).map(|theme| theme.name) else {
+        return;
+    };
+    let Some(path) = nightlightd_core::paths::config_file(THEME_FILE) else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(path, name);
 }
 
 /// "41.0°N 29.0°E" for a signed coordinate pair.

@@ -28,10 +28,7 @@ pub fn from_incumbents() -> Option<(Config, &'static str)> {
 /// The configs worth trying, in order: gammastep (maintained), then redshift
 /// (archived, but its file often outlives it on disk).
 fn candidates() -> Vec<(&'static str, PathBuf)> {
-    let Some(base) = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
-    else {
+    let Some(base) = nightlightd_core::paths::config_home() else {
         return Vec::new();
     };
     vec![

@@ -72,6 +72,11 @@ const BUTTON_HEIGHT: f32 = 26.0;
 /// room to spare, and no wider — eight short words do not want a rail across
 /// the window.
 const THEME_WIDTH: f32 = 130.0;
+/// Where the chosen theme is remembered. Its own file, beside the daemon's
+/// config but not inside it: which colours a window wears is the window's
+/// business, and the dashboard keeps its choice under another name so a
+/// change made here never reaches into a window that was not open.
+const THEME_FILE: &str = "panel-theme";
 /// The map's viewport. Antarctica is cropped away — nobody runs a night light
 /// there — and the north is carried past Greenland.
 const MAP_LAT_MIN: f64 = -60.0;
@@ -1367,7 +1372,7 @@ impl Panel {
         });
         if let Some(index) = chosen {
             self.theme_index = index;
-            write_theme(index);
+            remember_theme(index);
         }
 
         // The two switches share a card and a row. They are the only things
@@ -1584,54 +1589,37 @@ fn map_crop(
 /// business — a path that is merely wrong reads better here than an empty
 /// row that suggests there is no file at all.
 fn config_path() -> String {
-    std::env::var_os("XDG_CONFIG_HOME")
-        .map(std::path::PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".config"))
-        })
-        .map(|base| {
-            base.join("nightlightd")
-                .join("config.toml")
-                .display()
-                .to_string()
-        })
+    nightlightd_core::paths::config_file("config.toml")
+        .map(|path| path.display().to_string())
         .unwrap_or_else(|| "~/.config/nightlightd/config.toml".into())
 }
 
-/// Where the panel keeps the one thing that is its own and not the daemon's.
-///
-/// Beside the daemon's config rather than inside it, and deliberately not a
-/// D-Bus call: which colours a window wears is the window's business, and a
-/// daemon that has never drawn anything has no reason to hold an opinion
-/// about it. A whole file for one word is cheap; a wire field for one word is
-/// forever.
-fn theme_path() -> String {
-    config_path().replace("config.toml", "panel-theme")
-}
-
-/// The saved theme's index, or the default. Anything unreadable, empty or
-/// naming a theme that no longer exists lands on `live` without complaint —
-/// the file is a convenience, and a night light must not fail to open because
-/// somebody typed into it.
-fn read_theme() -> usize {
-    std::fs::read_to_string(theme_path())
-        .ok()
+/// The theme this window last wore, or `live` when it has never been asked.
+/// Anything unreadable, empty, or naming a theme that no longer exists lands
+/// on the default without complaint — the file is a convenience, and a night
+/// light must not fail to open because somebody typed into it.
+fn remembered_theme() -> usize {
+    nightlightd_core::paths::config_file(THEME_FILE)
+        .and_then(|path| std::fs::read_to_string(path).ok())
         .and_then(|name| theme::index_of(name.trim()))
         .unwrap_or(0)
 }
 
-/// Remembers the choice, by name. Failure is silence: the theme still applies
-/// for this session, it just will not survive the window closing, and that is
-/// not worth a dialog.
-fn write_theme(index: usize) {
-    let Some(theme) = theme::THEMES.get(index) else {
+/// Remembers the choice by name rather than by index — an index is one
+/// release away from meaning a different theme. Failure is silence: the
+/// colours still apply for this session, they just will not survive the
+/// window closing, and that is not worth interrupting anyone over.
+fn remember_theme(index: usize) {
+    let Some(name) = theme::THEMES.get(index).map(|theme| theme.name) else {
         return;
     };
-    let path = theme_path();
-    if let Some(parent) = std::path::Path::new(&path).parent() {
+    let Some(path) = nightlightd_core::paths::config_file(THEME_FILE) else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let _ = std::fs::write(path, theme.name);
+    let _ = std::fs::write(path, name);
 }
 
 /// The same path with the home directory written as `~`. The panel is a few
@@ -2195,7 +2183,7 @@ fn main() -> eframe::Result<()> {
                 daemon_night_dim: 1.0,
                 bounds_dragging: false,
                 place: None,
-                theme_index: read_theme(),
+                theme_index: remembered_theme(),
                 outputs: None,
                 tab: NOW_TAB,
                 map_center: egui::vec2(0.5, 0.5),
