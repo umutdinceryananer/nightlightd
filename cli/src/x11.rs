@@ -8,7 +8,9 @@
 //! * RandR events (hotplug, mode/resolution change) are corrected immediately.
 //! * A periodic tick re-applies the ramp, which both follows the sun (in the
 //!   daemon) and overwrites silent wipes that emit no event (a bare gamma
-//!   write, some fullscreen games, DPMS wakeups).
+//!   write, some fullscreen games, DPMS wakeups). Since #40 the tick reads
+//!   each ramp before writing it, so a screen already carrying ours costs
+//!   nothing and a screen that has lost it says so.
 
 use std::error::Error;
 use std::os::fd::{AsFd, BorrowedFd};
@@ -100,7 +102,16 @@ pub fn apply_temperature(kelvin: u32) -> Result<usize, Box<dyn Error>> {
         gamma: 1.0,
         brightness: 1.0,
     };
-    write_ramps(&conn, &crtcs, target, true)?;
+    // A restore has no history to compare against — this process has written
+    // nothing — so it declares itself moving and unsettled, and any
+    // difference it finds reads as its own rather than as a wipe. A screen
+    // that already carries the ramp needs no restoring.
+    let intent = Intent {
+        moving: true,
+        changed: true,
+        settled: false,
+    };
+    write_ramps(&conn, &crtcs, target, intent)?;
     conn.flush()?;
     Ok(crtcs.len())
 }
@@ -263,7 +274,7 @@ fn apply_desired<C: Connection>(
     fade: &mut Option<Fade>,
 ) -> Result<(), Box<dyn Error>> {
     let now = Instant::now();
-    let (desired, applied, fade_enabled) = {
+    let (desired, applied, fade_enabled, settled) = {
         let mut state = lock(state);
         let desired = desired_target(&mut state);
         let applied = Target {
@@ -271,7 +282,10 @@ fn apply_desired<C: Connection>(
             gamma: state.current_gamma,
             brightness: state.current_brightness,
         };
-        (desired, applied, state.fade)
+        // The outputs cache is empty until the first apply, which makes it
+        // exactly the "have we written here yet" flag #40 needs: before that,
+        // whatever is on the screen belongs to whoever ran last, not to us.
+        (desired, applied, state.fade, !state.outputs.is_empty())
     };
 
     // Keep the walk pointed at what the state wants (#38); with the switch
@@ -281,8 +295,13 @@ fn apply_desired<C: Connection>(
     let target = fade.as_ref().map_or(desired, |active| active.at(now));
     // One info line per transition, at arrival; the intermediate steps of a
     // walk and the unchanged ticks stay at debug.
-    let changed = target != applied && fade.is_none();
-    let crtcs = reapply(conn, root, target, changed)?;
+    let moving = target != applied;
+    let intent = Intent {
+        moving,
+        changed: moving && fade.is_none(),
+        settled,
+    };
+    let crtcs = reapply(conn, root, target, intent)?;
     let mut state = lock(state);
     state.current_temp = target.kelvin;
     state.current_gamma = target.gamma;
@@ -363,11 +382,11 @@ fn reapply<C: Connection>(
     conn: &C,
     root: u32,
     target: Target,
-    changed: bool,
+    intent: Intent,
 ) -> Result<Vec<CrtcInfo>, Box<dyn Error>> {
     let resources = conn.randr_get_screen_resources(root)?.reply()?;
     let crtcs = active_crtcs(conn, &resources)?;
-    write_ramps(conn, &crtcs, target, changed)?;
+    write_ramps(conn, &crtcs, target, intent)?;
     conn.flush()?;
     Ok(crtcs)
 }
@@ -395,15 +414,67 @@ fn active_crtcs<C: Connection>(
     Ok(crtcs)
 }
 
-/// Builds and writes the target's ramp to each CRTC.
+/// What the caller knows about a write, which is what lets a difference found
+/// on the screen be read as ours or as somebody else's.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Intent {
+    /// The ramp we are about to write differs from the one we last wrote, so
+    /// a difference on the screen is ours. Not the same question as
+    /// `changed`: a fade moves the ramp every step while deliberately staying
+    /// quiet in the log, and every one of those steps is still ours.
+    moving: bool,
+    /// Worth an info line rather than a debug one: an arrival, not a step.
+    changed: bool,
+    /// We have written to this screen before. Until we have, whatever is on
+    /// it is the state we found rather than something that was taken from us.
+    settled: bool,
+}
+
+/// What a tick found on a CRTC.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Found {
+    /// The screen already carries this exact ramp. Nothing to write, which is
+    /// the common case once the sun stops moving.
+    Unchanged,
+    /// A difference we asked for.
+    Applying,
+    /// A difference nobody asked for, on a screen we had already written to:
+    /// something else took the ramp between ticks. This is precisely the case
+    /// the RandR events (#13) can miss, because a bare gamma write emits none.
+    Wiped,
+}
+
+/// Reads what was found on the screen against what we meant to put there.
+///
+/// The whole of #40 is this table. A ramp that already matches is a write we
+/// can skip; a ramp that differs is either our own doing or a wipe, and the
+/// difference between those two is whether we asked for it — never whether it
+/// is merely different, which is what a naive delta write would have said on
+/// every fade step and on the very first apply.
+fn classify(matches: bool, intent: Intent) -> Found {
+    if matches {
+        Found::Unchanged
+    } else if intent.moving || !intent.settled {
+        Found::Applying
+    } else {
+        Found::Wiped
+    }
+}
+
+/// Builds the target's ramp for each CRTC and writes it — unless the screen
+/// already carries it (#40). The read costs one round trip per CRTC per tick
+/// and buys the cheap half of the recovery story: a wipe that fires no event
+/// is corrected on the next tick instead of lasting until something else
+/// happens to wake the loop.
 fn write_ramps<C: Connection>(
     conn: &C,
     crtcs: &[CrtcInfo],
     target: Target,
-    changed: bool,
+    intent: Intent,
 ) -> Result<(), Box<dyn Error>> {
     let gains = temperature_to_rgb(target.kelvin);
     let kelvin = target.kelvin;
+    let changed = intent.changed;
     // Shaping factors appear in the log line only when they do something,
     // so the common log stays as short as it always was.
     let shaped = if (target.gamma - 1.0).abs() > 1e-9 || (target.brightness - 1.0).abs() > 1e-9 {
@@ -416,15 +487,42 @@ fn write_ramps<C: Connection>(
     };
     for c in crtcs {
         let ramp = build_ramp(c.gamma_size, gains, target.gamma, target.brightness);
+        // A read that fails is not evidence of a match, so it falls through to
+        // the write. Degrading toward writing is the safe direction: the worst
+        // an unnecessary write costs is a round trip, and the worst a skipped
+        // one costs is a screen left wrong.
+        let live = conn
+            .randr_get_crtc_gamma(c.crtc)
+            .ok()
+            .and_then(|cookie| cookie.reply().ok());
+        let matches = live.is_some_and(|live| {
+            live.red == ramp.red && live.green == ramp.green && live.blue == ramp.blue
+        });
+        match classify(matches, intent) {
+            Found::Unchanged => {
+                tracing::debug!("CRTC {} already at {kelvin} K{shaped}", c.crtc);
+                continue;
+            }
+            // Rare and worth saying out loud whatever else the tick was
+            // doing: it is the one line that tells you the safety net caught
+            // something.
+            Found::Wiped => {
+                tracing::info!(
+                    "CRTC {} lost its ramp to something else; rewrote {kelvin} K{shaped}",
+                    c.crtc
+                );
+            }
+            // A change (sun moved, a client request) is logged by default; a
+            // fade's intermediate steps stay at debug.
+            Found::Applying if changed => {
+                tracing::info!("applied {kelvin} K{shaped} to CRTC {}", c.crtc);
+            }
+            Found::Applying => {
+                tracing::debug!("applied {kelvin} K{shaped} to CRTC {}", c.crtc);
+            }
+        }
         conn.randr_set_crtc_gamma(c.crtc, &ramp.red, &ramp.green, &ramp.blue)?
             .check()?;
-        // A change (sun moved, a client request) is logged by default; an
-        // unchanged periodic tick is only logged at debug.
-        if changed {
-            tracing::info!("applied {kelvin} K{shaped} to CRTC {}", c.crtc);
-        } else {
-            tracing::debug!("applied {kelvin} K{shaped} to CRTC {}", c.crtc);
-        }
     }
     Ok(())
 }
@@ -443,6 +541,42 @@ mod tests {
     use x11rb::errors::{ConnectionError, ReplyError};
     use x11rb::protocol::ErrorKind;
     use x11rb::x11_utils::X11Error;
+
+    fn intent(moving: bool, settled: bool) -> Intent {
+        Intent {
+            moving,
+            changed: moving,
+            settled,
+        }
+    }
+
+    /// The whole of #40 in one table. Two of these four rows are the ones a
+    /// naive "write only on difference" would have got wrong, and both would
+    /// have been wrong loudly: a fade would have reported itself wiped on
+    /// every step, and so would the first apply of a daemon taking over a
+    /// screen somebody else had left coloured.
+    #[test]
+    fn a_difference_is_only_a_wipe_when_nobody_asked_for_it() {
+        // A screen already carrying the ramp is a write we can skip, whatever
+        // else the tick believed about itself.
+        for moving in [true, false] {
+            for settled in [true, false] {
+                assert_eq!(
+                    classify(true, intent(moving, settled)),
+                    Found::Unchanged,
+                    "moving={moving} settled={settled}"
+                );
+            }
+        }
+        // Moving: the difference is ours, fade step or arrival alike.
+        assert_eq!(classify(false, intent(true, true)), Found::Applying);
+        // Not moving and never written here: this is the state we found, not
+        // something taken from us.
+        assert_eq!(classify(false, intent(false, false)), Found::Applying);
+        // Not moving, and we had written here — the one case the RandR events
+        // can miss, and the only one worth a line in the log.
+        assert_eq!(classify(false, intent(false, true)), Found::Wiped);
+    }
 
     #[test]
     fn connection_loss_is_fatal() {

@@ -21,8 +21,11 @@ that cannot be taken back.
       `cargo test --workspace` clean locally.
 - [ ] The dogfooding gauntlet on the release build, not on trust: a
       real suspend cycle, a monitor unplug/replug (or at least a
-      `xrandr --gamma 1:1:1` wipe, healed within a tick), toggles at
-      night with your own config.
+      `xrandr --output <out> --gamma 1:1:1` wipe, healed within a
+      tick), toggles at night with your own config. Stop *every*
+      daemon first — `pkill -f 'nightlightd --daemon'`, not just the
+      unit, or a tray-spawned one holds the bus name and the build you
+      meant to test never starts.
 - [ ] Bump `version` in the workspace `Cargo.toml`. One line; all five
       crates inherit it. Then `cargo build` so `Cargo.lock` follows,
       and commit both together.

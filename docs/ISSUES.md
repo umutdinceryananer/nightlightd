@@ -571,11 +571,33 @@ becomes a setting, grep for the constant, not for the feature.**
   only writes on difference costs one read per minute and turns the
   worst case from "wiped until the next event" into "wiped for under
   a minute".
-- **Done when:** `xrandr --gamma 1:1:1` by hand is corrected on the
-  next tick, and an unchanged minute produces no set call (visible at
-  debug log level).
+- **Done when:** `xrandr --output <out> --gamma 1:1:1` by hand is
+  corrected on the next tick, and an unchanged minute produces no set
+  call (visible at debug log level). The bare `--gamma` form this line
+  used to carry does not run: xrandr wants the output first.
 - **Difficulty:** Easy
 - **Target:** v0.3
+
+**Done.** The tick reads each CRTC's ramp before writing it, and the
+comparison is a three-way answer rather than a delta: already ours
+(skip, debug), a difference we asked for (write, the existing log), or
+a difference nobody asked for on a screen we had already written to
+(write, and say so at info — the only line that shows the safety net
+catching something).
+
+The two rows that mattered are the ones a plain "write only on
+difference" would have got wrong, and loudly. A fade moves the ramp
+every step while deliberately staying quiet in the log, so `changed`
+is false throughout — reading a wipe off that flag would have cried
+wolf on every transition. And a daemon starting on a screen somebody
+else had left coloured would have called its own first apply a wipe.
+So the predicate is "did we ask for this" (`target != applied`) gated
+on having written here before, not "is it different"; `classify` holds
+the table and a test walks all four rows.
+
+A failed gamma read counts as a mismatch and falls through to the
+write: the worst an unnecessary write costs is a round trip, the worst
+a skipped one costs is a screen left wrong.
 
 ### #41 Temperatures past neutral
 
