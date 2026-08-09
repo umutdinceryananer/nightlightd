@@ -150,6 +150,15 @@ PY
 # before and put back after.
 tray_shot() {
     local file="$1"
+    # -x, matching the process name exactly, because `pgrep -f` reads whole
+    # command lines and finds the shell running this script — the script's own
+    # text contains the name, so that check could never fail.
+    #
+    # It works by one character. Linux truncates a process name to 15 and
+    # `pgrep -x` compares against the truncation, so any name of 16 or more
+    # matches nothing, silently: `pgrep -x nightlight-panel` is always false.
+    # "nightlight-tray" is exactly 15. Rename the binary and this line stops
+    # working without saying so.
     pgrep -x nightlight-tray >/dev/null || {
         echo "  the tray is not running: nightlight-tray &" >&2
         return 1
