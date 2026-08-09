@@ -958,6 +958,41 @@ already at the default leaves nothing to confirm.
 - **Difficulty:** Medium
 - **Target:** v0.4
 
+### #51 Photograph the tray menu
+
+- **What:** A screenshot of the tray's menu (#46) for the README. It is
+  the only interface with no picture at all, and the first thing a
+  desktop user sees.
+- **Why it is not done:** Attempted for 0.3.0 and abandoned, which is
+  worth writing down so the next attempt starts further along. A
+  StatusNotifierItem has no window: the icon is drawn inside the panel
+  by its systray and so is the menu, so there is nothing for `wmctrl`
+  to raise, nothing for `xdotool search` to find, and the open menu is
+  override-redirect — absent from `xwininfo -root -children`. Asking
+  the item over D-Bus does not help either, because `ContextMenu` tells
+  the application and the application is not what draws it.
+- **What did work:** finding the icon by taking it away — one frame of
+  the panel with the tray running and one without, and the only thing
+  that differs is our own icon. `scripts/screenshots.sh` keeps that
+  (`tray_icon`), and it is exact.
+- **What did not:** cropping the menu out of the frame by diffing
+  against a shot with it closed. The menu is dark and so is what is
+  behind it, so its upper rows — the readout line, which is the whole
+  point — fall under any threshold that excludes the panel clock
+  ticking. The one run that captured the whole menu only did so because
+  a tooltip was sitting on top of it.
+- **Also:** right-clicking the icon toggles the filter. xfce4-panel's
+  systray delivers Activate on the right button as well as the left,
+  so the shot turns the screen neutral on its way past. The script puts
+  the state back while the menu is still up, and dbusmenu updates live,
+  so the photograph shows the truth — but any future approach has to
+  keep doing that.
+- **Ideas for next time:** ask the compositor for the override-redirect
+  window (`xwininfo -root -tree` rather than `-children`), or drive a
+  second systray host in a nested X server where the geometry is known.
+- **Difficulty:** Easy to describe, fiddly to do
+- **Target:** v0.4
+
 ---
 
 ## Ordering summary
