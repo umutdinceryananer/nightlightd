@@ -312,6 +312,29 @@ At the end of this milestone the tool becomes genuinely usable.
   Save button needed. A "transition span" control was not built (the curve
   follows solar elevation, redshift-style).
 
+**Done (2026-08-09).** "No tabs" did not survive contact with the
+window. One scrolling column of every control the daemon has said
+nothing about which of them mattered now, and it was the least useful
+of the three interfaces despite having the most room. It is now the
+dashboard's shape: a strip that always says whether the filter is on, a
+state card leading with the kelvin the screen is actually at, and five
+tabs — now, today, location, outputs, settings. Nothing scrolls; each
+tab is sized to fit and the chart absorbs whatever the frame measures
+as overflow, so the window cannot cut off a control it forgot to
+count.
+
+The scope note above was right about small windows and wrong about
+this one: the controls were never the problem, the absence of a
+schedule, a map and a readout was. What arrived with the tabs was a
+world map that takes a pin (drawn from a coastline committed to this
+repository, never fetched), the day's milestones with the next one
+lit, how long the day is and how that compares with yesterday, the
+screens the ramp is reaching, and the eight themes the dashboard
+carries — each window remembering its own.
+
+The "transition span" control finally exists, twice: as the curve's
+own draggable ramp (#45) and as the band the dashboard edits (#39).
+
 ### #25 "Start at login" wires up systemd
 
 - **What:** Ticking the box runs `systemctl --user enable nightlightd`.
@@ -733,6 +756,19 @@ it on, one surface's toggle following in the others within a poll.
 - **Difficulty:** Medium
 - **Depends on:** #39
 - **Target:** v0.3
+
+**Done.** The whole line is a handle in the panel: the ramps set the
+band, the plateaus set the two temperatures, and each end moves without
+the other. Changes stage rather than fire — Apply and Revert appear the
+moment the shape differs from the daemon's — because a drag that sent
+on every frame would have written the config file forty times crossing
+the window. The dashboard has the same band on `b`, with the keys it
+already speaks; the mouse is still #49's problem.
+
+What it taught us is filed: the two ramps read their bounds off one
+pair, so dragging dusk moves dawn with it (#47), and once the ramp is
+something you hold, its straightness is the next thing you notice
+(#49).
 
 ### #46 A nicer tray menu
 
