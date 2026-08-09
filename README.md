@@ -17,12 +17,13 @@
 > **Version 0.3.0.** The daemon provides timezone based location, a single instance D-Bus lock, gamma ramps over XRandR, eased transitions between targets, a movable transition band, reapplication on resume from suspend, a ramp it checks and repairs when something else clears it, and a `--status` readout. Three clients ship with it, a tray icon, a settings panel, and a terminal dashboard, both windows carrying the same five tabs and the same themes. A [release with a `.deb`](https://github.com/umutdinceryananer/nightlightd/releases/latest) and an [AUR package](https://aur.archlinux.org/packages/nightlightd) are available. Flatpak is planned. Young software, tested on one machine so far. Report what breaks.
 
 <p align="center">
-  <img src="docs/screenshots/nightlight-tui.gif" alt="the terminal dashboard's demo reel: a compressed day warms the interface through sunset into night, walks the five tabs, rolls through the themes and loops at dawn" width="820">
+  <img src="docs/screenshots/nightlight-tui.gif" alt="the terminal dashboard's demo reel: a compressed day warms the interface through sunset, the transition band is widened over the curve, the day is summarised, and the themes roll past" width="520">
+  <img src="docs/screenshots/nightlight-panel.gif" alt="the settings panel's demo reel: the same compressed day, with the curve's ramp taken hold of and dragged wider before the sun sets" width="284">
 </p>
 
-In the default `live` theme the dashboard's accent colour is the tint the daemon is currently applying, so the interface reads warmer as evening comes on. Every other colour on screen is derived from that one.
+In the default `live` theme the accent colour is the tint the daemon is currently applying, so both interfaces read warmer as evening comes on. Every other colour on screen is derived from that one.
 
-The reel above is `nightlight-tui --demo`, a day compressed into twenty-eight seconds, no daemon required. Each keypress the tour makes is shown in the corner as it happens.
+Those are `nightlight-tui --demo` and `nightlight-panel --demo`: a day compressed into half a minute, no daemon required. The dashboard shows each keypress in the corner as it happens; the panel's tour takes hold of the curve, because that is the one thing a screenshot cannot show.
 
 ---
 
@@ -67,12 +68,21 @@ The daemon runs headless and needs no interface. Three thin clients ship with it
 - **`nightlight-panel`** is a desktop window with the same five tabs as the dashboard. **now** draws the day/night curve, and the curve is also the control: drag a ramp to move the transition band, a plateau to move a temperature, Apply when the shape looks right. **today** lists the day's milestones with the next one lit, under how much daylight there is and how that compares with yesterday. **location** takes a pin on a world map. **outputs** shows every screen the ramp is reaching. **settings** holds the bounds, gamma, night dim, the switches and the theme.
 - **`nightlight-tui`** is a terminal dashboard built with [ratatui](https://ratatui.rs).
 
-Both wear the same eight themes, each remembering its own choice. The dashboard has five tabs.
+Both wear the same eight themes, each remembering its own choice.
+
+<p align="center">
+  <img src="docs/screenshots/panel-now.png" alt="the panel's now tab: the day/night curve, with the sliders and the manual hold beneath it" width="200">
+  <img src="docs/screenshots/panel-today.png" alt="the panel's today tab: the day's milestones, under how long the day is and how that compares with yesterday" width="200">
+  <img src="docs/screenshots/panel-location.png" alt="the panel's location tab: a world map with the resolved place pinned on it" width="200">
+  <img src="docs/screenshots/panel-settings.png" alt="the panel's settings tab in the nord theme: the bounds, the theme picker and the config path" width="200">
+</p>
+
+The dashboard has five tabs.
 
 <p align="center">
   <img src="docs/screenshots/02-today.png" alt="today tab: the day's solar milestones as a schedule over the sun's phase-tinted arc" width="270">
   <img src="docs/screenshots/03-location.png" alt="location tab: the resolved city in big text over a braille world map" width="270">
-  <img src="docs/screenshots/05-now-synthwave.png" alt="the now tab in the synthwave theme, pink and cyan" width="270">
+  <img src="docs/screenshots/06-now-synthwave.png" alt="the now tab in the synthwave theme, pink and cyan" width="270">
 </p>
 
 **now** plots the day as a square wave over the sun's crossing arcs, a staircase when the band is widened, with a strip along the floor showing the screen's colour at every hour. **today** derives the day's milestones (night's end, sunrise, full day, solar noon, sunset) from the same solar maths the daemon schedules on, over the sun's own arc drawn the same way. **location** shows the city the timezone resolved to and takes a manual pin on the map. **outputs** lists every screen the ramp is reaching, with its gamma ramp size. **settings** adjusts the day and night bounds, gamma and night dim. `b` over either chart opens the transition band on the arrow keys, drawn live and applied on Enter. `s` summarises the day: its length, the change since yesterday, and when tomorrow starts. `?` lists every key. `T` cycles the themes and the choice sticks. `live` follows the screen; the rest (`tokyo`, `mocha`, `nord`, `gruvbox`, `synth`, `ember`, `phosphor`) are fixed palettes.
