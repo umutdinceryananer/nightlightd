@@ -12,13 +12,13 @@
 mod autostart;
 mod daemon;
 mod theme;
-mod today;
 
 use std::io;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use nightlightd_core::color::temperature_to_rgb;
 use nightlightd_core::location::nearest_zone;
+use nightlightd_core::schedule::{Milestone, milestones};
 use nightlightd_core::solar::solar_elevation;
 use nightlightd_core::transition::{Band, phase, target_temperature};
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -1674,7 +1674,7 @@ impl App {
 
         let (midnight, _) = self.day_context();
         let compute = |offset_days: f64| {
-            today::milestones(
+            milestones(
                 status.latitude,
                 status.longitude,
                 midnight + offset_days * 86_400.0,
@@ -1686,10 +1686,10 @@ impl App {
         let today_events = compute(0.0);
         let yesterday = compute(-1.0);
         let tomorrow = compute(1.0);
-        let hour_of = |events: &[today::Milestone], name: &str| {
+        let hour_of = |events: &[Milestone], name: &str| {
             events.iter().find(|e| e.name == name).map(|e| e.hour)
         };
-        let hhmm_of = |events: &[today::Milestone], name: &str| {
+        let hhmm_of = |events: &[Milestone], name: &str| {
             events.iter().find(|e| e.name == name).map(|e| e.hhmm())
         };
 
@@ -2085,7 +2085,7 @@ impl App {
         };
 
         let (midnight, now_hour) = self.day_context();
-        let events = today::milestones(
+        let events = milestones(
             status.latitude,
             status.longitude,
             midnight,
@@ -2527,7 +2527,7 @@ impl App {
     #[allow(clippy::type_complexity)]
     fn daylight(&self, status: &Status) -> (f64, String, String, Option<(String, String)>) {
         let (midnight, now) = self.day_context();
-        let events = today::milestones(
+        let events = milestones(
             status.latitude,
             status.longitude,
             midnight,

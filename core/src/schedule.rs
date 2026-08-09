@@ -1,10 +1,14 @@
-//! The "today" tab's data: the day's solar milestones, computed from the same
-//! core maths the daemon runs — crossings of the transition thresholds, not
-//! hand-set times. This is the honest version of a milestone table: it derives
-//! from where the sun actually is at this location on this day.
+//! The day's solar milestones: the moments the sun crosses the transition
+//! band's bounds and the horizon, with the temperature the screen lands on at
+//! each. Not hand-set times — every one of them is derived from where the sun
+//! actually is at this location on this day.
+//!
+//! It lives here rather than in an interface because two of them want it and
+//! neither owns it, and because it is what this crate is for: numbers, no
+//! display, testable without a screen.
 
-use nightlightd_core::solar::solar_elevation;
-use nightlightd_core::transition::{Band, target_temperature};
+use crate::solar::solar_elevation;
+use crate::transition::{Band, target_temperature};
 
 /// One solar event of the day.
 pub struct Milestone {
