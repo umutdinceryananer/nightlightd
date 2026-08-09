@@ -44,7 +44,11 @@ const NIGHT_MIN: u32 = 1500;
 const NIGHT_STEP: u32 = 100;
 
 /// One full day in the `--demo` compressed clock, in real seconds (#30).
-const DEMO_DAY_SECONDS: f64 = 28.0;
+/// Grown from 28 when the band editor and the day summary joined the tour:
+/// the reel had no room left, and a tour that hurries reads as a list of
+/// features rather than as a program being used. `scripts/demo-gif.sh`
+/// records exactly this long, so the two move together.
+const DEMO_DAY_SECONDS: f64 = 34.0;
 
 /// The demo's scripted tour (#30): (second, key, chip label). Starts at noon
 /// on the now tab; dwells through sunset while the interface warms, walks the
@@ -52,19 +56,43 @@ const DEMO_DAY_SECONDS: f64 = 28.0;
 /// the roll, so the return to `live` opens on morning gold), then jumps home.
 /// One pass is exactly one compressed day, so a recording loops seamlessly.
 const DEMO_SCRIPT: &[(f64, KeyCode, &str)] = &[
-    (11.0, KeyCode::Tab, "⇥"),
-    (14.0, KeyCode::Tab, "⇥"),
-    (16.5, KeyCode::Tab, "⇥"),
-    (18.0, KeyCode::Tab, "⇥"),
-    (19.0, KeyCode::Char('T'), "T"),
-    (19.8, KeyCode::Char('T'), "T"),
-    (20.6, KeyCode::Char('T'), "T"),
-    (22.2, KeyCode::Char('T'), "T"),
-    (22.8, KeyCode::Char('T'), "T"),
-    (23.4, KeyCode::Char('T'), "T"),
-    (24.0, KeyCode::Char('T'), "T"),
-    (24.6, KeyCode::Char('T'), "T"),
-    (25.6, KeyCode::Char('1'), "1"),
+    // Nothing at all until the sun is down. The day warming through sunset is
+    // the one thing this program is for, and a tour walking over it is a tour
+    // talking during the film.
+    //
+    // Then the band (#39, #45): open it, take the night bound down three
+    // degrees a half at a time, and watch the ramp stretch on the same frame
+    // as the press. It leaves by escape rather than enter, which shows the
+    // unsaved-work guard and — the reason it matters here — applies nothing,
+    // so recording the reel never writes to the recorder's own daemon.
+    (12.5, KeyCode::Char('b'), "b"),
+    (13.0, KeyCode::Down, "↓"),
+    (13.4, KeyCode::Left, "←"),
+    (13.8, KeyCode::Left, "←"),
+    (14.2, KeyCode::Left, "←"),
+    (14.6, KeyCode::Left, "←"),
+    (15.0, KeyCode::Left, "←"),
+    (15.4, KeyCode::Left, "←"),
+    (16.4, KeyCode::Esc, "esc"),
+    (17.4, KeyCode::Char('n'), "n"),
+    // The day, said in numbers: how long it is, and how much of it we have
+    // gained since yesterday.
+    (18.2, KeyCode::Char('s'), "s"),
+    (20.2, KeyCode::Esc, "esc"),
+    // Then the tabs, and the palettes on the way out.
+    (21.0, KeyCode::Tab, "⇥"),
+    (22.4, KeyCode::Tab, "⇥"),
+    (23.6, KeyCode::Tab, "⇥"),
+    (24.6, KeyCode::Tab, "⇥"),
+    (25.4, KeyCode::Char('T'), "T"),
+    (26.1, KeyCode::Char('T'), "T"),
+    (26.8, KeyCode::Char('T'), "T"),
+    (27.5, KeyCode::Char('T'), "T"),
+    (28.2, KeyCode::Char('T'), "T"),
+    (28.9, KeyCode::Char('T'), "T"),
+    (29.6, KeyCode::Char('T'), "T"),
+    (30.3, KeyCode::Char('T'), "T"),
+    (31.5, KeyCode::Char('1'), "1"),
 ];
 
 /// The tab bar, in order. Each holds real content or it does not exist.
@@ -877,7 +905,12 @@ impl App {
     /// other way.
     fn wear_theme(&mut self, index: usize) {
         self.theme_index = index;
-        remember_theme(index);
+        // A demo run rolls through every palette on its way past, and a
+        // recording is not a session: without this the reel would leave
+        // whoever recorded it wearing whatever the tour stopped on.
+        if self.demo.is_none() {
+            remember_theme(index);
+        }
     }
 
     fn palette(&self) -> Palette {
