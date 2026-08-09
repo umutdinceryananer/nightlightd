@@ -18,7 +18,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use eframe::egui;
 
 use nightlightd_core::location::nearest_zone;
-use nightlightd_core::schedule::milestones;
+use nightlightd_core::schedule::{Milestone, day_length, hour_of, milestones};
+use nightlightd_core::solar::solar_elevation;
 use nightlightd_core::transition::{Band, phase};
 use nightlightd_core::world::COASTLINE;
 
@@ -67,6 +68,10 @@ const LABEL_WIDTH: f32 = 78.0;
 const READING_WIDTH: f32 = 62.0;
 const ROW_HEIGHT: f32 = 20.0;
 const BUTTON_HEIGHT: f32 = 26.0;
+/// The theme picker, closed and open. Wide enough for the longest name with
+/// room to spare, and no wider — eight short words do not want a rail across
+/// the window.
+const THEME_WIDTH: f32 = 130.0;
 /// The map's viewport. Antarctica is cropped away — nobody runs a night light
 /// there — and the north is carried past Greenland.
 const MAP_LAT_MIN: f64 = -60.0;
@@ -150,6 +155,14 @@ struct Panel {
     /// otherwise never says where it thinks you are, which is the one thing
     /// this project exists to get right.
     place: Option<(f64, f64, String)>,
+    /// Which of the shared themes the window is wearing. Index rather than
+    /// name because that is what the picker walks; the name is what gets
+    /// written to disk, since indices are a release away from meaning
+    /// something else.
+    theme_index: usize,
+    /// The screens the daemon last wrote a ramp to, polled with the status.
+    /// `None` is "could not ask", `Some(empty)` is "asked, nothing yet".
+    outputs: Option<Vec<(u32, u16)>>,
     /// Which tab is showing.
     tab: usize,
     /// Which point of the world sits in the middle of the map, as fractions
@@ -498,6 +511,121 @@ impl Panel {
                 );
             }
         });
+        self.sun_card(ui, pal, &status, &events, midnight);
+    }
+
+    /// The day summarised, under the table that lists it.
+    ///
+    /// Deliberately not the table's rows again. The dashboard says this in a
+    /// popup, where repeating sunrise and sunset is harmless because the table
+    /// is not on screen; here the two sit an inch apart, and a card that
+    /// echoes the one above it reads as padding. So this carries only what the
+    /// table cannot: how long the day is, how that compares with yesterday,
+    /// how high the sun gets, and when tomorrow starts.
+    fn sun_card(
+        &mut self,
+        ui: &mut egui::Ui,
+        pal: &theme::Palette,
+        status: &Status,
+        events: &[Milestone],
+        midnight: f64,
+    ) {
+        let neighbour = |offset_days: f64| {
+            milestones(
+                status.latitude,
+                status.longitude,
+                midnight + offset_days * 86_400.0,
+                self.band,
+                status.day_temp,
+                status.night_temp,
+            )
+        };
+        card(ui, pal.surface, |ui| {
+            ui.horizontal(|ui| {
+                match day_length(events) {
+                    Some(length) => {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{} of daylight",
+                                hours_and_minutes(length)
+                            ))
+                            .size(15.0)
+                            .strong()
+                            .color(pal.text),
+                        );
+                        // Lengthening days take the warm accent and shortening
+                        // ones the cool second hue, so which way the year is
+                        // going is legible before the words are read.
+                        if let Some(before) = day_length(&neighbour(-1.0)) {
+                            let delta = length - before;
+                            ui.add_space(2.0);
+                            badge(
+                                ui,
+                                pal,
+                                "",
+                                &length_change(delta),
+                                if delta >= 0.0 {
+                                    pal.accent
+                                } else {
+                                    pal.accent2
+                                },
+                            );
+                        }
+                    }
+                    // No crossings at all: say which of the two silences it is
+                    // rather than leaving the card blank. The elevation is the
+                    // only thing that can tell them apart.
+                    None => {
+                        ui.label(
+                            egui::RichText::new(if status.elevation > 0.0 {
+                                "The sun does not set today"
+                            } else {
+                                "The sun does not rise today"
+                            })
+                            .size(15.0)
+                            .strong()
+                            .color(pal.text),
+                        );
+                    }
+                }
+            });
+            ui.add_space(6.0);
+            // Wrapped, because four pills do not fit a narrow window on one
+            // line and a clipped badge is worse than a second row.
+            ui.horizontal_wrapped(|ui| {
+                if let Some(noon) = hour_of(events, "solar noon") {
+                    let elevation = solar_elevation(
+                        status.latitude,
+                        status.longitude,
+                        midnight + noon * 3600.0,
+                    );
+                    badge(ui, pal, "noon", &format!("{elevation:+.1}°"), pal.accent2);
+                }
+                // Tomorrow's sunrise with the shift from today's, which is the
+                // same fact as the day-length delta from the other end: it is
+                // the one people set an alarm by.
+                if let (Some(today_rise), Some(tomorrow)) = (
+                    hour_of(events, "sunrise"),
+                    neighbour(1.0).into_iter().find(|e| e.name == "sunrise"),
+                ) {
+                    let minutes = ((tomorrow.hour - today_rise) * 60.0).round() as i64;
+                    badge(
+                        ui,
+                        pal,
+                        "tomorrow",
+                        &format!("{} ({minutes:+}m)", tomorrow.hhmm()),
+                        pal.accent2,
+                    );
+                }
+                badge(
+                    ui,
+                    pal,
+                    "sun now",
+                    &format!("{:+.1}°", status.elevation),
+                    pal.accent2,
+                );
+            });
+        });
     }
 
     /// Local midnight as a unix time, and the fractional hour of now — the
@@ -698,22 +826,102 @@ impl Panel {
         }
     }
 
-    /// Tab 4: the outputs the ramp is being written to.
+    /// Tab 4: every screen the ramp is actually reaching.
+    ///
+    /// The daemon knows a CRTC number and a ramp size, and that is all it is
+    /// told — the connector name on the back of the monitor belongs to a
+    /// different X extension query, and asking for it is part of #34 rather
+    /// than a free extra. So the table says CRTC, which is at least true. The
+    /// applied temperature is repeated on every row on purpose: it is the
+    /// same number for all of them today, and seeing it repeat is how the
+    /// limitation reads as a fact rather than as an omission.
     fn outputs_tab(&mut self, ui: &mut egui::Ui, pal: &theme::Palette) {
-        self.coming_soon(ui, pal, "the monitors this filter is being written to");
-    }
+        let applied = self.status.as_ref().map(|s| s.temperature);
+        let Some(outputs) = self.outputs.as_ref().filter(|list| !list.is_empty()) else {
+            card(ui, pal.surface, |ui| {
+                ui.label(
+                    egui::RichText::new(if self.outputs.is_some() {
+                        "No screen has been written to yet."
+                    } else {
+                        "The daemon cannot be reached, so nothing is being written."
+                    })
+                    .color(pal.muted),
+                );
+                ui.add_space(2.0);
+                ui.label(
+                    egui::RichText::new(
+                        "A ramp is written on the first apply; outputs appear then.",
+                    )
+                    .size(11.0)
+                    .color(pal.faint),
+                );
+            });
+            return;
+        };
 
-    /// An honest empty tab. It says what belongs here rather than nothing at
-    /// all, and it points at the interface that already has it — a tab that
-    /// is merely blank reads as broken.
-    fn coming_soon(&mut self, ui: &mut egui::Ui, pal: &theme::Palette, what: &str) {
         card(ui, pal.surface, |ui| {
-            ui.label(egui::RichText::new(format!("Not here yet: {what}.")).color(pal.text));
+            let row = |ui: &mut egui::Ui, name: egui::RichText, steps, kelvin| {
+                ui.horizontal(|ui| {
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(LABEL_WIDTH + 20.0, ROW_HEIGHT),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            ui.label(name);
+                        },
+                    );
+                    for (text, width) in [(steps, 76.0), (kelvin, READING_WIDTH)] {
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(width, ROW_HEIGHT),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| {
+                                ui.label(text);
+                            },
+                        );
+                    }
+                });
+            };
+            let heading = |text: &str| egui::RichText::new(text).size(11.0).color(pal.faint);
+            row(
+                ui,
+                heading("output"),
+                heading("gamma ramp"),
+                heading("applied"),
+            );
+            for (crtc, steps) in outputs {
+                row(
+                    ui,
+                    egui::RichText::new(format!("CRTC {crtc}")).color(pal.text),
+                    egui::RichText::new(format!("{steps} steps"))
+                        .monospace()
+                        .color(pal.accent2),
+                    match applied {
+                        // The same tint the schedule uses, so a temperature
+                        // looks like a temperature wherever it is printed.
+                        Some(kelvin) => egui::RichText::new(format!("{kelvin} K"))
+                            .monospace()
+                            .color(theme::display_tint(kelvin)),
+                        None => egui::RichText::new("—").monospace().color(pal.faint),
+                    },
+                );
+            }
+        });
+
+        card(ui, pal.surface, |ui| {
+            ui.label(
+                egui::RichText::new(format!(
+                    "{} wearing the same temperature.",
+                    match outputs.len() {
+                        1 => "One screen,".to_string(),
+                        n => format!("{n} screens, all"),
+                    }
+                ))
+                .color(pal.muted),
+            );
             ui.add_space(2.0);
             ui.label(
-                egui::RichText::new("The terminal dashboard has it today — run nightlight-tui.")
-                    .color(pal.muted)
-                    .size(11.0),
+                egui::RichText::new("Per-screen control is #34, and this tab is where it lands.")
+                    .size(11.0)
+                    .color(pal.faint),
             );
         });
     }
@@ -1124,6 +1332,44 @@ impl Panel {
             }
             self.last_poll = None;
         }
+        // What the window looks like, under what the screen looks like. The
+        // same eight themes the dashboard carries, from the same table — a
+        // name here and a name there have to mean one palette, or "nord" is
+        // two different programs.
+        let mut chosen = None;
+        card(ui, pal.surface, |ui| {
+            let applied = self.status.as_ref().map(|s| s.temperature);
+            ui.horizontal(|ui| {
+                ui.allocate_ui_with_layout(
+                    egui::vec2(LABEL_WIDTH, ROW_HEIGHT),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        ui.label(egui::RichText::new("Theme").color(pal.muted));
+                    },
+                );
+                egui::ComboBox::from_id_salt("theme")
+                    .width(THEME_WIDTH)
+                    .selected_text(
+                        egui::RichText::new(theme::THEMES[self.theme_index].name).color(pal.accent),
+                    )
+                    .show_ui(ui, |ui| {
+                        ui.set_min_width(THEME_WIDTH);
+                        ui.spacing_mut().item_spacing.y = 4.0;
+                        for (index, _) in theme::THEMES.iter().enumerate() {
+                            if theme_swatch(ui, index, index == self.theme_index, applied).clicked()
+                            {
+                                chosen = Some(index);
+                                ui.close();
+                            }
+                        }
+                    });
+            });
+        });
+        if let Some(index) = chosen {
+            self.theme_index = index;
+            write_theme(index);
+        }
+
         // The two switches share a card and a row. They are the only things
         // here that are neither a temperature nor a time — settings about how
         // the program behaves rather than about what the screen looks like —
@@ -1173,6 +1419,43 @@ impl Panel {
                     self.start_at_login = autostart::enabled();
                 }
             });
+        });
+
+        // Where all of the above ends up. Every knob on this tab is persisted
+        // by the daemon the moment it is released, so the file is not an
+        // alternative to the panel — it is the same settings, readable and
+        // editable by hand, and the panel that hides it is asking to be
+        // trusted about state it never showed.
+        card(ui, pal.surface, |ui| {
+            let path = config_path();
+            ui.horizontal(|ui| {
+                ui.allocate_ui_with_layout(
+                    egui::vec2(LABEL_WIDTH, ROW_HEIGHT),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        ui.label(egui::RichText::new("Config").color(pal.muted));
+                    },
+                );
+                // Shortened for the window, copied in full: a path you cannot
+                // paste is decoration.
+                ui.label(
+                    egui::RichText::new(tilde(&path))
+                        .monospace()
+                        .size(11.0)
+                        .color(pal.text),
+                );
+                right_aligned(ui, |ui| {
+                    if ui.button("Copy").clicked() {
+                        ui.ctx().copy_text(path.clone());
+                    }
+                });
+            });
+            ui.add_space(2.0);
+            ui.label(
+                egui::RichText::new("Changes here are written to that file as you make them.")
+                    .size(11.0)
+                    .color(pal.faint),
+            );
         });
     }
 
@@ -1295,6 +1578,90 @@ fn map_crop(
     (world, center)
 }
 
+/// Where the daemon keeps its config, by the same XDG derivation the daemon
+/// itself uses. Falls back to the literal `~/.config/...` when neither
+/// variable is set, which is a session broken well past this program's
+/// business — a path that is merely wrong reads better here than an empty
+/// row that suggests there is no file at all.
+fn config_path() -> String {
+    std::env::var_os("XDG_CONFIG_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".config"))
+        })
+        .map(|base| {
+            base.join("nightlightd")
+                .join("config.toml")
+                .display()
+                .to_string()
+        })
+        .unwrap_or_else(|| "~/.config/nightlightd/config.toml".into())
+}
+
+/// Where the panel keeps the one thing that is its own and not the daemon's.
+///
+/// Beside the daemon's config rather than inside it, and deliberately not a
+/// D-Bus call: which colours a window wears is the window's business, and a
+/// daemon that has never drawn anything has no reason to hold an opinion
+/// about it. A whole file for one word is cheap; a wire field for one word is
+/// forever.
+fn theme_path() -> String {
+    config_path().replace("config.toml", "panel-theme")
+}
+
+/// The saved theme's index, or the default. Anything unreadable, empty or
+/// naming a theme that no longer exists lands on `live` without complaint —
+/// the file is a convenience, and a night light must not fail to open because
+/// somebody typed into it.
+fn read_theme() -> usize {
+    std::fs::read_to_string(theme_path())
+        .ok()
+        .and_then(|name| theme::index_of(name.trim()))
+        .unwrap_or(0)
+}
+
+/// Remembers the choice, by name. Failure is silence: the theme still applies
+/// for this session, it just will not survive the window closing, and that is
+/// not worth a dialog.
+fn write_theme(index: usize) {
+    let Some(theme) = theme::THEMES.get(index) else {
+        return;
+    };
+    let path = theme_path();
+    if let Some(parent) = std::path::Path::new(&path).parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(path, theme.name);
+}
+
+/// The same path with the home directory written as `~`. The panel is a few
+/// hundred points wide and `/home/somebody` spends a third of that saying
+/// nothing the reader does not already know.
+fn tilde(path: &str) -> String {
+    let home = std::env::var_os("HOME").map(|home| home.to_string_lossy().into_owned());
+    shorten_home(path, home.as_deref())
+}
+
+/// The substitution itself, taking the home directory rather than reading it,
+/// so it can be tested against strings instead of against whichever account
+/// happens to be running the tests.
+///
+/// The prefix has to end on a path boundary. `/home/umut` is a prefix of
+/// `/home/umutdincer` by text and of nothing at all by filesystem, and the
+/// difference between those two is a nonsense path shown with confidence.
+fn shorten_home(path: &str, home: Option<&str>) -> String {
+    let home = home
+        .map(|h| h.trim_end_matches('/'))
+        .filter(|h| !h.is_empty());
+    match home {
+        Some(home) if path == home => "~".to_owned(),
+        Some(home) if path.starts_with(home) && path[home.len()..].starts_with('/') => {
+            format!("~{}", &path[home.len()..])
+        }
+        _ => path.to_owned(),
+    }
+}
+
 /// "41.0°N 29.0°E" for a signed pair, the same shape the dashboard prints.
 fn format_coords(latitude: f64, longitude: f64) -> String {
     format!(
@@ -1402,6 +1769,112 @@ fn card<R>(ui: &mut egui::Ui, fill: egui::Color32, add: impl FnOnce(&mut egui::U
     out.inner
 }
 
+/// A pill: a quiet name and a lit value on a raised ground.
+///
+/// The day's small facts are all the same shape — a word and a number — and a
+/// run of them only reads as a run if they are drawn the same. Loose text
+/// separated by middots reads as one long sentence that happens to contain
+/// digits; these read as things you can pick out one at a time.
+fn badge(
+    ui: &mut egui::Ui,
+    pal: &theme::Palette,
+    name: &str,
+    value: &str,
+    tint: egui::Color32,
+) -> egui::Response {
+    egui::Frame::new()
+        .fill(pal.raised)
+        .corner_radius(9)
+        .inner_margin(egui::Margin::symmetric(9, 4))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 5.0;
+                if !name.is_empty() {
+                    ui.label(egui::RichText::new(name).size(10.0).color(pal.muted));
+                }
+                ui.label(egui::RichText::new(value).size(11.0).strong().color(tint));
+            });
+        })
+        .response
+}
+
+/// One row of the theme list, wearing the colours it is offering: that
+/// theme's own ground, its own accent, its name.
+///
+/// A dropdown of eight plain words would have you choose a palette by reading
+/// about it. Each row here *is* the palette, so opening the list is already
+/// seeing the answer — and the closed row costs one line, which is what a
+/// settings table can spare.
+fn theme_swatch(
+    ui: &mut egui::Ui,
+    index: usize,
+    selected: bool,
+    applied: Option<u32>,
+) -> egui::Response {
+    let own = theme::Palette::of(index, applied);
+    let name = theme::THEMES[index].name;
+    let response = egui::Frame::new()
+        .fill(own.surface)
+        // The chosen one is ringed in its own accent. A tick would say the
+        // same thing in a language the list is not speaking.
+        .stroke(egui::Stroke::new(
+            1.5,
+            if selected {
+                own.accent
+            } else {
+                egui::Color32::TRANSPARENT
+            },
+        ))
+        .corner_radius(6)
+        .inner_margin(egui::Margin::symmetric(10, 5))
+        .show(ui, |ui| {
+            // A Frame shrinks to its content, which would leave eight ragged
+            // pills of different widths; the list reads as a list when every
+            // row is the same block of colour.
+            ui.set_width(ui.available_width());
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+            ui.label(
+                egui::RichText::new(name)
+                    .size(12.0)
+                    .strong()
+                    .color(own.accent),
+            );
+        })
+        .response
+        .interact(egui::Sense::click());
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    response
+}
+
+/// "14h 32m" for a span of hours. Hours and minutes because that is how long
+/// a day is said out loud; a decimal would be shorter and would have to be
+/// converted in the reader's head before it meant anything.
+fn hours_and_minutes(hours: f64) -> String {
+    let minutes = (hours * 60.0).round().max(0.0) as i64;
+    format!("{}h {:02}m", minutes / 60, minutes % 60)
+}
+
+/// "3m 12s longer", against yesterday. Seconds because at the solstices the
+/// difference is a handful of them, and a figure that reads "0m longer" for a
+/// fortnight either side of midsummer is worse than no figure.
+fn length_change(delta_hours: f64) -> String {
+    let seconds = (delta_hours.abs() * 3600.0).round() as i64;
+    if seconds == 0 {
+        return "the same as yesterday".to_owned();
+    }
+    let word = if delta_hours > 0.0 {
+        "longer"
+    } else {
+        "shorter"
+    };
+    match (seconds / 60, seconds % 60) {
+        (0, s) => format!("{s}s {word} than yesterday"),
+        (m, s) => format!("{m}m {s:02}s {word} than yesterday"),
+    }
+}
+
 /// A row that hugs the right edge. `Ui::with_layout` on its own takes every
 /// point of height the parent has left — inside a scroll area that is the
 /// whole viewport, which swelled a card to the height of the window.
@@ -1469,6 +1942,7 @@ impl eframe::App for Panel {
         {
             self.status = self.client.status();
             self.fade = self.client.fade();
+            self.outputs = self.client.outputs();
             self.band = self
                 .client
                 .band()
@@ -1568,11 +2042,15 @@ impl eframe::App for Panel {
             self.daemon_night_dim = status.night_brightness;
         }
 
-        // The window wears what the screen is doing: every tone here is mixed
-        // from the applied temperature, the same arithmetic the dashboard's
-        // live theme runs. Applied before anything is drawn, so widgets pick
-        // it up on the frame the temperature changes.
-        let pal = theme::Palette::live(self.status.as_ref().map(|s| s.temperature));
+        // The window wears the chosen theme — and on the default one, what the
+        // screen is doing: every tone mixed from the applied temperature, the
+        // same table and the same arithmetic the dashboard runs. Applied
+        // before anything is drawn, so widgets pick it up on the frame the
+        // temperature changes.
+        let pal = theme::Palette::of(
+            self.theme_index,
+            self.status.as_ref().map(|s| s.temperature),
+        );
         paint(ui, &pal);
 
         // eframe hands us a Ui with no margin at all — its own documentation
@@ -1675,11 +2153,13 @@ fn main() -> eframe::Result<()> {
             // Resizable, with a floor that keeps the curve readable: the
             // window used to be nailed to one size and left a hand of dead
             // space under the footer at that size.
-            // The floor is the tallest tab at its tightest: the persistent
-            // chrome plus the now tab's cards with the chart at its own
-            // minimum. Below this something would be cut off, and with no
-            // scroll area to fall back on, cut off means gone.
-            .with_min_inner_size([390.0, 470.0]),
+            // The floor is the tallest tab at its tightest, and that is no
+            // longer the now tab: settings carries four cards — the four
+            // bounds, the theme, the two switches, the config path — and
+            // wants nearly the whole opening height. Below this something is
+            // cut off, and with no scroll area to fall back on, cut off means
+            // gone. It has to be raised whenever a card is added to settings.
+            .with_min_inner_size([390.0, 600.0]),
         ..Default::default()
     };
     eframe::run_native(
@@ -1715,6 +2195,8 @@ fn main() -> eframe::Result<()> {
                 daemon_night_dim: 1.0,
                 bounds_dragging: false,
                 place: None,
+                theme_index: read_theme(),
+                outputs: None,
                 tab: NOW_TAB,
                 map_center: egui::vec2(0.5, 0.5),
                 curve_height: 160.0,
@@ -1738,6 +2220,50 @@ mod tests {
         assert_eq!(relative(-0.25), "15m ago");
         // Under half a minute either way is not worth a number.
         assert_eq!(relative(0.005), "now");
+    }
+
+    /// The day's two readings, at the sizes they actually take: a length said
+    /// the way a day is said out loud, and a change that stays useful when it
+    /// shrinks to seconds — which is exactly when someone is watching for it.
+    #[test]
+    fn the_day_reads_in_hours_and_its_change_in_seconds() {
+        assert_eq!(hours_and_minutes(14.956), "14h 57m");
+        assert_eq!(hours_and_minutes(9.0), "9h 00m");
+        assert_eq!(hours_and_minutes(0.0), "0h 00m");
+
+        assert_eq!(
+            length_change(192.0 / 3600.0),
+            "3m 12s longer than yesterday"
+        );
+        assert_eq!(
+            length_change(-192.0 / 3600.0),
+            "3m 12s shorter than yesterday"
+        );
+        // Around the solstices the change is seconds; "0m 12s" is arithmetic
+        // showing through, and a rounded-away change is not a change at all.
+        assert_eq!(length_change(12.0 / 3600.0), "12s longer than yesterday");
+        assert_eq!(length_change(0.0), "the same as yesterday");
+        assert_eq!(length_change(0.00001), "the same as yesterday");
+    }
+
+    /// The home directory is shortened only when it is genuinely the path's
+    /// parent. Matching on text alone turns a neighbour's directory into a
+    /// path that does not exist, shown as if it did.
+    #[test]
+    fn only_a_real_home_prefix_becomes_a_tilde() {
+        let home = Some("/home/umut");
+        assert_eq!(shorten_home("/home/umut/.config/x", home), "~/.config/x");
+        assert_eq!(shorten_home("/home/umut", home), "~");
+        assert_eq!(
+            shorten_home("/home/umutdincer/x", home),
+            "/home/umutdincer/x"
+        );
+        assert_eq!(shorten_home("/etc/x", home), "/etc/x");
+        // A trailing slash on HOME must not eat the one that follows it, and
+        // an unset or empty HOME leaves the path exactly as it was.
+        assert_eq!(shorten_home("/home/umut/x", Some("/home/umut/")), "~/x");
+        assert_eq!(shorten_home("/home/umut/x", Some("")), "/home/umut/x");
+        assert_eq!(shorten_home("/home/umut/x", None), "/home/umut/x");
     }
 
     /// The map's contract, at both shapes a window can be: the world covers

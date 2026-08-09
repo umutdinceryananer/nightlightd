@@ -849,7 +849,10 @@ impl App {
     }
 
     fn palette(&self) -> Palette {
-        THEMES[self.theme_index].palette(self.status.as_ref().map(|s| s.temperature))
+        theme::palette(
+            self.theme_index,
+            self.status.as_ref().map(|s| s.temperature),
+        )
     }
 
     fn draw(&mut self, frame: &mut Frame<'_>) {
@@ -1199,7 +1202,7 @@ impl App {
                     Style::default().fg(pal.muted),
                 )),
                 Line::from(Span::styled(
-                    "per-output control is #34, planned for v0.3 — this is its home",
+                    "per-output control is #34 — this is where it lands",
                     Style::default().fg(pal.faint),
                 )),
             ]),

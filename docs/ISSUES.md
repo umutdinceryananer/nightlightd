@@ -436,8 +436,9 @@ Keep all of these **out of v0.1.** Scope creep is what kills projects like this.
 
 - **What:** Different settings for the external monitor.
 - **Why:** Someone will ask. But it is needless complexity for v0.1.
-  v0.2 went to ramp shaping (GitHub #2) instead; the outputs tab now
-  points here for v0.3.
+  v0.2 went to ramp shaping (GitHub #2) instead. Both the dashboard's
+  and the panel's outputs tabs now point here — without naming a
+  version, because the first one named came and went.
 - **Difficulty:** Medium
 - **Design note (2026-08):** QRedshift 1.0 shipped exactly this, keyed
   by RandR output XID and name rather than list position, so a target

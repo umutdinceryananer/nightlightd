@@ -55,6 +55,7 @@ trait Daemon {
     fn clear_location(&self) -> zbus::Result<()>;
     fn set_transition_band(&self, day: f64, night: f64) -> zbus::Result<()>;
     fn get_transition_band(&self) -> zbus::Result<(f64, f64)>;
+    fn get_outputs(&self) -> zbus::Result<Vec<(u32, u16)>>;
 }
 
 /// A live handle to the daemon: the session-bus connection plus a proxy.
@@ -152,6 +153,14 @@ impl Client {
     /// back to the default band.
     pub fn band(&self) -> Option<(f64, f64)> {
         self.proxy.get_transition_band().ok()
+    }
+
+    /// Every screen the ramp is being written to, as `(crtc, ramp size)`.
+    /// `None` when the daemon is unreachable; empty when it is running but
+    /// has not applied anything yet — two different silences, and the tab
+    /// says which one it is looking at.
+    pub fn outputs(&self) -> Option<Vec<(u32, u16)>> {
+        self.proxy.get_outputs().ok()
     }
 
     /// Pins a location by hand, overriding whatever the timezone resolved to.

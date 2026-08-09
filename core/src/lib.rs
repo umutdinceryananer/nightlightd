@@ -13,5 +13,6 @@ pub mod location;
 pub mod mode;
 pub mod schedule;
 pub mod solar;
+pub mod theme;
 pub mod transition;
 pub mod world;
