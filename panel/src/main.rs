@@ -9,14 +9,18 @@ mod autostart;
 mod curve;
 mod daemon;
 mod single;
+mod theme;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use eframe::egui;
 
-use nightlightd_core::transition::Band;
+use nightlightd_core::location::nearest_zone;
+use nightlightd_core::schedule::milestones;
+use nightlightd_core::transition::{Band, phase};
+use nightlightd_core::world::COASTLINE;
 
 use crate::daemon::{Client, Status};
 
@@ -38,9 +42,40 @@ const GAMMA_MAX: f64 = 1.5;
 const DIM_MIN: f64 = 0.1;
 const DIM_MAX: f64 = 1.0;
 
-/// The figlet "slant" wordmark, the same one the README uses, embedded at
-/// compile time so there is nothing to escape.
-const WORDMARK: &str = include_str!("wordmark.txt");
+/// The window's breathing room, on all four sides.
+const MARGIN: f32 = 14.0;
+/// The tabs, in order, and their indices. The same five the dashboard has and
+/// in the same order, so the two interfaces are siblings rather than cousins.
+const TABS: &[&str] = &["now", "today", "location", "outputs", "settings"];
+const NOW_TAB: usize = 0;
+const TODAY_TAB: usize = 1;
+const LOCATION_TAB: usize = 2;
+const OUTPUTS_TAB: usize = 3;
+const SETTINGS_TAB: usize = 4;
+/// What the links row takes, so it can be pinned to the bottom.
+const FOOTER_HEIGHT: f32 = 26.0;
+/// The air above and below the brand row. More than the window's own margin,
+/// because the row is a header rather than the first item of a list.
+const STRIP_AIR: f32 = 24.0;
+/// The tab strip's height, and the air on each side of a tab's word.
+const TAB_HEIGHT: f32 = 30.0;
+const TAB_PADDING: f32 = 11.0;
+/// The settings table's two fixed columns, so names and numbers line up down
+/// the window instead of drifting with whatever text each row happens to
+/// carry.
+const LABEL_WIDTH: f32 = 78.0;
+const READING_WIDTH: f32 = 62.0;
+const ROW_HEIGHT: f32 = 20.0;
+const BUTTON_HEIGHT: f32 = 26.0;
+/// The map's viewport. Antarctica is cropped away — nobody runs a night light
+/// there — and the north is carried past Greenland.
+const MAP_LAT_MIN: f64 = -60.0;
+const MAP_LAT_MAX: f64 = 80.0;
+/// What the caption row under the map needs, and the map's own floor.
+const MAP_RESERVE: f32 = 34.0;
+const MIN_MAP_HEIGHT: f32 = 130.0;
+/// The shortest the chart is ever drawn; below this the day is unreadable.
+const MIN_CURVE_HEIGHT: f32 = 110.0;
 
 /// Project links for the footer.
 const REPO_URL: &str = "https://github.com/umutdinceryananer/nightlightd";
@@ -109,6 +144,27 @@ struct Panel {
     daemon_gamma: f64,
     daemon_night_dim: f64,
     bounds_dragging: bool,
+    /// The city the daemon's coordinates land in, with the coordinates it was
+    /// resolved for. Looked up only when those move, because it reads the
+    /// system's zone table off disk — and shown at all because the panel
+    /// otherwise never says where it thinks you are, which is the one thing
+    /// this project exists to get right.
+    place: Option<(f64, f64, String)>,
+    /// Which tab is showing.
+    tab: usize,
+    /// Which point of the world sits in the middle of the map, as fractions
+    /// of the world's own width and height — `(0.5, 0.5)` is the map's own
+    /// centre, where it starts. Held here rather than recomputed because it
+    /// is the one thing about the map the user owns.
+    map_center: egui::Vec2,
+    /// How tall the chart was drawn last frame. Not computed from what the
+    /// controls need — that arithmetic has to know every card's padding and
+    /// every row that comes and goes, and forgetting one pushes the footer
+    /// off the bottom of a window that cannot scroll. Instead the frame is
+    /// laid out, the overflow is measured, and the chart gives exactly that
+    /// back. Converges in one frame, and cannot be wrong about chrome it
+    /// does not know about.
+    curve_height: f32,
 }
 
 impl Panel {
@@ -123,6 +179,1277 @@ impl Panel {
         }
         self.last_poll = None;
     }
+
+    /// Where the daemon thinks it is, and what time it is there. Empty until
+    /// a location is resolved, so the strip stays quiet rather than claiming
+    /// a city it has not found.
+    fn where_and_when(&self) -> String {
+        let clock = {
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let secs = (now as i64 + i64::from(self.offset_secs)).rem_euclid(86_400);
+            format!("{:02}:{:02}", secs / 3600, (secs % 3600) / 60)
+        };
+        match self.place.as_ref() {
+            Some((_, _, city)) => format!("{city} · {clock}"),
+            None => clock,
+        }
+    }
+
+    /// The state card's three pieces: the headline anyone opens the window
+    /// for, the mode it is in, and a quieter line of why. The same words and
+    /// the same precedence the tray's readout uses — off outranks everything,
+    /// manual outranks the sun — and the phase comes from the band the daemon
+    /// actually runs, never from a hardcoded pair.
+    fn state_lines(&self) -> (String, String, String, Option<&'static str>) {
+        let place = |s: &Status| {
+            if s.has_location {
+                phase(s.elevation, self.band).to_string()
+            } else {
+                "no location".to_string()
+            }
+        };
+        match &self.status {
+            Some(s) if !s.enabled => (
+                format!("{} K", s.temperature),
+                "OFF".into(),
+                format!("the filter is off · {}", self.where_and_when()),
+                None,
+            ),
+            Some(s) if !s.following => (
+                format!("{} K", s.temperature),
+                "MANUAL".into(),
+                format!("held by hand · {}", self.where_and_when()),
+                None,
+            ),
+            Some(s) => (
+                format!("{} K", s.temperature),
+                "AUTO".into(),
+                format!("{} · {}", place(s), self.where_and_when()),
+                // The little sky only appears where the sun is what is
+                // driving the screen; beside "manual" it would be a picture
+                // of something that is not happening.
+                s.has_location.then(|| phase(s.elevation, self.band)),
+            ),
+            None if self.mismatch => (
+                "update needed".into(),
+                "".into(),
+                "this panel and the daemon are different versions".into(),
+                None,
+            ),
+            None => (
+                "not running".into(),
+                "".into(),
+                "the daemon is not running, so nothing reaches the screen".into(),
+                None,
+            ),
+        }
+    }
+
+    /// Everything the window draws, from the state card down to the links.
+    /// Split out so the caller can put it inside a scroll area — a closure
+    /// this long inline is unreadable, and the borrow checker is happier with
+    /// one `&mut self` than with a capture.
+    /// The window, in order: the chrome that is true everywhere, the state
+    /// nobody should have to hunt for, the tabs, and the links. Only the tab
+    /// content changes; the rest is the frame around it.
+    fn body(&mut self, ui: &mut egui::Ui, pal: &theme::Palette, status: Option<Status>) {
+        self.tab_keys(ui);
+        self.top_strip(ui, pal);
+        self.state_card(ui, pal);
+        self.tab_bar(ui, pal);
+        match self.tab {
+            TODAY_TAB => self.today_tab(ui, pal),
+            LOCATION_TAB => self.location_tab(ui, pal),
+            OUTPUTS_TAB => self.outputs_tab(ui, pal),
+            SETTINGS_TAB => self.settings_tab(ui, pal),
+            _ => self.now_tab(ui, pal, status),
+        }
+        // The links sit at the bottom of the window rather than under the
+        // content, so they do not wander up and down as tabs change height.
+        let footer = ui.available_height() - FOOTER_HEIGHT;
+        if footer > 0.0 {
+            ui.add_space(footer);
+        }
+        self.footer(ui, pal);
+
+        // How far the content ran past the window, or short of it. The chart
+        // absorbs the difference next frame, which is one frame of lag on a
+        // resize and nobody has ever seen it. Only while the chart is on
+        // screen: on the other tabs there is nothing elastic to give.
+        if self.tab == NOW_TAB {
+            let slack = ui.max_rect().bottom() - ui.cursor().top();
+            self.curve_height = (self.curve_height + slack).max(MIN_CURVE_HEIGHT);
+        }
+    }
+
+    /// Tab and shift-tab walk the strip, as they do in the dashboard. The key
+    /// is consumed so egui does not also move its own focus with it — and
+    /// left alone entirely while a value field is being typed into, where
+    /// tabbing out of the field is what tab is for.
+    fn tab_keys(&mut self, ui: &mut egui::Ui) {
+        // Only a widget being typed into may swallow the key. Both earlier
+        // guards here were really "is anything focused at all" —
+        // `egui_wants_keyboard_input` is that check under another name — and
+        // egui focuses a widget the moment you press tab, so the second press
+        // always found the door shut and stayed shut until a click cleared
+        // the focus. `text_edit_focused` asks the question that was meant.
+        if ui.ctx().text_edit_focused() {
+            return;
+        }
+        let (forward, back) = ui.input_mut(|input| {
+            (
+                input.consume_key(egui::Modifiers::NONE, egui::Key::Tab),
+                input.consume_key(egui::Modifiers::SHIFT, egui::Key::Tab),
+            )
+        });
+        if !forward && !back {
+            return;
+        }
+        if forward {
+            self.tab = (self.tab + 1) % TABS.len();
+        } else {
+            self.tab = (self.tab + TABS.len() - 1) % TABS.len();
+        }
+    }
+
+    /// Parks the keyboard on the tab strip and tells egui that this widget
+    /// wants the tab key for itself.
+    ///
+    /// Consuming the event was never enough. egui reads Tab in
+    /// `Memory::begin_pass`, before any application code runs, and applies
+    /// the focus move while the widgets are being laid out — so the button
+    /// beside the brand lit up with a focus ring for exactly one frame, over
+    /// and over, which is the flicker. Handing the focus back afterwards is
+    /// always a frame late. A focus lock is read *before* that queue is
+    /// filled, so the move never happens at all.
+    ///
+    /// Skipped while a value field is being typed into, where tab belongs to
+    /// the field.
+    fn park_focus(&self, ui: &mut egui::Ui, id: egui::Id) {
+        if ui.ctx().text_edit_focused() {
+            return;
+        }
+        ui.memory_mut(|memory| {
+            memory.request_focus(id);
+            memory.set_focus_lock_filter(
+                id,
+                egui::EventFilter {
+                    tab: true,
+                    ..Default::default()
+                },
+            );
+        });
+    }
+
+    /// The tab strip: a rule across the window with the open tab's segment
+    /// lit in the accent. Painted by hand rather than built from
+    /// `selectable_label`, which fills the selected item with the selection
+    /// colour — the accent, here — and left accent text on an accent ground.
+    /// An underline says the same thing without a box, and the rule under
+    /// the whole strip is what stops the row drifting loose between the state
+    /// card above it and the content below.
+    fn tab_bar(&mut self, ui: &mut egui::Ui, pal: &theme::Palette) {
+        let font = egui::FontId::proportional(12.5);
+        let (bar, bar_response) = ui.allocate_exact_size(
+            egui::vec2(ui.available_width(), TAB_HEIGHT),
+            egui::Sense::click(),
+        );
+        self.park_focus(ui, bar_response.id);
+        let painter = ui.painter().clone();
+        painter.hline(
+            bar.x_range(),
+            bar.bottom() - 1.0,
+            egui::Stroke::new(1.0, pal.raised),
+        );
+
+        let mut left = bar.left();
+        for (index, name) in TABS.iter().enumerate() {
+            let text_width = painter
+                .layout_no_wrap((*name).into(), font.clone(), egui::Color32::WHITE)
+                .size()
+                .x;
+            let slot = egui::Rect::from_min_size(
+                egui::pos2(left, bar.top()),
+                egui::vec2(text_width + TAB_PADDING * 2.0, bar.height()),
+            );
+            left = slot.right();
+            let response = ui.interact(slot, ui.id().with(("tab", index)), egui::Sense::click());
+            if response.clicked() {
+                self.tab = index;
+            }
+            let selected = self.tab == index;
+            let colour = if selected || response.hovered() {
+                pal.text
+            } else {
+                pal.muted
+            };
+            painter.text(
+                slot.center() - egui::vec2(0.0, 1.0),
+                egui::Align2::CENTER_CENTER,
+                *name,
+                font.clone(),
+                colour,
+            );
+            if selected {
+                // Sitting on the rule rather than above it, so the strip
+                // reads as one line with a lit stretch.
+                painter.rect_filled(
+                    egui::Rect::from_min_size(
+                        egui::pos2(slot.left() + 4.0, bar.bottom() - 2.0),
+                        egui::vec2(slot.width() - 8.0, 2.0),
+                    ),
+                    1.0,
+                    pal.accent,
+                );
+            }
+        }
+        ui.add_space(10.0);
+    }
+
+    /// Tab 2: the day's milestones — the same schedule the curve draws as a
+    /// shape, written out as times and temperatures. Every row is a crossing
+    /// the sun actually makes at this location today, computed by the core
+    /// the daemon schedules on, so the table cannot drift from the curve
+    /// beside it or from the screen.
+    fn today_tab(&mut self, ui: &mut egui::Ui, pal: &theme::Palette) {
+        let Some(status) = self.status.clone().filter(|s| s.has_location) else {
+            card(ui, pal.surface, |ui| {
+                ui.label(
+                    egui::RichText::new(if self.status.is_some() {
+                        "No location yet, so there is no schedule to derive."
+                    } else {
+                        "The daemon is not running, so there is no schedule to read."
+                    })
+                    .color(pal.muted),
+                );
+            });
+            return;
+        };
+        let (midnight, now_hour) = self.day_context();
+        let events = milestones(
+            status.latitude,
+            status.longitude,
+            midnight,
+            self.band,
+            status.day_temp,
+            status.night_temp,
+        );
+        card(ui, pal.surface, |ui| {
+            for event in &events {
+                // The next thing to happen is the one worth finding at a
+                // glance; everything else is reference.
+                let next = events
+                    .iter()
+                    .find(|e| e.hour > now_hour)
+                    .is_some_and(|e| std::ptr::eq(e, event));
+                let name = if next {
+                    egui::RichText::new(event.name).color(pal.text).strong()
+                } else {
+                    egui::RichText::new(event.name).color(pal.muted)
+                };
+                ui.horizontal(|ui| {
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(LABEL_WIDTH + 20.0, ROW_HEIGHT),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            ui.label(name);
+                        },
+                    );
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(48.0, ROW_HEIGHT),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            ui.label(
+                                egui::RichText::new(event.hhmm())
+                                    .monospace()
+                                    .color(if next { pal.text } else { pal.muted }),
+                            );
+                        },
+                    );
+                    // The temperature in the colour it will be: the table
+                    // reads as the same day the curve above it draws.
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(62.0, ROW_HEIGHT),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            ui.label(
+                                egui::RichText::new(format!("{} K", event.kelvin))
+                                    .monospace()
+                                    .color(theme::display_tint(event.kelvin)),
+                            );
+                        },
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(
+                            egui::RichText::new(relative(event.hour - now_hour))
+                                .size(11.0)
+                                .color(pal.faint),
+                        );
+                    });
+                });
+            }
+            if events.is_empty() {
+                ui.label(
+                    egui::RichText::new("Polar day or night: the sun crosses nothing today.")
+                        .color(pal.muted),
+                );
+            }
+        });
+    }
+
+    /// Local midnight as a unix time, and the fractional hour of now — the
+    /// two numbers every solar calculation here starts from.
+    fn day_context(&self) -> (f64, f64) {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs_f64())
+            .unwrap_or(0.0);
+        let secs_into_day = (now as i64 + i64::from(self.offset_secs)).rem_euclid(86_400) as f64;
+        (now - secs_into_day, secs_into_day / 3600.0)
+    }
+
+    /// Tab 3: where the daemon thinks it is, and how to tell it otherwise.
+    ///
+    /// The map is coastline from `core::world`, a table committed to this
+    /// repository rather than a dataset fetched at startup — a night light
+    /// that phones out to learn where the shorelines are has the same defect
+    /// as one that phones out to learn where *you* are, and the second is the
+    /// entire reason this project exists. Clicking takes the coordinate under
+    /// the pointer rather than snapping to any known place: the daemon
+    /// accepts any pair, and a degree of error is a few minutes of sunset
+    /// nobody notices. The name under the pointer is a caption, not a choice.
+    fn location_tab(&mut self, ui: &mut egui::Ui, pal: &theme::Palette) {
+        let known = self.status.as_ref().filter(|s| s.has_location).cloned();
+        card(ui, pal.surface, |ui| match (&known, self.place.as_ref()) {
+            (Some(status), place) => {
+                ui.label(
+                    egui::RichText::new(place.map_or("resolved", |(_, _, city)| city.as_str()))
+                        .size(16.0)
+                        .strong()
+                        .color(pal.text),
+                );
+                ui.label(
+                    egui::RichText::new(format_coords(status.latitude, status.longitude))
+                        .size(11.0)
+                        .color(pal.muted),
+                );
+            }
+            (None, _) => {
+                ui.label(
+                    egui::RichText::new("No location")
+                        .size(16.0)
+                        .strong()
+                        .color(pal.text),
+                );
+                ui.label(
+                    egui::RichText::new(
+                        "Without one there is no sunset to compute and nothing to follow.",
+                    )
+                    .size(11.0)
+                    .color(pal.muted),
+                );
+            }
+        });
+
+        let mut pin = None;
+        let mut clear = false;
+        let mut center = self.map_center;
+        card(ui, pal.surface, |ui| {
+            // The map takes every point the card can spare, in both
+            // directions, and the world is scaled to cover it rather than to
+            // fit inside it. Fitting meant the frame's shape and the world's
+            // had to agree, and when they disagreed the difference came out
+            // as empty card — a band down one side, or a squat letterbox.
+            let aspect =
+                (std::f64::consts::TAU / (mercator(MAP_LAT_MAX) - mercator(MAP_LAT_MIN))) as f32;
+            let viewport = egui::vec2(
+                ui.available_width(),
+                (ui.available_height() - MAP_RESERVE).max(MIN_MAP_HEIGHT),
+            );
+            let (rect, response) = ui.allocate_exact_size(viewport, egui::Sense::click_and_drag());
+            let drag = if response.dragged() {
+                response.drag_delta()
+            } else {
+                egui::Vec2::ZERO
+            };
+            let world;
+            (world, center) = map_crop(rect.size(), aspect, center, drag);
+            if response.dragged() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+            } else if response.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+            }
+
+            // Everything past the frame's edge is cropped, not folded onto
+            // it: a coastline clamped to the border would draw a shoreline
+            // that is not there.
+            let painter = ui.painter().with_clip_rect(rect);
+            painter.rect_filled(rect, 6.0, pal.bg);
+
+            let (top, bottom) = (mercator(MAP_LAT_MAX), mercator(MAP_LAT_MIN));
+            let middle = rect.center();
+            let to_screen = |lat: f64, lon: f64| {
+                let u = ((lon + 180.0) / 360.0) as f32;
+                let v = ((top - mercator(lat)) / (top - bottom)) as f32;
+                egui::pos2(
+                    middle.x + (u - center.x) * world.x,
+                    middle.y + (v - center.y) * world.y,
+                )
+            };
+            let to_world = |point: egui::Pos2| {
+                let u = f64::from((center.x + (point.x - middle.x) / world.x).clamp(0.0, 1.0));
+                let v = f64::from((center.y + (point.y - middle.y) / world.y).clamp(0.0, 1.0));
+                (unmercator(top - v * (top - bottom)), u * 360.0 - 180.0)
+            };
+
+            // The coastlines, from the table in core. Each run is its own
+            // stroke, and a run that leaves the cropped viewport is cut at
+            // the edge rather than clamped — a clamped point would fold the
+            // line back across the map as a false shoreline.
+            let coast = egui::Stroke::new(1.0, pal.muted);
+            for run in COASTLINE {
+                let mut visible: Vec<egui::Pos2> = Vec::new();
+                for &(longitude, latitude) in run.iter() {
+                    let (lat, lon) = (f64::from(latitude), f64::from(longitude));
+                    if (MAP_LAT_MIN..=MAP_LAT_MAX).contains(&lat) {
+                        visible.push(to_screen(lat, lon));
+                    } else if visible.len() > 1 {
+                        painter.add(egui::Shape::line(std::mem::take(&mut visible), coast));
+                    } else {
+                        visible.clear();
+                    }
+                }
+                if visible.len() > 1 {
+                    painter.add(egui::Shape::line(visible, coast));
+                }
+            }
+
+            // The crosshair: it follows the pointer over the map and comes to
+            // rest on the pinned place when the pointer is elsewhere. One
+            // pair of lines doing both jobs, rather than a fixed equator and
+            // meridian that only ever pointed at the middle of the Atlantic.
+            let hovered = response
+                .hover_pos()
+                .filter(|point| rect.contains(*point))
+                .map(to_world);
+            let aim = hovered.or_else(|| {
+                known
+                    .as_ref()
+                    .map(|status| (status.latitude, status.longitude))
+            });
+            if let Some((lat, lon)) = aim {
+                let point = to_screen(lat, lon);
+                let hair = egui::Stroke::new(
+                    1.0,
+                    if hovered.is_some() {
+                        pal.muted
+                    } else {
+                        pal.faint
+                    },
+                );
+                painter.hline(rect.x_range(), point.y, hair);
+                painter.vline(point.x, rect.y_range(), hair);
+                painter.circle_stroke(point, 4.0, egui::Stroke::new(1.0, pal.text));
+            }
+            // Where the daemon actually is, whatever the pointer is doing.
+            if let Some(status) = &known {
+                let here = to_screen(status.latitude, status.longitude);
+                painter.circle_filled(here, 4.0, pal.accent);
+            }
+            if response.clicked()
+                && let Some(where_to) = response
+                    .interact_pointer_pos()
+                    .filter(|point| rect.contains(*point))
+                    .map(to_world)
+            {
+                pin = Some(where_to);
+            }
+
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                // What the pointer is over, named — so a click is never a
+                // guess about which country you just landed in.
+                let caption = match hovered {
+                    Some((lat, lon)) => nearest_zone(lat, lon).map_or_else(
+                        || format_coords(lat, lon),
+                        |(zone, _, _)| format!("{}  ·  {}", zone, format_coords(lat, lon)),
+                    ),
+                    None => "Drag to move the world · click to pin a place".to_string(),
+                };
+                ui.label(egui::RichText::new(caption).size(11.0).color(pal.muted));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("Use the timezone").clicked() {
+                        clear = true;
+                    }
+                });
+            });
+        });
+        self.map_center = center;
+        if let Some((lat, lon)) = pin {
+            self.client.set_location(lat, lon);
+            self.last_poll = None;
+        }
+        if clear {
+            self.client.clear_location();
+            self.last_poll = None;
+        }
+    }
+
+    /// Tab 4: the outputs the ramp is being written to.
+    fn outputs_tab(&mut self, ui: &mut egui::Ui, pal: &theme::Palette) {
+        self.coming_soon(ui, pal, "the monitors this filter is being written to");
+    }
+
+    /// An honest empty tab. It says what belongs here rather than nothing at
+    /// all, and it points at the interface that already has it — a tab that
+    /// is merely blank reads as broken.
+    fn coming_soon(&mut self, ui: &mut egui::Ui, pal: &theme::Palette, what: &str) {
+        card(ui, pal.surface, |ui| {
+            ui.label(egui::RichText::new(format!("Not here yet: {what}.")).color(pal.text));
+            ui.add_space(2.0);
+            ui.label(
+                egui::RichText::new("The terminal dashboard has it today — run nightlight-tui.")
+                    .color(pal.muted)
+                    .size(11.0),
+            );
+        });
+    }
+
+    /// The window's thinnest layer: the name, and where and when the
+    /// daemon thinks it is. Persistent, because it is true on every tab.
+    fn top_strip(&mut self, ui: &mut egui::Ui, pal: &theme::Palette) {
+        // The window's margin is already above; this is the rest of the air,
+        // and the same amount goes underneath, so the row sits centred
+        // between the top of the window and the card below it.
+        ui.add_space(STRIP_AIR - MARGIN);
+        let (mut power, mut restart, mut start) = (None, false, false);
+        // A thin line of chrome. The name is small on purpose: the window is
+        // already titled, and the loudest thing here should be what the
+        // screen is doing, not what the program is called.
+        ui.horizontal(|ui| {
+            // The dashboard's wordmark, brought over rather than reinvented:
+            // a moon, then the name in two tones. It reads as a mark without
+            // the six figlet rows the panel used to carry, and at eleven grey
+            // points the name had faded into the chrome beside a lit button.
+            ui.add_space(2.0);
+            sky_mark(ui, pal, pal.bg, "night");
+            ui.add_space(6.0);
+            ui.spacing_mut().item_spacing.x = 0.0;
+            ui.label(
+                egui::RichText::new("night")
+                    .color(pal.text)
+                    .size(14.0)
+                    .strong(),
+            );
+            ui.label(
+                egui::RichText::new("lightd")
+                    .color(pal.accent)
+                    .size(14.0)
+                    .strong(),
+            );
+            // The one action that is true on every tab belongs in the one
+            // strip that is on every tab. Turning the filter off is what
+            // people reach for most; it should not be somewhere you navigate
+            // to. The place and the clock moved down to the state card, where
+            // they read as context for the phase rather than as chrome.
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                match self.status.as_ref().map(|s| s.enabled) {
+                    Some(on) => {
+                        // The label promises a direction, so send that
+                        // direction rather than a blind toggle: against a
+                        // status gone stale a toggle would do the opposite of
+                        // what the button said.
+                        let label = if on { "Turn off" } else { "Turn on" };
+                        if ui.button(label).clicked() {
+                            power = Some(!on);
+                        }
+                    }
+                    // No daemon to talk to. Either it is stale (#42) and a
+                    // restart heals it, or it is simply not running (#43) and
+                    // a client can at least ask for one.
+                    None if self.mismatch => {
+                        if ui.button("Restart the daemon").clicked() {
+                            restart = true;
+                        }
+                    }
+                    None => {
+                        if ui.button("Start the daemon").clicked() {
+                            start = true;
+                        }
+                    }
+                }
+            });
+        });
+        if let Some(on) = power {
+            self.client.set_enabled(on);
+            self.last_poll = None;
+        }
+        if restart {
+            self.spawn_daemon(&["--user", "restart", "nightlightd"], false);
+        }
+        if start {
+            self.spawn_daemon(&["--user", "start", "nightlightd"], true);
+        }
+        // Below the row, egui has already put a row's worth of spacing in, so
+        // only the difference is added.
+        ui.add_space(STRIP_AIR - ui.spacing().item_spacing.y);
+    }
+
+    /// What the screen is doing, above the tabs rather than inside one:
+    /// whichever tab you are on, this is the question you came with.
+    fn state_card(&mut self, ui: &mut egui::Ui, pal: &theme::Palette) {
+        // The state card. The temperature is the headline because it is the
+        // answer to the only question anyone opens this window with, and the
+        // card is washed in that temperature's own colour so the block reads
+        // as the thing it is announcing. The panel used to say this in nine
+        // grey points in a corner, if at all.
+        let (headline, mode, detail, sky) = self.state_lines();
+        // A card with no daemon behind it is a notice, not a reading, and it
+        // should not be wearing a temperature nothing is applying. The warn
+        // ground is what makes "update needed" read as something to act on
+        // rather than as another line of status.
+        let ground = if self.status.is_some() {
+            pal.hero
+        } else {
+            pal.warn_ground
+        };
+        // Big numbers, smaller words: "update needed" has to fit the card.
+        let headline_size = if self.status.is_some() { 34.0 } else { 20.0 };
+        card(ui, ground, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(headline)
+                        .size(headline_size)
+                        .strong()
+                        .color(pal.text),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(
+                        egui::RichText::new(mode)
+                            .size(12.0)
+                            .strong()
+                            .color(pal.accent2),
+                    );
+                });
+            });
+            ui.horizontal(|ui| {
+                if let Some(phase) = sky {
+                    sky_mark(ui, pal, ground, phase);
+                    ui.add_space(5.0);
+                }
+                ui.label(egui::RichText::new(detail).size(12.0).color(pal.muted));
+            });
+        });
+    }
+
+    /// Asks systemd for the daemon, falling back to the binary beside this
+    /// one when there is no unit to start (a tarball install, a build tree).
+    /// A thin client cannot be the daemon, but it can ask for one — the same
+    /// bargain the tray struck in #43.
+    fn spawn_daemon(&mut self, args: &[&str], fall_back: bool) {
+        let unit = std::process::Command::new("systemctl").args(args).status();
+        if fall_back && !unit.is_ok_and(|status| status.success()) {
+            let _ = std::process::Command::new(sibling("nightlightd"))
+                .arg("--daemon")
+                .spawn();
+        }
+        self.last_poll = None;
+    }
+
+    /// Tab 1: the curve you can take hold of, and the override that
+    /// overrules it.
+    fn now_tab(&mut self, ui: &mut egui::Ui, pal: &theme::Palette, status: Option<Status>) {
+        // The curve, in a card of its own that takes every point the controls
+        // below do not want. It is the only thing here that grows, because it
+        // is the only thing here that is worth more when it is bigger.
+        let spare = self.curve_height;
+        card(ui, pal.surface, |ui| {
+            let shown_band = self.staged_band.unwrap_or(self.band);
+            match curve::show(
+                ui,
+                curve::View {
+                    status: status.as_ref(),
+                    band: shown_band,
+                    day_temp: self.day_temp,
+                    night_temp: self.night_temp,
+                    offset_secs: self.offset_secs,
+                    pal,
+                    height: spare,
+                },
+                &mut self.curve_held,
+            ) {
+                Some(curve::Edit::Band(next)) => self.staged_band = Some(next),
+                Some(curve::Edit::DayTemp(kelvin)) => {
+                    self.day_temp = kelvin;
+                    self.staged_temps = true;
+                }
+                Some(curve::Edit::NightTemp(kelvin)) => {
+                    self.night_temp = kelvin;
+                    self.staged_temps = true;
+                }
+                None => {}
+            }
+            // The band in numbers (#48), or the decision an unsent drag is
+            // waiting on. One row, in the curve's own card, because both are
+            // about the shape directly above them.
+            if self.staged_band.is_some() || self.staged_temps {
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Apply").clicked() {
+                        if let Some(staged) = self.staged_band {
+                            self.client
+                                .set_band(staged.day_elevation, staged.night_elevation);
+                            self.band = staged;
+                            self.staged_band = None;
+                        }
+                        if self.staged_temps {
+                            self.client.set_day_temp(self.day_temp);
+                            self.client.set_night_temp(self.night_temp);
+                            self.staged_temps = false;
+                        }
+                        self.last_poll = None;
+                    }
+                    // Back to what the daemon holds, not to what the panel
+                    // opened with: this undoes the drag, not the session.
+                    if ui.button("Revert").clicked() {
+                        self.staged_band = None;
+                        if self.staged_temps {
+                            self.day_temp = self.daemon_day;
+                            self.night_temp = self.daemon_night;
+                            self.staged_temps = false;
+                        }
+                    }
+                    let band = self.staged_band.unwrap_or(self.band);
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{:+.1}° / {:+.1}°",
+                            band.day_elevation, band.night_elevation
+                        ))
+                        .color(pal.muted)
+                        .size(11.0),
+                    );
+                });
+            } else if self.band != Band::default() {
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "day above {:+.1}°, night below {:+.1}°",
+                            self.band.day_elevation, self.band.night_elevation
+                        ))
+                        .color(pal.muted)
+                        .size(11.0),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("Default band").clicked() {
+                            let fresh = Band::default();
+                            self.client
+                                .set_band(fresh.day_elevation, fresh.night_elevation);
+                            self.band = fresh;
+                            self.last_poll = None;
+                        }
+                    });
+                });
+            }
+        });
+
+        // Taking the screen off the sun for a while. Its own card, because it
+        // is the one control here that overrules everything above it.
+        let reading = format!("{} K", self.kelvin);
+        let slider = egui::Slider::new(&mut self.kelvin, WARMEST..=NEUTRAL);
+        let (moved, to_auto) = card(ui, pal.surface, |ui| {
+            // Applied live only when the user actually moves it; the daemon
+            // pins whatever the slider lands on and switches to manual.
+            let moved = slider_row(ui, pal, "Hold at", reading, slider).changed();
+            ui.label(
+                egui::RichText::new("Pins the screen here and leaves the sun.")
+                    .size(11.0)
+                    .color(pal.muted),
+            );
+            ui.add_space(2.0);
+            let mut to_auto = false;
+            right_aligned(ui, |ui| {
+                if ui.button("Back to automatic").clicked() {
+                    to_auto = true;
+                }
+            });
+            (moved, to_auto)
+        });
+        if moved {
+            self.client.set_temperature(self.kelvin);
+            // The cached snapshot is updated in place so the following-mode
+            // mirror stops immediately instead of fighting the drag until the
+            // next poll.
+            if let Some(status) = &mut self.status {
+                status.following = false;
+                status.temperature = self.kelvin;
+            }
+        }
+        if to_auto {
+            self.client.follow_the_sun();
+            self.last_poll = None;
+        }
+    }
+
+    /// Tab 5: the four numbers that shape the curve, and the two
+    /// switches about how the program behaves.
+    fn settings_tab(&mut self, ui: &mut egui::Ui, pal: &theme::Palette) {
+        // The two anchors that shape the curve. The ranges lean on each other
+        // so the band cannot invert from here (the daemon clamps regardless),
+        // and a change is sent — and hence written to the config file — once
+        // per release, not once per drag frame.
+        let day_min = self.night_temp.max(4000);
+        let night_max = self.day_temp.min(4500);
+        // `update_while_editing(false)` on every slider: typing into the value
+        // field must commit once, on Enter or focus loss — not per keystroke,
+        // where a half-typed "75" would already have sent 7.
+        let mut revert = false;
+        let (day, night, gamma, dim) = card(ui, pal.surface, |ui| {
+            let day = slider_row(
+                ui,
+                pal,
+                "Daytime",
+                format!("{} K", self.day_temp),
+                egui::Slider::new(&mut self.day_temp, day_min..=6500),
+            );
+            if day.drag_stopped() || (day.changed() && !day.dragged()) {
+                self.client.set_day_temp(self.day_temp);
+                // The slider sends on release, so whatever a plateau drag had
+                // staged has now gone out by another door.
+                self.staged_temps = false;
+                self.last_poll = None;
+            }
+            let night = slider_row(
+                ui,
+                pal,
+                "Nighttime",
+                format!("{} K", self.night_temp),
+                egui::Slider::new(&mut self.night_temp, 1500..=night_max),
+            );
+            if night.drag_stopped() || (night.changed() && !night.dragged()) {
+                self.client.set_night_temp(self.night_temp);
+                self.staged_temps = false;
+                self.last_poll = None;
+            }
+
+            // The two ramp-shaping knobs (GitHub #2), sent on release like the
+            // bounds above. Gamma bends the curve's midtones all day; night dim
+            // lowers the ceiling after dark, easing on the same solar curve as the
+            // temperature. The day-brightness bound stays whatever the daemon
+            // holds — no interface exposes it, only the config file.
+            // Display formatting only — `fixed_decimals` would round the backing
+            // value itself on the first frame, marking the slider changed and
+            // sending a value the user never chose (a config gamma of 0.925 must
+            // not become 0.93 on disk just because the panel opened).
+            let gamma = slider_row(
+                ui,
+                pal,
+                "Gamma",
+                format!("{:.2}", self.gamma),
+                egui::Slider::new(&mut self.gamma, GAMMA_MIN..=GAMMA_MAX)
+                    .custom_formatter(|v, _| format!("{v:.2}")),
+            );
+            // The format guard on both shaped knobs: clicking into the value field
+            // and away again re-commits the display-rounded text (0.925 renders as
+            // "0.92" and would come back as such). A difference the display cannot
+            // even show is formatter residue, not a user choice — never sent.
+            if (gamma.drag_stopped() || (gamma.changed() && !gamma.dragged()))
+                && format!("{:.2}", self.gamma) != format!("{:.2}", self.daemon_gamma)
+            {
+                self.client.set_gamma(self.gamma);
+                self.last_poll = None;
+            }
+            let dim = slider_row(
+                ui,
+                pal,
+                "Night dim",
+                format!("{:.0}%", self.night_dim * 100.0),
+                egui::Slider::new(&mut self.night_dim, DIM_MIN..=DIM_MAX)
+                    .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
+                    .custom_parser(|s| {
+                        // "90" and "90%" mean ninety percent; "0.9" — the unit the
+                        // config file uses — means the same. The slider's window
+                        // makes the two readings unambiguous.
+                        let v: f64 = s.trim().trim_end_matches('%').trim().parse().ok()?;
+                        Some(if v > DIM_MAX { v / 100.0 } else { v })
+                    }),
+            );
+            if (dim.drag_stopped() || (dim.changed() && !dim.dragged()))
+                && format!("{:.0}%", self.night_dim * 100.0)
+                    != format!("{:.0}%", self.daemon_night_dim * 100.0)
+            {
+                self.send_night_dim(self.night_dim);
+            }
+            // Back to the values the panel opened with, undoing this session's
+            // slider fiddling. Right-aligned under the table it undoes, and quiet:
+            // it is an escape hatch, not one of the four things you came to do.
+            ui.add_space(2.0);
+            right_aligned(ui, |ui| {
+                if ui.button("Revert changes").clicked() {
+                    revert = true;
+                }
+            });
+            (day, night, gamma, dim)
+        });
+        self.bounds_dragging = day.dragged() || night.dragged() || gamma.dragged() || dim.dragged();
+
+        // Nothing to undo before the first sync (the origs would be
+        // compile-time defaults, not the user's values), and the shaped knobs
+        // are only sent when this session actually moved them — an untouched
+        // knob is not the panel's to rewrite, even with the value it believes
+        // is current.
+        if revert && self.anchors_synced {
+            self.day_temp = self.orig_day;
+            self.night_temp = self.orig_night;
+            self.client.set_day_temp(self.day_temp);
+            self.client.set_night_temp(self.night_temp);
+            // Touched means either the UI copy moved off its seed or the
+            // daemon's reported value moved off the opening one — the second
+            // catches a knob dragged exactly onto the window edge, where the
+            // clamped UI copy lands back on its seed while the daemon changed.
+            let gamma_seed = self.orig_gamma.clamp(GAMMA_MIN, GAMMA_MAX);
+            if self.gamma != gamma_seed || self.daemon_gamma != self.orig_gamma {
+                // The verbatim orig, not the displayed clamp: a hand-written
+                // out-of-window gamma comes back exactly as written.
+                self.client.set_gamma(self.orig_gamma);
+                self.gamma = gamma_seed;
+            }
+            let dim_seed = self.orig_night_dim.clamp(DIM_MIN, DIM_MAX);
+            if self.night_dim != dim_seed || self.daemon_night_dim != self.orig_night_dim {
+                self.send_night_dim(self.orig_night_dim);
+                self.night_dim = dim_seed;
+            }
+            self.last_poll = None;
+        }
+        // The two switches share a card and a row. They are the only things
+        // here that are neither a temperature nor a time — settings about how
+        // the program behaves rather than about what the screen looks like —
+        // so they read better as a pair than as two loose lines under the
+        // last card.
+        card(ui, pal.surface, |ui| {
+            // Two even columns across the card, so the pair lines up with the
+            // full-width rows above instead of huddling at the left edge.
+            ui.horizontal(|ui| {
+                let gap = ui.spacing().item_spacing.x;
+                let half = ((ui.available_width() - gap) / 2.0).max(80.0);
+                let column = |ui: &mut egui::Ui, add: &mut dyn FnMut(&mut egui::Ui)| {
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(half, ROW_HEIGHT),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| add(ui),
+                    );
+                };
+                // The fade switch (#44) shows only when the daemon can answer
+                // for it; sent optimistically, the next poll confirms.
+                let mut fade_changed = None;
+                if let Some(fade) = self.fade {
+                    let mut checked = fade;
+                    column(ui, &mut |ui| {
+                        if ui.checkbox(&mut checked, "Fade transitions").changed() {
+                            fade_changed = Some(checked);
+                        }
+                    });
+                }
+                if let Some(checked) = fade_changed {
+                    self.client.set_fade(checked);
+                    self.fade = Some(checked);
+                    self.last_poll = None;
+                }
+                // Enables/disables the daemon's systemd user service, then
+                // re-reads the real state — if systemctl failed (no unit
+                // installed), the box must snap back instead of showing a
+                // success that never happened.
+                let mut login = self.start_at_login;
+                let mut toggled = false;
+                column(ui, &mut |ui| {
+                    toggled = ui.checkbox(&mut login, "Start at login").changed();
+                });
+                if toggled {
+                    self.start_at_login = login;
+                    autostart::set(self.start_at_login);
+                    self.start_at_login = autostart::enabled();
+                }
+            });
+        });
+    }
+
+    /// The links, and the version they belong to.
+    fn footer(&mut self, ui: &mut egui::Ui, pal: &theme::Palette) {
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(concat!("v", env!("CARGO_PKG_VERSION"))).color(pal.faint));
+            ui.label(egui::RichText::new("·").color(pal.faint));
+            ui.hyperlink_to("View on GitHub", REPO_URL);
+            ui.label(egui::RichText::new("·").color(pal.faint));
+            ui.hyperlink_to("Give feedback", ISSUES_URL);
+        });
+    }
+}
+
+/// Dresses egui in the palette. Sliders, buttons and checkboxes all read
+/// their colours from `Visuals`, so setting it here is what makes the whole
+/// window follow the screen rather than only the pieces we paint by hand.
+fn paint(ui: &mut egui::Ui, pal: &theme::Palette) {
+    let mut visuals = ui.visuals().clone();
+    let visuals = &mut visuals;
+    visuals.panel_fill = pal.bg;
+    visuals.window_fill = pal.surface;
+    visuals.extreme_bg_color = pal.bg;
+    visuals.faint_bg_color = pal.surface;
+    visuals.override_text_color = Some(pal.text);
+    visuals.hyperlink_color = pal.accent2;
+    visuals.selection.bg_fill = pal.accent;
+    // The four widget states, lifting toward the accent as the pointer
+    // arrives: a rail at rest, a face under the hand, the accent when held.
+    visuals.widgets.noninteractive.bg_fill = pal.surface;
+    visuals.widgets.noninteractive.weak_bg_fill = pal.surface;
+    visuals.widgets.inactive.bg_fill = pal.raised;
+    visuals.widgets.inactive.weak_bg_fill = pal.raised;
+    visuals.widgets.hovered.bg_fill = pal.muted;
+    visuals.widgets.hovered.weak_bg_fill = pal.muted;
+    visuals.widgets.active.bg_fill = pal.accent;
+    visuals.widgets.active.weak_bg_fill = pal.accent;
+    for widget in [
+        &mut visuals.widgets.noninteractive,
+        &mut visuals.widgets.inactive,
+        &mut visuals.widgets.hovered,
+        &mut visuals.widgets.active,
+    ] {
+        widget.corner_radius = 4.into();
+    }
+    // Borders belong to the surfaces, not to outlines: the raised shade is
+    // what separates things, exactly as it does in the dashboard.
+    // A separator is drawn with the non-interactive stroke, so this cannot
+    // be NONE without the rules vanishing with it — quiet, not absent.
+    visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, pal.raised);
+    visuals.widgets.inactive.bg_stroke = egui::Stroke::NONE;
+    visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, pal.accent);
+    visuals.widgets.active.bg_stroke = egui::Stroke::new(1.0, pal.accent);
+    // The context carries it to the window chrome and the next frame; the ui
+    // gets it now, so the temperature that just arrived is already worn.
+    ui.ctx().set_visuals(visuals.clone());
+    *ui.visuals_mut() = visuals.clone();
+    // Rows sat on top of each other at egui's default four points; a panel
+    // read at arm's length wants more air than a debug overlay does.
+    let spacing = &mut ui.style_mut().spacing;
+    spacing.item_spacing = egui::vec2(8.0, 8.0);
+    spacing.button_padding = egui::vec2(10.0, 5.0);
+}
+
+/// Mercator, and its inverse.
+///
+/// The obvious projection for a rectangle is the flat one — longitude across,
+/// latitude down — and that is what this map drew first. The trouble is its
+/// shape: the inhabited latitudes are about two and a half times wider than
+/// they are tall, which is a letterbox rather than a world. Mercator stretches
+/// the far latitudes, so the same crop comes out nearer five to three, and it
+/// is the projection everyone has already seen. Its famous distortion costs us
+/// nothing here: this map is for pointing at the town you live in, not for
+/// comparing Greenland to Africa.
+fn mercator(latitude: f64) -> f64 {
+    (std::f64::consts::FRAC_PI_4 + latitude.to_radians() / 2.0)
+        .tan()
+        .ln()
+}
+
+fn unmercator(y: f64) -> f64 {
+    (2.0 * y.exp().atan() - std::f64::consts::FRAC_PI_2).to_degrees()
+}
+
+/// How large the world is drawn inside a viewport, and which point of it sits
+/// at the viewport's middle, after a drag of `drag` points.
+///
+/// Two rules that look independent — fill the frame completely, never stretch
+/// the world — have exactly one solution together: scale until the tighter
+/// side is covered and let the other side run off the edge. So the frame's
+/// own shape decides which way the world is cropped. A wide window loses the
+/// poles; a tall one loses the far east and west. What ran off is not gone,
+/// it is dragged back into view, which is why this returns a centre and not
+/// just a size.
+///
+/// The centre is kept in world fractions rather than pixels so that resizing
+/// the window leaves the same *place* in the middle instead of the same
+/// offset, and it is clamped to keep the world covering the frame: pan to the
+/// edge and it stops there, because a gap at the border is the thing this
+/// whole arrangement exists to prevent. On the axis with nothing to spare the
+/// clamp collapses to a point, so that axis simply does not pan.
+fn map_crop(
+    frame: egui::Vec2,
+    aspect: f32,
+    center: egui::Vec2,
+    drag: egui::Vec2,
+) -> (egui::Vec2, egui::Vec2) {
+    let height = (frame.x / aspect).max(frame.y).max(1.0);
+    let world = egui::vec2(height * aspect, height);
+    let half = egui::vec2(
+        (frame.x / world.x).min(1.0) / 2.0,
+        (frame.y / world.y).min(1.0) / 2.0,
+    );
+    let center = egui::vec2(
+        (center.x - drag.x / world.x).clamp(half.x, 1.0 - half.x),
+        (center.y - drag.y / world.y).clamp(half.y, 1.0 - half.y),
+    );
+    (world, center)
+}
+
+/// "41.0°N 29.0°E" for a signed pair, the same shape the dashboard prints.
+fn format_coords(latitude: f64, longitude: f64) -> String {
+    format!(
+        "{:.1}°{} {:.1}°{}",
+        latitude.abs(),
+        if latitude >= 0.0 { "N" } else { "S" },
+        longitude.abs(),
+        if longitude >= 0.0 { "E" } else { "W" },
+    )
+}
+
+/// "in 2h 05m" / "3h 12m ago" / "now" for a signed hour delta, so a row says
+/// how far off it is without the reader doing arithmetic against the clock.
+fn relative(delta_hours: f64) -> String {
+    let minutes = (delta_hours * 60.0).round() as i64;
+    if minutes.abs() < 1 {
+        return "now".into();
+    }
+    let (hours, rest) = (minutes.abs() / 60, minutes.abs() % 60);
+    let span = if hours > 0 {
+        format!("{hours}h {rest:02}m")
+    } else {
+        format!("{rest}m")
+    };
+    if minutes > 0 {
+        format!("in {span}")
+    } else {
+        format!("{span} ago")
+    }
+}
+
+/// A little sky beside the phase word: a rayed sun by day, a crescent at
+/// night, a sun sitting on the horizon through the transition. Drawn rather
+/// than typed, because the crescent is a disc with a bite taken out of it in
+/// the card's own colour and no font can be relied on for a moon.
+///
+/// The idiom is the dashboard's `sky_art` at a fourteenth of the size: same
+/// three scenes, same reason — a word tells you the phase, a shape lets you
+/// see it without reading.
+fn sky_mark(ui: &mut egui::Ui, pal: &theme::Palette, ground: egui::Color32, phase: &str) {
+    let size = 14.0;
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
+    let painter = ui.painter();
+    let centre = rect.center();
+    match phase {
+        "night" => {
+            // A disc, then the same disc again in the card's ground, shifted
+            // up and to the right: what is left is the crescent.
+            painter.circle_filled(centre, size * 0.42, pal.accent);
+            painter.circle_filled(
+                centre + egui::vec2(size * 0.24, -size * 0.18),
+                size * 0.36,
+                ground,
+            );
+        }
+        "day" => {
+            painter.circle_filled(centre, size * 0.26, pal.accent);
+            for step in 0..8 {
+                let angle = std::f32::consts::TAU * step as f32 / 8.0;
+                let dir = egui::vec2(angle.cos(), angle.sin());
+                painter.line_segment(
+                    [centre + dir * size * 0.36, centre + dir * size * 0.49],
+                    egui::Stroke::new(1.2, pal.accent),
+                );
+            }
+        }
+        // The transition: half a sun over the line it is crossing, which is
+        // the whole of what the band means.
+        _ => {
+            let horizon = centre.y + size * 0.20;
+            painter.circle_filled(
+                egui::pos2(centre.x, horizon - size * 0.10),
+                size * 0.30,
+                pal.accent,
+            );
+            painter.line_segment(
+                [
+                    egui::pos2(rect.left(), horizon),
+                    egui::pos2(rect.right(), horizon),
+                ],
+                egui::Stroke::new(1.2, pal.muted),
+            );
+        }
+    }
+}
+
+/// A card: a raised surface with real padding and a soft corner. The panel's
+/// groups used to be marked by a horizontal rule and a guess; this makes each
+/// one an object you can point at. The dashboard does the same thing with the
+/// same reasoning — elevation instead of frames.
+fn card<R>(ui: &mut egui::Ui, fill: egui::Color32, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let out = egui::Frame::new()
+        .fill(fill)
+        .corner_radius(8)
+        .inner_margin(egui::Margin::symmetric(12, 10))
+        .show(ui, |ui| {
+            // A Frame shrinks to whatever its content used, so a card whose
+            // rows do not happen to reach the edge comes out narrower than
+            // the card above it. Cards are the window's columns; they are all
+            // one width or they are not cards.
+            ui.set_width(ui.available_width());
+            add(ui)
+        });
+    ui.add_space(8.0);
+    out.inner
+}
+
+/// A row that hugs the right edge. `Ui::with_layout` on its own takes every
+/// point of height the parent has left — inside a scroll area that is the
+/// whole viewport, which swelled a card to the height of the window.
+/// Allocating one row's worth first is what keeps it a row.
+fn right_aligned<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    ui.allocate_ui_with_layout(
+        egui::vec2(ui.available_width(), BUTTON_HEIGHT),
+        egui::Layout::right_to_left(egui::Align::Center),
+        add,
+    )
+    .inner
+}
+
+/// One control, on one line: name, rail, reading. The four settings used to
+/// take two lines each — a label row and a full-width rail — which read as
+/// eight unrelated things stacked up. Fixed columns on both ends make them a
+/// table, so the eye runs down the names and down the numbers.
+fn slider_row<'a>(
+    ui: &mut egui::Ui,
+    pal: &theme::Palette,
+    label: &str,
+    reading: String,
+    slider: egui::Slider<'a>,
+) -> egui::Response {
+    let mut response = None;
+    ui.horizontal(|ui| {
+        ui.allocate_ui_with_layout(
+            egui::vec2(LABEL_WIDTH, ROW_HEIGHT),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                ui.label(egui::RichText::new(label).color(pal.muted));
+            },
+        );
+        let gap = ui.spacing().item_spacing.x;
+        let rail = (ui.available_width() - READING_WIDTH - gap).max(40.0);
+        // A Slider allocates `spacing.slider_width` for its rail and ignores
+        // whatever size it was added at, so the width has to be set here.
+        ui.spacing_mut().slider_width = rail;
+        response = Some(ui.add(slider.show_value(false).update_while_editing(false)));
+        ui.allocate_ui_with_layout(
+            egui::vec2(READING_WIDTH, ROW_HEIGHT),
+            egui::Layout::right_to_left(egui::Align::Center),
+            |ui| {
+                ui.label(egui::RichText::new(reading).color(pal.text).monospace());
+            },
+        );
+    });
+    response.expect("the horizontal layout always runs")
 }
 
 impl eframe::App for Panel {
@@ -153,6 +1480,20 @@ impl eframe::App for Panel {
                     .sane()
                 })
                 .unwrap_or_default();
+            match self.status.as_ref().filter(|s| s.has_location) {
+                Some(s) => {
+                    let moved = self.place.as_ref().is_none_or(|(lat, lon, _)| {
+                        (lat - s.latitude).abs() > 0.01 || (lon - s.longitude).abs() > 0.01
+                    });
+                    if moved {
+                        self.place = nearest_zone(s.latitude, s.longitude).map(|(zone, _, _)| {
+                            let city = zone.rsplit('/').next().unwrap_or(&zone).replace('_', " ");
+                            (s.latitude, s.longitude, city)
+                        });
+                    }
+                }
+                None => self.place = None,
+            }
             self.mismatch = self.status.is_none() && self.client.daemon_on_bus();
             if self.mismatch {
                 // Maybe this process is simply older than the file it came
@@ -227,310 +1568,42 @@ impl eframe::App for Panel {
             self.daemon_night_dim = status.night_brightness;
         }
 
-        ui.add(
-            egui::Label::new(
-                egui::RichText::new(WORDMARK.trim_end_matches('\n'))
-                    .monospace()
-                    .size(10.0)
-                    .color(egui::Color32::from_rgb(255, 170, 90)),
-            )
-            .wrap_mode(egui::TextWrapMode::Extend),
-        );
-        ui.add_space(8.0);
-        // The daemon's absence, and its two distinct flavours (#42), get one
-        // plain line rather than a silently frozen curve. The mismatch case
-        // also offers the one-click half of the recovery: a daemon still
-        // running its pre-update binary is fixed by a restart, and when the
-        // disk is just as old the click is harmless and the notice stays.
-        if self.status.is_none() {
-            if self.mismatch {
-                // Notice above, button below: side by side they fight for
-                // the row and the words lose.
-                ui.colored_label(
-                    egui::Color32::from_rgb(230, 150, 70),
-                    "Update needed: the panel and the daemon are different versions.",
-                );
-                ui.add_space(2.0);
-                if ui.button("Restart the daemon").clicked() {
-                    let _ = std::process::Command::new("systemctl")
-                        .args(["--user", "restart", "nightlightd"])
-                        .spawn();
-                    self.last_poll = None;
-                }
-            } else {
-                ui.colored_label(
-                    egui::Color32::from_rgb(230, 150, 70),
-                    "The daemon is not running, so changes will not reach the screen.",
-                );
-            }
-            ui.add_space(6.0);
-        }
-        // The curve draws from the local values, so it reshapes live mid-drag
-        // even though the daemon only hears about it on Apply. A drag on the
-        // line itself (#45) proposes an edit: the plateaus move the bounds
-        // the sliders below also hold, the ramps move the transition band.
-        let shown_band = self.staged_band.unwrap_or(self.band);
-        match curve::show(
-            ui,
-            status.as_ref(),
-            shown_band,
-            self.day_temp,
-            self.night_temp,
-            self.offset_secs,
-            &mut self.curve_held,
-        ) {
-            Some(curve::Edit::Band(next)) => self.staged_band = Some(next),
-            Some(curve::Edit::DayTemp(kelvin)) => {
-                self.day_temp = kelvin;
-                self.staged_temps = true;
-            }
-            Some(curve::Edit::NightTemp(kelvin)) => {
-                self.night_temp = kelvin;
-                self.staged_temps = true;
-            }
-            None => {}
-        }
-        // Under the curve, the band in numbers (#48). The curve names its
-        // bounds only while a pointer is on them, which left the one setting
-        // you can reach from three places readable from one. Silent at the
-        // default, the same rule `--status` uses, and beside it the only road
-        // back — the drag and the arrows both stop half a degree short of
-        // inverting the pair, so pinching the transition into a hard switch
-        // is easy and undoing it used to mean opening a terminal.
-        if self.staged_band.is_none() && !self.staged_temps && self.band != Band::default() {
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                ui.weak(format!(
-                    "day above {:+.1}°, night below {:+.1}°",
-                    self.band.day_elevation, self.band.night_elevation
-                ));
-                if ui.button("Default band").clicked() {
-                    let fresh = Band::default();
-                    self.client
-                        .set_band(fresh.day_elevation, fresh.night_elevation);
-                    self.band = fresh;
-                    self.last_poll = None;
-                }
-            });
-        }
-        // The decision row, present only while the curve holds something
-        // unsent. Buttons first, the reading after — the numbers change under
-        // the drag and the buttons must not wander while they do.
-        if self.staged_band.is_some() || self.staged_temps {
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                if ui.button("Apply").clicked() {
-                    if let Some(staged) = self.staged_band {
-                        self.client
-                            .set_band(staged.day_elevation, staged.night_elevation);
-                        self.band = staged;
-                        self.staged_band = None;
-                    }
-                    if self.staged_temps {
-                        self.client.set_day_temp(self.day_temp);
-                        self.client.set_night_temp(self.night_temp);
-                        self.staged_temps = false;
-                    }
-                    self.last_poll = None;
-                }
-                // Back to what the daemon holds, not to what the panel
-                // opened with: this undoes the drag, not the session.
-                if ui.button("Revert").clicked() {
-                    self.staged_band = None;
-                    if self.staged_temps {
-                        self.day_temp = self.daemon_day;
-                        self.night_temp = self.daemon_night;
-                        self.staged_temps = false;
-                    }
-                }
-                let band = self.staged_band.unwrap_or(self.band);
-                ui.weak(format!(
-                    "{} K / {} K, day above {:+.1}°, night below {:+.1}°",
-                    self.day_temp, self.night_temp, band.day_elevation, band.night_elevation
-                ));
-            });
-        }
-        ui.add_space(10.0);
+        // The window wears what the screen is doing: every tone here is mixed
+        // from the applied temperature, the same arithmetic the dashboard's
+        // live theme runs. Applied before anything is drawn, so widgets pick
+        // it up on the frame the temperature changes.
+        let pal = theme::Palette::live(self.status.as_ref().map(|s| s.temperature));
+        paint(ui, &pal);
 
-        // The two anchors that shape the curve. The ranges lean on each other
-        // so the band cannot invert from here (the daemon clamps regardless),
-        // and a change is sent — and hence written to the config file — once
-        // per release, not once per drag frame.
-        let day_min = self.night_temp.max(4000);
-        let night_max = self.day_temp.min(4500);
-        // `update_while_editing(false)` on every slider: typing into the value
-        // field must commit once, on Enter or focus loss — not per keystroke,
-        // where a half-typed "75" would already have sent 7.
-        let day = ui.add(
-            egui::Slider::new(&mut self.day_temp, day_min..=6500)
-                .suffix(" K")
-                .update_while_editing(false)
-                .text("Daytime"),
-        );
-        if day.drag_stopped() || (day.changed() && !day.dragged()) {
-            self.client.set_day_temp(self.day_temp);
-            // The slider sends on release, so whatever a plateau drag had
-            // staged has now gone out by another door.
-            self.staged_temps = false;
-            self.last_poll = None;
-        }
-        let night = ui.add(
-            egui::Slider::new(&mut self.night_temp, 1500..=night_max)
-                .suffix(" K")
-                .update_while_editing(false)
-                .text("Nighttime"),
-        );
-        if night.drag_stopped() || (night.changed() && !night.dragged()) {
-            self.client.set_night_temp(self.night_temp);
-            self.staged_temps = false;
-            self.last_poll = None;
-        }
+        // eframe hands us a Ui with no margin at all — its own documentation
+        // says so and tells you to wrap it — which is why every label sat
+        // flush against the window edge and every value on the right was
+        // clipped by it. One inset child, and the whole window breathes.
+        let mut inset = ui.new_child(egui::UiBuilder::new().max_rect(ui.max_rect().shrink(MARGIN)));
+        let ui = &mut inset;
 
-        // The two ramp-shaping knobs (GitHub #2), sent on release like the
-        // bounds above. Gamma bends the curve's midtones all day; night dim
-        // lowers the ceiling after dark, easing on the same solar curve as the
-        // temperature. The day-brightness bound stays whatever the daemon
-        // holds — no interface exposes it, only the config file.
-        // Display formatting only — `fixed_decimals` would round the backing
-        // value itself on the first frame, marking the slider changed and
-        // sending a value the user never chose (a config gamma of 0.925 must
-        // not become 0.93 on disk just because the panel opened).
-        let gamma = ui.add(
-            egui::Slider::new(&mut self.gamma, GAMMA_MIN..=GAMMA_MAX)
-                .custom_formatter(|v, _| format!("{v:.2}"))
-                .update_while_editing(false)
-                .text("Gamma"),
-        );
-        // The format guard on both shaped knobs: clicking into the value field
-        // and away again re-commits the display-rounded text (0.925 renders as
-        // "0.92" and would come back as such). A difference the display cannot
-        // even show is formatter residue, not a user choice — never sent.
-        if (gamma.drag_stopped() || (gamma.changed() && !gamma.dragged()))
-            && format!("{:.2}", self.gamma) != format!("{:.2}", self.daemon_gamma)
-        {
-            self.client.set_gamma(self.gamma);
-            self.last_poll = None;
-        }
-        let dim = ui.add(
-            egui::Slider::new(&mut self.night_dim, DIM_MIN..=DIM_MAX)
-                .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
-                .custom_parser(|s| {
-                    // "90" and "90%" mean ninety percent; "0.9" — the unit the
-                    // config file uses — means the same. The slider's window
-                    // makes the two readings unambiguous.
-                    let v: f64 = s.trim().trim_end_matches('%').trim().parse().ok()?;
-                    Some(if v > DIM_MAX { v / 100.0 } else { v })
-                })
-                .update_while_editing(false)
-                .text("Night dim"),
-        );
-        if (dim.drag_stopped() || (dim.changed() && !dim.dragged()))
-            && format!("{:.0}%", self.night_dim * 100.0)
-                != format!("{:.0}%", self.daemon_night_dim * 100.0)
-        {
-            self.send_night_dim(self.night_dim);
-        }
-        self.bounds_dragging = day.dragged() || night.dragged() || gamma.dragged() || dim.dragged();
-
-        ui.add_space(4.0);
-        // Back to the values the panel opened with, undoing this session's
-        // slider fiddling. Nothing to undo before the first sync (the origs
-        // would be compile-time defaults, not the user's values), and the
-        // shaped knobs are only sent when this session actually moved them —
-        // an untouched knob is not the panel's to rewrite, even with the
-        // value it believes is current.
-        if ui.button("Revert changes").clicked() && self.anchors_synced {
-            self.day_temp = self.orig_day;
-            self.night_temp = self.orig_night;
-            self.client.set_day_temp(self.day_temp);
-            self.client.set_night_temp(self.night_temp);
-            // Touched means either the UI copy moved off its seed or the
-            // daemon's reported value moved off the opening one — the second
-            // catches a knob dragged exactly onto the window edge, where the
-            // clamped UI copy lands back on its seed while the daemon changed.
-            let gamma_seed = self.orig_gamma.clamp(GAMMA_MIN, GAMMA_MAX);
-            if self.gamma != gamma_seed || self.daemon_gamma != self.orig_gamma {
-                // The verbatim orig, not the displayed clamp: a hand-written
-                // out-of-window gamma comes back exactly as written.
-                self.client.set_gamma(self.orig_gamma);
-                self.gamma = gamma_seed;
-            }
-            let dim_seed = self.orig_night_dim.clamp(DIM_MIN, DIM_MAX);
-            if self.night_dim != dim_seed || self.daemon_night_dim != self.orig_night_dim {
-                self.send_night_dim(self.orig_night_dim);
-                self.night_dim = dim_seed;
-            }
-            self.last_poll = None;
-        }
-
-        ui.add_space(10.0);
-        ui.separator();
-        ui.add_space(8.0);
-        ui.label("Warm the screen by hand — drag left for warmer:");
-        ui.add_space(4.0);
-
-        let slider = egui::Slider::new(&mut self.kelvin, WARMEST..=NEUTRAL)
-            .suffix(" K")
-            .update_while_editing(false);
-        // Apply live only when the user actually moves it; the daemon pins
-        // whatever the slider lands on and switches to manual. The cached
-        // snapshot is updated in place so the following-mode mirror stops
-        // immediately instead of fighting the drag until the next poll.
-        if ui.add(slider).changed() {
-            self.client.set_temperature(self.kelvin);
-            if let Some(status) = &mut self.status {
-                status.following = false;
-                status.temperature = self.kelvin;
-            }
-        }
-
-        ui.add_space(12.0);
-        if ui.button("Back to automatic").clicked() {
-            self.client.follow_the_sun();
-            self.last_poll = None;
-        }
-
-        ui.add_space(8.0);
-        ui.separator();
-        ui.add_space(4.0);
-        // The fade switch (#44) shows only when the daemon can answer for it;
-        // sent optimistically, the next poll confirms.
-        if let Some(fade) = self.fade {
-            let mut checked = fade;
-            if ui.checkbox(&mut checked, "Fade transitions").changed() {
-                self.client.set_fade(checked);
-                self.fade = Some(checked);
-                self.last_poll = None;
-            }
-            ui.add_space(4.0);
-        }
-        // Enables/disables the daemon's systemd user service, then re-reads the
-        // real state — if systemctl failed (unit not installed), the box must
-        // snap back instead of showing a success that never happened.
-        if ui
-            .checkbox(&mut self.start_at_login, "Start at login")
-            .changed()
-        {
-            autostart::set(self.start_at_login);
-            self.start_at_login = autostart::enabled();
-        }
-
-        ui.add_space(10.0);
-        ui.separator();
-        ui.add_space(6.0);
-        ui.horizontal(|ui| {
-            ui.weak(concat!("v", env!("CARGO_PKG_VERSION")));
-            ui.separator();
-            ui.hyperlink_to("View on GitHub", REPO_URL);
-            ui.separator();
-            ui.hyperlink_to("Give feedback", ISSUES_URL);
-        });
+        // No scroll area: the window is a fixed stack of cards with exactly
+        // one elastic member, the curve. Everything else has a height it
+        // always wants, so the smallest window that fits them is a number we
+        // can compute — and it is the minimum the window enforces below. A
+        // panel that scrolls is a panel whose minimum size was guessed.
+        self.body(ui, &pal, status);
 
         // egui is reactive, so ask for a repaint each second to keep the slider
         // tracking the sun even when the window sits idle.
         ui.ctx()
             .request_repaint_after(std::time::Duration::from_secs(1));
     }
+}
+
+/// The path to a sibling binary — the daemon next to this panel — for the
+/// case where systemd has no unit to start. Falls back to the bare name so
+/// `PATH` still gets a look in.
+fn sibling(name: &str) -> std::path::PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join(name)))
+        .unwrap_or_else(|| std::path::PathBuf::from(name))
 }
 
 /// The one self-repair a stale client can do (#42): replace this process
@@ -594,8 +1667,19 @@ fn main() -> eframe::Result<()> {
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([460.0, 660.0])
-            .with_resizable(false),
+            // Sized for the tallest tab rather than for all of them stacked:
+            // splitting the window into tabs took roughly a third of its
+            // height away, and what is left over on the shorter tabs is dead
+            // space nobody asked for.
+            .with_inner_size([470.0, 600.0])
+            // Resizable, with a floor that keeps the curve readable: the
+            // window used to be nailed to one size and left a hand of dead
+            // space under the footer at that size.
+            // The floor is the tallest tab at its tightest: the persistent
+            // chrome plus the now tab's cards with the chart at its own
+            // minimum. Below this something would be cut off, and with no
+            // scroll area to fall back on, cut off means gone.
+            .with_min_inner_size([390.0, 470.0]),
         ..Default::default()
     };
     eframe::run_native(
@@ -630,7 +1714,90 @@ fn main() -> eframe::Result<()> {
                 daemon_gamma: 1.0,
                 daemon_night_dim: 1.0,
                 bounds_dragging: false,
+                place: None,
+                tab: NOW_TAB,
+                map_center: egui::vec2(0.5, 0.5),
+                curve_height: 160.0,
             }))
         }),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The schedule's fourth column has to read without arithmetic: a row is
+    /// ahead, behind, or happening.
+    #[test]
+    fn relative_reads_forwards_and_backwards() {
+        assert_eq!(relative(0.0), "now");
+        assert_eq!(relative(2.0), "in 2h 00m");
+        assert_eq!(relative(-2.5), "2h 30m ago");
+        assert_eq!(relative(0.25), "in 15m");
+        assert_eq!(relative(-0.25), "15m ago");
+        // Under half a minute either way is not worth a number.
+        assert_eq!(relative(0.005), "now");
+    }
+
+    /// The map's contract, at both shapes a window can be: the world covers
+    /// the frame edge to edge, and its own proportions survive. Everything
+    /// else about the map follows from these two holding at once.
+    #[test]
+    fn the_world_fills_the_frame_without_stretching() {
+        let aspect = 1.67;
+        let still = egui::Vec2::ZERO;
+        for frame in [egui::vec2(600.0, 200.0), egui::vec2(200.0, 400.0)] {
+            let (world, _) = map_crop(frame, aspect, egui::vec2(0.5, 0.5), still);
+            assert!(
+                world.x >= frame.x,
+                "{world:?} leaves a gap beside {frame:?}"
+            );
+            assert!(world.y >= frame.y, "{world:?} leaves a gap under {frame:?}");
+            assert!(
+                (world.x / world.y - aspect).abs() < 1e-3,
+                "{world:?} is not the world's shape"
+            );
+        }
+    }
+
+    /// Dragging moves the crop the way the hand went, stops at the world's
+    /// edge rather than opening a gap, and does nothing at all on the axis
+    /// that had no room to give.
+    #[test]
+    fn the_crop_pans_within_the_world_and_no_further() {
+        let aspect = 1.67;
+        // Wider than the world: the width is spent exactly, so only the
+        // vertical can move.
+        let frame = egui::vec2(600.0, 200.0);
+        let middle = egui::vec2(0.5, 0.5);
+        let (world, up) = map_crop(frame, aspect, middle, egui::vec2(-40.0, -40.0));
+        assert_eq!(up.x, 0.5, "there is no width to pan into");
+        assert!(up.y > 0.5, "dragging up should reveal what is below");
+
+        // Far past the edge, twice, and it comes to rest in the same place.
+        let shove = egui::vec2(0.0, -10_000.0);
+        let (_, once) = map_crop(frame, aspect, middle, shove);
+        let (_, twice) = map_crop(frame, aspect, once, shove);
+        assert_eq!(once, twice, "the pan should stop at the edge");
+        let bottom = once.y + (frame.y / world.y) / 2.0;
+        assert!((bottom - 1.0).abs() < 1e-4, "the world's edge is the stop");
+    }
+
+    /// The centre is a place, not an offset: resize the window and whatever
+    /// was in the middle of the map is still in the middle of the map.
+    #[test]
+    fn resizing_keeps_the_same_place_in_the_middle() {
+        let aspect = 1.67;
+        let still = egui::Vec2::ZERO;
+        let (_, aimed) = map_crop(
+            egui::vec2(800.0, 400.0),
+            aspect,
+            egui::vec2(0.5, 0.5),
+            egui::vec2(0.0, -30.0),
+        );
+        assert!(aimed.y > 0.5, "the drag has to have moved something");
+        let (_, resized) = map_crop(egui::vec2(830.0, 400.0), aspect, aimed, still);
+        assert!((resized.y - aimed.y).abs() < 1e-6, "the middle drifted");
+    }
 }

@@ -51,6 +51,8 @@ trait Daemon {
     fn set_brightness(&self, day: f64, night: f64) -> zbus::Result<()>;
     fn set_fade(&self, fade: bool) -> zbus::Result<()>;
     fn get_fade(&self) -> zbus::Result<bool>;
+    fn set_location(&self, latitude: f64, longitude: f64) -> zbus::Result<()>;
+    fn clear_location(&self) -> zbus::Result<()>;
     fn set_transition_band(&self, day: f64, night: f64) -> zbus::Result<()>;
     fn get_transition_band(&self) -> zbus::Result<(f64, f64)>;
 }
@@ -102,6 +104,13 @@ impl Client {
         let _ = self.proxy.set_mode("auto");
     }
 
+    /// Turns the filter on or off explicitly, so a button does what its label
+    /// showed rather than blindly flipping whatever the daemon holds. Errors
+    /// swallowed, like every other write here.
+    pub fn set_enabled(&self, enabled: bool) {
+        let _ = self.proxy.set_enabled(enabled);
+    }
+
     /// Sets the daytime target temperature (the top of the curve); persisted by
     /// the daemon. Errors swallowed.
     pub fn set_day_temp(&self, kelvin: u32) {
@@ -143,6 +152,18 @@ impl Client {
     /// back to the default band.
     pub fn band(&self) -> Option<(f64, f64)> {
         self.proxy.get_transition_band().ok()
+    }
+
+    /// Pins a location by hand, overriding whatever the timezone resolved to.
+    /// The daemon persists it. Errors swallowed.
+    pub fn set_location(&self, latitude: f64, longitude: f64) {
+        let _ = self.proxy.set_location(latitude, longitude);
+    }
+
+    /// Drops a hand-set location and lets the timezone answer again — the
+    /// road back from a pin dropped in the wrong ocean.
+    pub fn clear_location(&self) {
+        let _ = self.proxy.clear_location();
     }
 
     /// Sets the transition band (#45); the daemon carries the pair verbatim

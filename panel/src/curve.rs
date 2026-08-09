@@ -12,16 +12,24 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use eframe::egui::{self, Color32, Pos2, Stroke};
+use eframe::egui::{self, Pos2, Stroke};
 use nightlightd_core::solar::solar_elevation;
 use nightlightd_core::transition::{Band, target_temperature};
 
 use crate::daemon::Status;
+use crate::theme::Palette;
 
-/// Height of the curve area in points.
-const HEIGHT: f32 = 130.0;
+/// The shortest the curve is ever drawn. Above this it takes whatever
+/// height the window has spare (#46's panel pass), so enlarging the window
+/// grows the picture rather than the empty strip under the footer.
+const MIN_HEIGHT: f32 = 120.0;
 /// Vertical breathing room so the line never touches the top or bottom edge.
-const PAD: f32 = 12.0;
+const PAD: f32 = 10.0;
+/// A strip along the bottom that belongs to the hour labels and to nothing
+/// else. The chart used to run all the way down and the hours were painted
+/// over it, so at night — when the line sits on the floor — the two were
+/// drawn on top of each other.
+const AXIS_HEIGHT: f32 = 15.0;
 /// The narrowest a drag can pinch the band, in degrees of elevation. A
 /// drag may move a bound, never invert the pair.
 const MIN_BAND_WIDTH: f64 = 0.5;
@@ -96,15 +104,32 @@ fn held_band(band: Band, elevation: f64, day: bool) -> Band {
 /// known (the curve is meaningless without one). `offset_secs` is the local
 /// UTC offset, used to place "now" and the hour axis on local time. `held`
 /// carries the current gesture's handle across frames.
-pub fn show(
-    ui: &mut egui::Ui,
-    status: Option<&Status>,
-    band: Band,
-    day_temp: u32,
-    night_temp: u32,
-    offset_secs: i32,
-    held: &mut Option<Handle>,
-) -> Option<Edit> {
+/// Everything the curve draws itself from. Gathered into one value because
+/// they arrive together and mean nothing apart: the panel's live band and
+/// bounds, so the shape follows a hand before the daemon has been told, and
+/// the palette the whole window is wearing this second.
+pub struct View<'a> {
+    pub status: Option<&'a Status>,
+    pub band: Band,
+    pub day_temp: u32,
+    pub night_temp: u32,
+    pub offset_secs: i32,
+    pub pal: &'a Palette,
+    /// The height the caller has spare for the chart, floored at
+    /// [`MIN_HEIGHT`]. Measured from what the controls needed last frame.
+    pub height: f32,
+}
+
+pub fn show(ui: &mut egui::Ui, view: View<'_>, held: &mut Option<Handle>) -> Option<Edit> {
+    let View {
+        status,
+        band,
+        day_temp,
+        night_temp,
+        offset_secs,
+        pal,
+        height,
+    } = view;
     let Some(status) = status.filter(|s| s.has_location) else {
         ui.weak("Waiting for the daemon / location…");
         return None;
@@ -126,22 +151,24 @@ pub fn show(
     };
 
     let (response, painter) = ui.allocate_painter(
-        egui::vec2(ui.available_width(), HEIGHT),
+        egui::vec2(ui.available_width(), height.max(MIN_HEIGHT)),
         egui::Sense::click_and_drag(),
     );
     let rect = response.rect;
-    let plot_height = rect.height() - 2.0 * PAD;
+    // The chart proper, with the hour strip cut off the bottom.
+    let plot = egui::Rect::from_min_max(rect.min, egui::pos2(rect.max.x, rect.max.y - AXIS_HEIGHT));
+    let plot_height = plot.height() - 2.0 * PAD;
 
-    let to_x = |hour: f32| rect.left() + (hour / 24.0) * rect.width();
+    let to_x = |hour: f32| plot.left() + (hour / 24.0) * plot.width();
     let to_y = |kelvin: f32| {
         let frac = ((kelvin - AXIS_MIN) / (AXIS_MAX - AXIS_MIN)).clamp(0.0, 1.0);
-        rect.bottom() - PAD - frac * plot_height
+        plot.bottom() - PAD - frac * plot_height
     };
     let to_kelvin = |y: f32| {
-        let frac = ((rect.bottom() - PAD - y) / plot_height).clamp(0.0, 1.0);
+        let frac = ((plot.bottom() - PAD - y) / plot_height).clamp(0.0, 1.0);
         AXIS_MIN + frac * (AXIS_MAX - AXIS_MIN)
     };
-    let hour_of_x = |x: f32| ((x - rect.left()) / rect.width() * 24.0).clamp(0.0, 24.0);
+    let hour_of_x = |x: f32| ((x - plot.left()) / plot.width() * 24.0).clamp(0.0, 24.0);
     // How far up the day/night span a temperature sits: 1 on the upper
     // plateau, 0 on the lower, between them on a ramp. Independent of the
     // drawing axis, so it stays the honest test for "is this a ramp".
@@ -151,7 +178,7 @@ pub fn show(
 
     // The line's vertical extent in a column, so a near-vertical ramp is as
     // grabbable as a flat plateau.
-    let hours_per_point = 24.0 / rect.width();
+    let hours_per_point = 24.0 / plot.width();
     let extent_at = |x: f32| {
         let hour = hour_of_x(x);
         let step = hours_per_point * 4.0;
@@ -213,7 +240,7 @@ pub fn show(
         });
     }
 
-    painter.rect_filled(rect, 6.0, Color32::from_gray(24));
+    painter.rect_filled(rect, 6.0, pal.bg);
 
     // Warm fill under the curve, one convex trapezoid per segment so a concave
     // curve never triangulates wrong.
@@ -223,15 +250,17 @@ pub fn show(
             (h, kelvin_at(h))
         })
         .collect();
-    let fill = Color32::from_rgba_unmultiplied(255, 150, 60, 32);
+    // The fill is the accent at a whisper, so it warms with the line
+    // rather than staying the one orange the panel used to be painted in.
+    let fill = pal.accent.gamma_multiply(0.16);
     for pair in samples.windows(2) {
         let a = egui::pos2(to_x(pair[0].0), to_y(pair[0].1));
         let b = egui::pos2(to_x(pair[1].0), to_y(pair[1].1));
         let quad = vec![
-            egui::pos2(a.x, rect.bottom()),
+            egui::pos2(a.x, plot.bottom()),
             a,
             b,
-            egui::pos2(b.x, rect.bottom()),
+            egui::pos2(b.x, plot.bottom()),
         ];
         painter.add(egui::Shape::convex_polygon(quad, fill, Stroke::NONE));
     }
@@ -243,15 +272,12 @@ pub fn show(
             egui::pos2(to_x(h), to_y(kelvin_at(h)))
         })
         .collect();
-    painter.add(egui::Shape::line(
-        line,
-        Stroke::new(2.0, Color32::from_rgb(255, 170, 90)),
-    ));
+    painter.add(egui::Shape::line(line, Stroke::new(2.0, pal.accent)));
 
     // The part under the pointer glows — the hint, with the grab cursor, that
     // the line is a handle. Only the stretch that would actually move.
     if let Some(handle) = active {
-        let glow = Stroke::new(3.5, Color32::from_rgb(255, 205, 130));
+        let glow = Stroke::new(3.5, pal.text);
         let mut run: Vec<Pos2> = Vec::new();
         for i in 0..=96 {
             let h = i as f32 * 0.25;
@@ -287,7 +313,7 @@ pub fn show(
             egui::Align2::LEFT_TOP,
             caption,
             egui::FontId::proportional(11.0),
-            Color32::from_rgb(255, 205, 130),
+            pal.text,
         );
     }
 
@@ -295,16 +321,12 @@ pub fn show(
     let now_x = to_x(now_hour);
     painter.line_segment(
         [
-            egui::pos2(now_x, rect.top()),
-            egui::pos2(now_x, rect.bottom()),
+            egui::pos2(now_x, plot.top()),
+            egui::pos2(now_x, plot.bottom()),
         ],
-        Stroke::new(1.0, Color32::from_white_alpha(70)),
+        Stroke::new(1.0, pal.faint),
     );
-    painter.circle_filled(
-        egui::pos2(now_x, to_y(kelvin_at(now_hour))),
-        4.0,
-        Color32::WHITE,
-    );
+    painter.circle_filled(egui::pos2(now_x, to_y(kelvin_at(now_hour))), 4.0, pal.text);
 
     // Hour ticks, edge-aligned so 0 and 24 are not clipped.
     for h in [0, 6, 12, 18, 24] {
@@ -314,11 +336,11 @@ pub fn show(
             _ => egui::Align2::CENTER_BOTTOM,
         };
         painter.text(
-            egui::pos2(to_x(h as f32), rect.bottom() - 3.0),
+            egui::pos2(to_x(h as f32), rect.bottom() - 2.0),
             align,
             format!("{h:02}"),
             egui::FontId::proportional(10.0),
-            Color32::from_white_alpha(110),
+            pal.muted,
         );
     }
 
