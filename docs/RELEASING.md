@@ -60,13 +60,19 @@ that cannot be taken back.
 - [ ] musl tarball: the static daemon + tui pair, built with the musl
       target, smoke-tested (`./nightlightd --status` against a live
       daemon), uploaded to the release.
-- [ ] AUR: `pkgver` bump in the PKGBUILD, `updpkgsums`, regenerate
-      `.SRCINFO`, push over ssh. Mirror the final files into
-      `dist/aur/` in this repo. The AUR goes down for maintenance
-      often enough that this step outlives the session it belongs to;
-      0.2.1's push waited on one. If it is down, the release is not
-      finished — leave the checklist open rather than calling it
-      shipped, because nothing else will remind you.
+- [ ] AUR: bump `pkgver` in `dist/aur/PKGBUILD`, put the new archive's
+      checksum in it, then `scripts/aur-push.sh`. The script verifies
+      the checksum against the tag's real tarball before it pushes
+      anything — a bumped version carrying the last release's hash
+      builds nothing, and is otherwise discovered by whoever tried to
+      install it — and it regenerates `.SRCINFO`, commits and pushes.
+      The AUR goes down for maintenance often enough that this step
+      outlives the session it belongs to; 0.2.1's push waited on one
+      and never happened, which is why the package sat a release
+      behind for a month and why five manual steps became one. If it
+      is down, the release is not finished — leave the checklist open
+      rather than calling it shipped, because nothing else will
+      remind you.
 - [ ] The release page renders, the `.deb` installs on a stock Mint,
       `systemctl --user restart nightlightd` picks the new binary up.
 
