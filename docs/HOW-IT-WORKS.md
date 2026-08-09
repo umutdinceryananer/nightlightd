@@ -145,9 +145,12 @@ down.
 Two places stay instant on purpose. Quitting restores a neutral screen
 in one write, because a daemon that animates its own death can be
 interrupted halfway and leave the screen warm with nobody left to fix
-it. And waking from suspend rewrites the ramp immediately, because that
-is a repair, not a transition: the screen was already supposed to be
-warm, and the promise there is speed.
+it. And a repair rewrites the ramp immediately rather than walking to
+it — waking from suspend, plugging a monitor in, or finding the ramp
+cleared out from under us (#40). None of those is a transition: the
+screen was already supposed to be warm and simply is not, so the
+promise there is speed. Easing would animate the defect and leave the
+screen wrong for two seconds longer.
 
 The walk itself has a switch (#44): `fade = false` in the config, or
 the same toggle in any of the three interfaces, and every change lands

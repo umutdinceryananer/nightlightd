@@ -91,6 +91,8 @@ Gamma and brightness ride the same gamma ramp write as the colour, so they cost 
 
 Every change of target, a toggle, a manual set, the daemon starting at night, eases onto the screen over about two seconds rather than landing in one frame. The walk is taken on the mired scale, so the glide looks even to the eye the whole way down. `fade = false` in the config, or the same toggle in any interface, turns it off.
 
+Repairs do not ease, on purpose. Coming back from suspend, plugging a monitor in, or having the ramp cleared out from under you are not changes of target — the screen is simply wrong, and the tint snaps back. Easing there would animate the defect and leave the screen wrong for two seconds longer.
+
 The slow transition is movable too. Full day sits at a sun elevation of +3 degrees and full night at -6, the band redshift uses. `day_elevation` and `night_elevation` move the bounds, and `nightlightd --band 3:-12` does the same from a terminal. Lowering the night bound lands full night deeper into dusk, for eyes that find the default too eager. A nonsense pair quietly behaves like the default.
 
 ---
