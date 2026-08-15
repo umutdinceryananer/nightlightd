@@ -267,10 +267,25 @@ const BLACKBODY: [[f64; 3]; 242] = [
 ];
 
 /// Lowest temperature in the table.
-const MIN_TEMPERATURE: u32 = 1000;
+pub const MIN_TEMPERATURE: u32 = 1000;
 /// Highest temperature we interpolate to. The table holds one entry beyond
 /// this (25100 K), so `index + 1` stays in bounds for any clamped input.
-const MAX_TEMPERATURE: u32 = 25000;
+pub const MAX_TEMPERATURE: u32 = 25000;
+
+/// What a control offers: deep candle-orange up to distinctly cool (#41).
+///
+/// Narrower than the table at both ends, on purpose. The floor stops 500 K
+/// above [`MIN_TEMPERATURE`], short of where the screen is very nearly red
+/// and green has less than a fifth of its gain left. The ceiling stops well
+/// under [`MAX_TEMPERATURE`] because the rest buys almost nothing: 6500 K to
+/// 10000 K takes red from 1.00 down to 0.79, a step anyone can see, while
+/// 10000 K to 25000 K spends another 15000 K moving it 0.16. A slider
+/// running to 25000 would put everything worth choosing in its first fifth.
+///
+/// The config file and the D-Bus door still accept the whole table, quietly,
+/// because it can be rendered — this is what a slider *offers*, not what the
+/// daemon will accept.
+pub const UI_TEMPERATURE_RANGE: (u32, u32) = (1500, 10_000);
 
 /// Converts a colour temperature in kelvin to three RGB gains in `0.0..=1.0`.
 ///
@@ -420,6 +435,22 @@ mod tests {
         assert!(approx(r, 0.627_741_86, 1e-6));
         assert!(approx(g, 0.753_069_77, 1e-6));
         assert!(approx(b, 1.0, 1e-6));
+    }
+
+    #[test]
+    fn the_offered_range_is_one_the_table_can_render() {
+        // Every interface leans on these two ends. If either fell outside the
+        // table, a slider would run to a number the screen quietly refuses,
+        // and the status would report a temperature nobody is looking at.
+        let (low, high) = UI_TEMPERATURE_RANGE;
+        assert!(MIN_TEMPERATURE <= low);
+        assert!(low < high);
+        assert!(high <= MAX_TEMPERATURE);
+        // And the far end is genuinely bluish, not the neutral point again —
+        // the whole of #41 is that past 6500 K the screen goes cool.
+        let (r, _, b) = temperature_to_rgb(high);
+        assert!(r < 0.8, "{high} K left red at {r}");
+        assert!(approx(b, 1.0, 1e-9));
     }
 
     #[test]

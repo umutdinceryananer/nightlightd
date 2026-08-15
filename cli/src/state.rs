@@ -7,8 +7,25 @@
 
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
+use nightlightd_core::color::{MAX_TEMPERATURE, MIN_TEMPERATURE};
 use nightlightd_core::mode::Mode;
 use nightlightd_core::transition::Band;
+
+/// Holds a temperature to what the blackbody table can actually render, for
+/// every door into this state: the config file at startup and the D-Bus
+/// setters afterwards.
+///
+/// The controls stop at core's `UI_TEMPERATURE_RANGE`, well inside this, but
+/// the wire is open to anyone with `busctl` and the file is open to anyone
+/// with an editor. Clamping as a value enters rather than at the ramp write
+/// is what keeps `GetStatus` honest: a `day_temp = 90000` typo was otherwise
+/// reported, and drawn on every curve, all day long while the screen quietly
+/// wore 25000 — measured, not supposed. The file itself is still read
+/// verbatim; this normalises what the daemon *runs*, and never edits a line
+/// under its author unless something else asks for a save.
+pub fn renderable(kelvin: u32) -> u32 {
+    kelvin.clamp(MIN_TEMPERATURE, MAX_TEMPERATURE)
+}
 
 /// The daemon's live state.
 pub struct State {

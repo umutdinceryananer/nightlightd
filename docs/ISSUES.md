@@ -625,6 +625,39 @@ a skipped one costs is a screen left wrong.
 
 ### #41 Temperatures past neutral
 
+**Done.** Shipped 2026-08-15, and the shape of it was not what the issue
+assumed. The daemon never had a ceiling — `day_temp = 8000` in the config
+applied before any of this was written, and `SetDayTemp` only ever held the
+pair in order. Every clamp was in an interface, in five places, each with
+6500 written into it by hand. So the work was to publish one range from
+core (`UI_TEMPERATURE_RANGE`, 1500–10000 K) and have all of them lean on it.
+
+10000 rather than the 25000 the issue named. The table can draw to 25000
+and the config and the wire still accept that far, but 6500 K to 10000 K
+takes red from 1.00 to 0.79, a step anyone can see, while 10000 K to
+25000 K spends another 15000 K moving it 0.16 — a control reaching that far
+would put everything worth choosing in its first fifth.
+
+Two things the sweep turned up that the issue did not ask about. The
+panel's "Hold at" slider stopped at neutral, so anyone on a bluish day
+would have read 6500 K on it while the screen wore 8000. And the daemon
+reported a hand-written `day_temp = 90000` as 90000 all day while quietly
+applying 25000 — reproduced live, then closed by holding what the *state*
+accepts to what the table can render, at both doors, leaving the file
+itself verbatim.
+
+The two charts that draw against a fixed vertical scale — the panel's curve
+axis and the dashboard's settings rails — grow only when a day bound above
+neutral needs the room, so nobody still on 6500 watches their picture shrink
+to make space for a range they never use. The curve's axis is fed the bound
+the *daemon* holds, never the one a drag is proposing, or it would rescale
+under the hand mid-gesture. The live accent deliberately does not follow
+past neutral: that colour answers "how warm is the screen", and above 6500 K
+the answer is "not at all".
+
+Verified live: 8000 K from the config applied and survived a restart, 9000 K
+over D-Bus applied and persisted, 90000 K clamped to 25000 at both doors.
+
 - **What:** Raise the ceiling above 6500 K, bluish instead of warm, in
   the config, the D-Bus door and the sliders. QRedshift accepts 25000;
   redshift's table, which ours is ported from, runs to 25100. Core
@@ -635,7 +668,7 @@ a skipped one costs is a screen left wrong.
 - **Done when:** `day_temp = 8000` applies, survives a restart, and
   every client shows and sets it.
 - **Difficulty:** Easy
-- **Target:** v0.3
+- **Target:** v0.3, shipped in v0.3.1
 
 ### #42 A version mismatch must not impersonate a stopped daemon
 

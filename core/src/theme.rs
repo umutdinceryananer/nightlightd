@@ -149,6 +149,11 @@ pub fn at(index: usize) -> &'static Theme {
 /// this keeps daytime a soft gold and night a deep orange. Shared by the live
 /// theme's accent and by every temperature printed anywhere, so the two always
 /// agree.
+///
+/// Past neutral (#41) the tint stops rather than turning blue. This scale
+/// answers "how warm is the screen", and above 6500 K the answer is "not at
+/// all"; a bluish accent would be a second, opposite meaning on the one
+/// colour every interface reads warmth from.
 pub fn display_tint(kelvin: u32) -> Rgb {
     let kelvin = f64::from(kelvin.clamp(1500, 6500));
     let display =

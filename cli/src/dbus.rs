@@ -16,7 +16,7 @@ use nightlightd_core::mode::Mode;
 use nightlightd_core::solar::solar_elevation;
 
 use crate::config::{self, Config};
-use crate::state::{Shared, State, lock};
+use crate::state::{Shared, State, lock, renderable};
 use crate::status::Status;
 use crate::waker::Waker;
 use crate::x11::unix_now;
@@ -32,11 +32,13 @@ struct Daemon {
 
 #[interface(name = "org.nightlightd.Daemon")]
 impl Daemon {
-    /// Pin a manual temperature (kelvin) and turn the filter on.
+    /// Pin a manual temperature (kelvin) and turn the filter on. Held to what
+    /// the table can render, so `GetStatus` never reports a number the screen
+    /// is not wearing.
     fn set_temperature(&self, kelvin: u32) {
         {
             let mut state = lock(&self.state);
-            state.override_temp = Some(kelvin);
+            state.override_temp = Some(renderable(kelvin));
             state.enabled = true;
         }
         self.waker.wake();
@@ -75,11 +77,13 @@ impl Daemon {
 
     /// Set the daytime target temperature (kelvin) — the top of the automatic
     /// curve — then persist it and re-apply. Never drops below the night
-    /// target, so the band stays ordered whatever a client sends.
+    /// target, so the band stays ordered whatever a client sends. Above 6500 K
+    /// is a bluish day rather than a warm one (#41), which the table has
+    /// always been able to draw.
     fn set_day_temp(&self, kelvin: u32) {
         {
             let mut state = lock(&self.state);
-            state.day_temp = kelvin.max(state.night_temp);
+            state.day_temp = renderable(kelvin).max(state.night_temp);
         }
         persist(&self.state);
         self.waker.wake();
@@ -90,7 +94,7 @@ impl Daemon {
     fn set_night_temp(&self, kelvin: u32) {
         {
             let mut state = lock(&self.state);
-            state.night_temp = kelvin.min(state.day_temp);
+            state.night_temp = renderable(kelvin).min(state.day_temp);
         }
         persist(&self.state);
         self.waker.wake();
@@ -338,6 +342,7 @@ pub fn serve(state: Shared, waker: Waker) -> zbus::Result<Option<Connection>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nightlightd_core::color::{MAX_TEMPERATURE, MIN_TEMPERATURE};
 
     fn state(enabled: bool, override_temp: Option<u32>, mode: Mode) -> State {
         State {
@@ -467,5 +472,25 @@ mod tests {
         assert!(s.day_temp >= s.night_temp);
         assert_eq!(s.night_temp, 6500);
         assert_eq!(s.day_temp, 6500);
+    }
+
+    #[test]
+    fn a_bluish_day_is_accepted_and_a_silly_one_is_held_to_the_table() {
+        // #41: past neutral is a real setting, not an error. The controls stop
+        // at 10000 K; the wire goes as far as the table can draw and no
+        // further, so the status never reports a temperature nobody is seeing.
+        let mut s = state(true, None, Mode::Automatic);
+        s.config_damaged = true;
+        let d = daemon(s);
+        d.set_day_temp(8000);
+        assert_eq!(lock(&d.state).day_temp, 8000);
+
+        d.set_day_temp(90_000);
+        assert_eq!(lock(&d.state).day_temp, MAX_TEMPERATURE);
+
+        d.set_temperature(90_000);
+        assert_eq!(lock(&d.state).override_temp, Some(MAX_TEMPERATURE));
+        d.set_temperature(1);
+        assert_eq!(lock(&d.state).override_temp, Some(MIN_TEMPERATURE));
     }
 }

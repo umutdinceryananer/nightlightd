@@ -34,15 +34,43 @@ const MIN_BAND_WIDTH: f64 = 0.5;
 /// The vertical axis, in kelvin, fixed rather than fitted to the current
 /// bounds. A self-scaling axis draws every pair of bounds as the same
 /// picture, which makes the night slider look inert and leaves a plateau
-/// nothing to be dragged *to*. These ends match the panel's sliders.
-const AXIS_MIN: f32 = 1500.0;
-const AXIS_MAX: f32 = 6500.0;
-/// The plateau drags' limits, the same window the two bound sliders use, so
-/// the curve and the sliders cannot disagree about what is settable.
+/// nothing to be dragged *to*. The floor is where the panel's night slider
+/// ends, and the ceiling is the neutral white point, which is as high as
+/// anyone's day went before #41.
+const AXIS_MIN: f32 = nightlightd_core::color::UI_TEMPERATURE_RANGE.0 as f32;
+const AXIS_NEUTRAL: f32 = 6500.0;
+/// The plateau drags' floor, the same one the day slider uses, so the curve
+/// and the slider cannot disagree about what is settable. There is no
+/// matching day *ceiling* here: a plateau can be dragged to the top of
+/// whatever axis is drawn, and [`axis_top`] is what decides that.
 const DAY_FLOOR: u32 = 4000;
 const NIGHT_CEIL: u32 = 4500;
+
 /// How far from the line a pointer still counts as holding it, in points.
 const GRAB: f32 = 12.0;
+
+/// The top of the vertical axis, in kelvin.
+///
+/// [`AXIS_NEUTRAL`] for the settings almost everyone runs, raised in 500 K
+/// steps when the daytime bound has gone past neutral (#41) and would
+/// otherwise be drawn off the top of the frame — where the plateau cannot be
+/// seen, let alone taken hold of. It stops where the screen does, so a
+/// hand-written 90000 in the config draws the axis the daemon will really
+/// produce rather than one with the whole curve squashed into its floor.
+///
+/// Fed the bound the *daemon* holds, never the one a drag is proposing. An
+/// axis computed from the live value would rescale under the hand on every
+/// frame of a plateau drag, moving the very line the pointer is holding;
+/// this way it is settled for the whole gesture and re-fits once on Apply.
+/// Same rule as [`Handle`]: what a gesture is measured against is chosen
+/// before the gesture starts.
+fn axis_top(committed_day_temp: u32) -> f32 {
+    let wanted = committed_day_temp
+        .min(nightlightd_core::color::MAX_TEMPERATURE)
+        .div_ceil(500)
+        * 500;
+    AXIS_NEUTRAL.max(wanted as f32)
+}
 
 /// What a drag on the curve took hold of (#45), chosen when the gesture
 /// starts and held until it ends, so the handle never changes under the
@@ -67,20 +95,22 @@ pub enum Edit {
     NightTemp(u32),
 }
 
-/// Where a plateau drag lands the daytime temperature. Clamped to the same
-/// window the panel's own slider offers, so the two controls for one value
+/// Where a plateau drag lands the daytime temperature. Floored at the same
+/// place the panel's own slider floors, so the two controls for one value
 /// can never disagree about what is settable, and never below the night
 /// bound — the curve is a schedule, and a schedule that runs backwards is
-/// not a picture of anything.
+/// not a picture of anything. The ceiling is the top of the drawn axis: a
+/// drag cannot propose a temperature there is no room to show it at, so
+/// going past neutral (#41) is the slider's job and the curve follows.
 ///
 /// Written as a `min` then a `max` rather than a `clamp`, here and below,
 /// because `clamp` panics when the two bounds cross and a hand-written
 /// config can cross them — a night light that panics is worse than no night
 /// light. The order picks the winner: the schedule's ordering outranks the
 /// control's own floor and ceiling.
-fn held_day_temp(kelvin: f32, night_temp: u32) -> u32 {
+fn held_day_temp(kelvin: f32, night_temp: u32, ceiling: f32) -> u32 {
     (kelvin.round() as u32)
-        .min(6500)
+        .min(ceiling as u32)
         .max(night_temp.max(DAY_FLOOR))
 }
 
@@ -159,14 +189,17 @@ pub fn show(ui: &mut egui::Ui, view: View<'_>, held: &mut Option<Handle>) -> Opt
     let plot = egui::Rect::from_min_max(rect.min, egui::pos2(rect.max.x, rect.max.y - AXIS_HEIGHT));
     let plot_height = plot.height() - 2.0 * PAD;
 
+    // The axis follows the daemon's own day bound, not the one a drag is
+    // staging, so it cannot rescale mid-gesture.
+    let axis_max = axis_top(status.day_temp);
     let to_x = |hour: f32| plot.left() + (hour / 24.0) * plot.width();
     let to_y = |kelvin: f32| {
-        let frac = ((kelvin - AXIS_MIN) / (AXIS_MAX - AXIS_MIN)).clamp(0.0, 1.0);
+        let frac = ((kelvin - AXIS_MIN) / (axis_max - AXIS_MIN)).clamp(0.0, 1.0);
         plot.bottom() - PAD - frac * plot_height
     };
     let to_kelvin = |y: f32| {
         let frac = ((plot.bottom() - PAD - y) / plot_height).clamp(0.0, 1.0);
-        AXIS_MIN + frac * (AXIS_MAX - AXIS_MIN)
+        AXIS_MIN + frac * (axis_max - AXIS_MIN)
     };
     let hour_of_x = |x: f32| ((x - plot.left()) / plot.width() * 24.0).clamp(0.0, 24.0);
     // How far up the day/night span a temperature sits: 1 on the upper
@@ -214,7 +247,9 @@ pub fn show(ui: &mut egui::Ui, view: View<'_>, held: &mut Option<Handle>) -> Opt
     if let Some(handle) = *held {
         if let Some(p) = response.interact_pointer_pos() {
             edit = Some(match handle {
-                Handle::DayLevel => Edit::DayTemp(held_day_temp(to_kelvin(p.y), night_temp)),
+                Handle::DayLevel => {
+                    Edit::DayTemp(held_day_temp(to_kelvin(p.y), night_temp, axis_max))
+                }
                 Handle::NightLevel => Edit::NightTemp(held_night_temp(to_kelvin(p.y), day_temp)),
                 Handle::DayBound | Handle::NightBound => {
                     let hour = f64::from(hour_of_x(p.x));
@@ -351,6 +386,49 @@ pub fn show(ui: &mut egui::Ui, view: View<'_>, held: &mut Option<Handle>) -> Opt
 mod tests {
     use super::*;
 
+    /// The axis is the neutral point for everyone who has not gone past it,
+    /// and grows to hold the day bound for everyone who has (#41).
+    #[test]
+    fn the_axis_only_grows_when_the_day_bound_asks_it_to() {
+        // Nothing anyone had before #41 moves the axis.
+        for day in [1500, 2600, 4500, 6000, 6500] {
+            assert_eq!(axis_top(day), AXIS_NEUTRAL, "{day} K moved the axis");
+        }
+        // Past neutral it rises in 500 K steps, always leaving room for the
+        // plateau it has to draw.
+        assert_eq!(axis_top(6501), 7000.0);
+        assert_eq!(axis_top(8000), 8000.0);
+        assert_eq!(axis_top(9750), 10_000.0);
+        for day in 6500..=10_000 {
+            assert!(
+                axis_top(day) >= day as f32,
+                "{day} K would be drawn off-frame"
+            );
+        }
+        // And a hand-written absurdity draws the screen the daemon will
+        // really produce, not one with the whole curve in its bottom third.
+        assert_eq!(axis_top(900_000), 25_000.0);
+    }
+
+    /// A plateau drag is bounded by the axis it is drawn against, so a taller
+    /// axis is the only thing that lets one reach past neutral.
+    #[test]
+    fn a_plateau_drag_reaches_the_top_of_whatever_axis_is_drawn() {
+        assert_eq!(held_day_temp(9000.0, 4500, axis_top(6500)), 6500);
+        assert_eq!(held_day_temp(9000.0, 4500, axis_top(8000)), 8000);
+        assert_eq!(held_day_temp(7200.0, 4500, axis_top(8000)), 7200);
+    }
+
+    /// Bounds that cross must not panic — a hand-written config can put the
+    /// night bound above the day one, and `clamp` would take the process
+    /// down with it.
+    #[test]
+    fn crossed_bounds_do_not_panic() {
+        assert_eq!(held_day_temp(3000.0, 9000, axis_top(1000)), 9000);
+        assert_eq!(held_night_temp(3000.0, 1000), 1000);
+        assert_eq!(held_night_temp(3000.0, 0), 0);
+    }
+
     /// A drag runs the pointer across the whole plot, including places that
     /// would invert the band. Wherever it lands, the pair stays ordered and
     /// the daemon never sees a band it would have to repair.
@@ -382,23 +460,14 @@ mod tests {
         );
     }
 
-    /// Bounds that cross must not panic — a hand-written config can put the
-    /// night bound above the day one, and `clamp` would take the process
-    /// down with it.
-    #[test]
-    fn crossed_bounds_do_not_panic() {
-        assert_eq!(held_day_temp(3000.0, 9000), 9000);
-        assert_eq!(held_night_temp(3000.0, 1000), 1000);
-        assert_eq!(held_night_temp(3000.0, 0), 0);
-    }
-
     /// The plateaus obey the sliders' window, so dragging the curve can
     /// never reach a value the slider beside it refuses to show.
     #[test]
     fn plateau_drags_stay_inside_the_sliders_window() {
-        assert_eq!(held_day_temp(9000.0, 4500), 6500);
-        assert_eq!(held_day_temp(1000.0, 4500), 4500); // never under the night bound
-        assert_eq!(held_day_temp(1000.0, 1700), DAY_FLOOR);
+        let neutral = axis_top(6500);
+        assert_eq!(held_day_temp(9000.0, 4500, neutral), 6500);
+        assert_eq!(held_day_temp(1000.0, 4500, neutral), 4500); // never under night
+        assert_eq!(held_day_temp(1000.0, 1700, neutral), DAY_FLOOR);
         assert_eq!(held_night_temp(9000.0, 6500), NIGHT_CEIL);
         assert_eq!(held_night_temp(100.0, 6500), 1500);
         assert_eq!(held_night_temp(9000.0, 4200), 4200); // never over the day bound

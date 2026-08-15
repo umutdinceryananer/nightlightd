@@ -25,10 +25,13 @@ use nightlightd_core::world::COASTLINE;
 
 use crate::daemon::{Client, Status};
 
-/// The slider's ends, in kelvin. Below ~2000 K the screen goes deep orange;
-/// 6500 K is neutral (no filter). Lower is warmer.
-const WARMEST: u32 = 1500;
-const NEUTRAL: u32 = 6500;
+/// The manual slider's ends, in kelvin. Below ~2000 K the screen goes deep
+/// orange; 6500 K is neutral (no filter); past it the screen goes bluish
+/// rather than warm (#41). Neutral is therefore a place along this slider
+/// now rather than its end — and it has to be, or someone holding a bluish
+/// day would watch the reading say 6500 K while the screen wore 8000.
+const WARMEST: u32 = nightlightd_core::color::UI_TEMPERATURE_RANGE.0;
+const COOLEST: u32 = nightlightd_core::color::UI_TEMPERATURE_RANGE.1;
 
 /// Where the slider starts before the user has touched it.
 const START_KELVIN: u32 = 2800;
@@ -1325,7 +1328,7 @@ impl Panel {
         // Taking the screen off the sun for a while. Its own card, because it
         // is the one control here that overrules everything above it.
         let reading = format!("{} K", self.kelvin);
-        let slider = egui::Slider::new(&mut self.kelvin, WARMEST..=NEUTRAL);
+        let slider = egui::Slider::new(&mut self.kelvin, WARMEST..=COOLEST);
         let (moved, to_auto) = card(ui, pal.surface, |ui| {
             // Applied live only when the user actually moves it; the daemon
             // pins whatever the slider lands on and switches to manual.
@@ -1369,6 +1372,11 @@ impl Panel {
         // per release, not once per drag frame.
         let day_min = self.night_temp.max(4000);
         let night_max = self.day_temp.min(4500);
+        // The day bound runs past neutral into a bluish daytime (#41), as far
+        // as core says a control should offer. The night bound does not
+        // follow it up there: the whole point of the lower bound is to be
+        // warmer than the upper one.
+        let (night_min, day_max) = nightlightd_core::color::UI_TEMPERATURE_RANGE;
         // `update_while_editing(false)` on every slider: typing into the value
         // field must commit once, on Enter or focus loss — not per keystroke,
         // where a half-typed "75" would already have sent 7.
@@ -1379,7 +1387,7 @@ impl Panel {
                 pal,
                 "Daytime",
                 format!("{} K", self.day_temp),
-                egui::Slider::new(&mut self.day_temp, day_min..=6500),
+                egui::Slider::new(&mut self.day_temp, day_min..=day_max),
             );
             if day.drag_stopped() || (day.changed() && !day.dragged()) {
                 self.client.set_day_temp(self.day_temp);
@@ -1393,7 +1401,7 @@ impl Panel {
                 pal,
                 "Nighttime",
                 format!("{} K", self.night_temp),
-                egui::Slider::new(&mut self.night_temp, 1500..=night_max),
+                egui::Slider::new(&mut self.night_temp, night_min..=night_max),
             );
             if night.drag_stopped() || (night.changed() && !night.dragged()) {
                 self.client.set_night_temp(self.night_temp);
@@ -2137,7 +2145,7 @@ impl eframe::App for Panel {
         if let Some(status) = &status
             && status.following
         {
-            self.kelvin = status.temperature.clamp(WARMEST, NEUTRAL);
+            self.kelvin = status.temperature.clamp(WARMEST, COOLEST);
         }
 
         // Seed the day/night sliders from the daemon once; after that they are
@@ -2164,7 +2172,7 @@ impl eframe::App for Panel {
             // Seed the warm slider from what is actually applied, so a panel
             // opened during a manual override shows the truth instead of the
             // compile-time default (the following-mode mirror only covers auto).
-            self.kelvin = status.temperature.clamp(WARMEST, NEUTRAL);
+            self.kelvin = status.temperature.clamp(WARMEST, COOLEST);
             self.anchors_synced = true;
         }
 

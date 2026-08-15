@@ -16,7 +16,7 @@ mod theme;
 use std::io;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use nightlightd_core::color::temperature_to_rgb;
+use nightlightd_core::color::{UI_TEMPERATURE_RANGE, temperature_to_rgb};
 use nightlightd_core::location::nearest_zone;
 use nightlightd_core::schedule::{Milestone, milestones};
 use nightlightd_core::solar::solar_elevation;
@@ -39,9 +39,22 @@ use tui_slider::Slider;
 use crate::daemon::{Client, Status};
 use crate::theme::{Palette, THEMES};
 
-/// Bounds and step for the night-temperature keys, mirroring the panel.
-const NIGHT_MIN: u32 = 1500;
+/// Bounds and step for the temperature keys, mirroring the panel. Both ends
+/// come from core so the two interfaces cannot drift apart about what is
+/// settable; the day end runs past neutral into a bluish daytime (#41).
+const NIGHT_MIN: u32 = UI_TEMPERATURE_RANGE.0;
+const DAY_MAX: u32 = UI_TEMPERATURE_RANGE.1;
 const NIGHT_STEP: u32 = 100;
+
+/// Where a settings rail ends, for a given day bound. The rails only report,
+/// so unlike a slider they need not reach everything settable — and if they
+/// did, everyone still on a 6500 K day would watch both bounds shrink into
+/// the first half of the rail to make room for a range they never use. The
+/// scale is the familiar one until a day bound asks for more, the same rule
+/// the panel's curve axis follows.
+fn rail_top(day_temp: u32) -> f64 {
+    f64::from(day_temp.clamp(6500, DAY_MAX))
+}
 
 /// One full day in the `--demo` compressed clock, in real seconds (#30).
 /// Grown from 28 when the band editor and the day summary joined the tour:
@@ -685,7 +698,7 @@ impl App {
                     } else {
                         status.day_temp.saturating_sub(NIGHT_STEP)
                     }
-                    .min(6500)
+                    .min(DAY_MAX)
                     .max(status.night_temp);
                     self.client.set_day_temp(day);
                     self.last_poll = None;
@@ -1300,14 +1313,22 @@ impl App {
                 .map(|s| format!("{:.0}%", s.night_brightness * 100.0)),
         );
         // Each slider row carries (value, min, max) for the rail underneath.
-        let day_rail = self
-            .status
-            .as_ref()
-            .map(|s| (f64::from(s.day_temp), f64::from(NIGHT_MIN), 6500.0));
-        let night_rail = self
-            .status
-            .as_ref()
-            .map(|s| (f64::from(s.night_temp), f64::from(NIGHT_MIN), 6500.0));
+        // Both temperature rails share one scale, so the two bounds can be
+        // read against each other rather than each against itself.
+        let day_rail = self.status.as_ref().map(|s| {
+            (
+                f64::from(s.day_temp),
+                f64::from(NIGHT_MIN),
+                rail_top(s.day_temp),
+            )
+        });
+        let night_rail = self.status.as_ref().map(|s| {
+            (
+                f64::from(s.night_temp),
+                f64::from(NIGHT_MIN),
+                rail_top(s.day_temp),
+            )
+        });
         let gamma_rail = self
             .status
             .as_ref()
@@ -1440,7 +1461,7 @@ impl App {
 
         // The temperature rows carry a real slider (tui-slider) on the row
         // reserved beneath each — the segmented ▰▱ style, no thumb: filled to
-        // where the bound sits in the shared NIGHT_MIN..=6500 K range, ticks in
+        // where the bound sits in the shared range both rails use, ticks in
         // the accent so they track the live tint; the empty ticks brighten when
         // their row is selected.
         for (y, (value, min, max), selected) in sliders {
@@ -3303,6 +3324,23 @@ mod tests {
         }
         assert!(approx(band.day_elevation, BAND_UI_MAX));
         assert!(approx(band.night_elevation, BAND_UI_MIN));
+    }
+
+    /// The rail keeps the scale everyone knows until a day bound past neutral
+    /// (#41) needs room, and never leaves the bound off the end of it.
+    #[test]
+    fn the_rail_grows_only_for_a_day_bound_that_needs_it() {
+        for day in [1500, 2600, 4500, 6500] {
+            assert_eq!(rail_top(day), 6500.0, "{day} K rescaled the rail");
+        }
+        assert_eq!(rail_top(8000), 8000.0);
+        assert_eq!(rail_top(DAY_MAX), f64::from(DAY_MAX));
+        // A hand-written config past what any control offers still draws a
+        // rail, with the bound at its end rather than off it.
+        assert_eq!(rail_top(90_000), f64::from(DAY_MAX));
+        for day in 1500..=DAY_MAX {
+            assert!(rail_top(day) >= f64::from(day.min(DAY_MAX)));
+        }
     }
 
     /// What escape asks about: a draft that has not moved needs no question,
