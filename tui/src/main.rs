@@ -16,7 +16,7 @@ mod theme;
 use std::io;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use nightlightd_core::color::{UI_TEMPERATURE_RANGE, temperature_to_rgb};
+use nightlightd_core::color::{MAX_TEMPERATURE, UI_TEMPERATURE_RANGE, temperature_to_rgb};
 use nightlightd_core::location::nearest_zone;
 use nightlightd_core::schedule::{Milestone, milestones};
 use nightlightd_core::solar::solar_elevation;
@@ -49,11 +49,15 @@ const NIGHT_STEP: u32 = 100;
 /// Where a settings rail ends, for a given day bound. The rails only report,
 /// so unlike a slider they need not reach everything settable — and if they
 /// did, everyone still on a 6500 K day would watch both bounds shrink into
-/// the first half of the rail to make room for a range they never use. The
-/// scale is the familiar one until a day bound asks for more, the same rule
-/// the panel's curve axis follows.
+/// the first half of the rail to make room for a range they never use.
+///
+/// So the scale is the familiar one until a day bound asks for more, and
+/// then it follows that bound wherever the daemon holds it — the same rule,
+/// and the same ceiling, as the panel's curve axis. Stopping at what a
+/// *control* offers instead would have left a hand-written 15000 K day
+/// saturating the rail in one client while the other drew it properly.
 fn rail_top(day_temp: u32) -> f64 {
-    f64::from(day_temp.clamp(6500, DAY_MAX))
+    f64::from(day_temp.clamp(6500, MAX_TEMPERATURE))
 }
 
 /// One full day in the `--demo` compressed clock, in real seconds (#30).
@@ -3335,11 +3339,12 @@ mod tests {
         }
         assert_eq!(rail_top(8000), 8000.0);
         assert_eq!(rail_top(DAY_MAX), f64::from(DAY_MAX));
-        // A hand-written config past what any control offers still draws a
-        // rail, with the bound at its end rather than off it.
-        assert_eq!(rail_top(90_000), f64::from(DAY_MAX));
-        for day in 1500..=DAY_MAX {
-            assert!(rail_top(day) >= f64::from(day.min(DAY_MAX)));
+        // A hand-written bound past what any control offers is still drawn
+        // against a scale that holds it, exactly as the panel's axis is.
+        assert_eq!(rail_top(15_000), 15_000.0);
+        assert_eq!(rail_top(90_000), f64::from(MAX_TEMPERATURE));
+        for day in 1500..=MAX_TEMPERATURE {
+            assert!(rail_top(day) >= f64::from(day));
         }
     }
 

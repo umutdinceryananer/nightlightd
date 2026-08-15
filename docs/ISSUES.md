@@ -1037,6 +1037,33 @@ already at the default leaves nothing to confirm.
 - **Difficulty:** Easy to describe, fiddly to do
 - **Target:** v0.4
 
+### #52 The curve keeps drawing a schedule nobody is following
+
+- **What:** During a manual hold the panel's day/night curve carries on
+  at full strength, and its "you are here" dot sits at the temperature
+  the *schedule* would be applying — while the readout two lines above
+  says `2800 K · MANUAL · held by hand`. On a sunny afternoon the one
+  window says 2800 and 6500 at the same time. The dashboard's now chart
+  has the same shape and needs the same answer.
+- **Why:** The codebase already decided this, three lines from the bug.
+  The little sky beside the readout is hidden in manual mode, and the
+  reason is written there: "beside 'manual' it would be a picture of
+  something that is not happening." The curve is a bigger picture of
+  the same thing that is not happening.
+- **How:** Draw the curve faint when `following` is false, and lay the
+  held temperature across the day as a flat line with the dot on it —
+  "this is what would happen, this is what is happening". A cheaper
+  version is to mute the curve and drop the dot. The daemon needs no
+  change; `Status.following` is already on the wire.
+- **Found:** 2026-08-15, by dragging "Hold at" and expecting the curve
+  to move. It should not — the curve is the schedule and that slider is
+  the control for leaving it — but the question only came up because
+  nothing on screen says the schedule is no longer in force.
+- **Done when:** A manual hold is legible from the chart alone, in both
+  the panel and the dashboard.
+- **Difficulty:** Easy
+- **Target:** v0.3.1
+
 ---
 
 ## Ordering summary
