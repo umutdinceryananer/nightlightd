@@ -646,6 +646,16 @@ applying 25000 — reproduced live, then closed by holding what the *state*
 accepts to what the table can render, at both doors, leaving the file
 itself verbatim.
 
+The first pass closed only half the hand-written hole: it held each bound's
+*magnitude* and never checked the pair's *order*, which only a hand-edited
+file can cross — the setters have kept it since AUDIT M4. Run as written,
+`night_temp = 12000` (a typo for 1200) is a schedule in reverse: the screen
+turns bluish at night, silently. A crossed pair now drops to the defaults
+whole, the same answer `Band::sane()` gives a nonsense elevation pair (#39)
+— keeping either half would be a guess about which line holds the typo —
+with one warning in the log and the file left as its author wrote it.
+Verified live: day 6500 / night 12000 in the file ran as 6500/4500.
+
 The two charts that draw against a fixed vertical scale — the panel's curve
 axis and the dashboard's settings rails — grow only when a day bound above
 neutral needs the room, so nobody still on 6500 watches their picture shrink

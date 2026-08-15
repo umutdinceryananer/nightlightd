@@ -187,6 +187,22 @@ fn run_daemon(no_reset: bool) {
     let loaded = config::load();
     let config = loaded.config;
 
+    // What the daemon will run, which is not always what the file says: a
+    // typo'd bound is held to the renderable table and a crossed pair drops
+    // to the defaults. The file itself is left as its author wrote it; the
+    // one trace is the warning below, so a screen that ignores a config line
+    // is at least explicable from the log.
+    let (day_temp, night_temp) = state::sane_temperatures(config.day_temp, config.night_temp);
+    if (day_temp, night_temp) != (config.day_temp, config.night_temp) {
+        tracing::warn!(
+            "config temperatures (day {} K / night {} K) cannot be run as written; using day {} K / night {} K",
+            config.day_temp,
+            config.night_temp,
+            day_temp,
+            night_temp
+        );
+    }
+
     let waker = match waker::waker() {
         Ok(waker) => waker,
         Err(error) => fail("cannot create the wakeup channel", Box::new(error)),
@@ -197,8 +213,8 @@ fn run_daemon(no_reset: bool) {
         mode: config.mode(),
         configured_mode: config.mode(),
         config_damaged: loaded.damaged,
-        day_temp: state::renderable(config.day_temp),
-        night_temp: state::renderable(config.night_temp),
+        day_temp,
+        night_temp,
         gamma: config.gamma,
         day_brightness: config.day_brightness,
         night_brightness: config.night_brightness,
@@ -241,11 +257,7 @@ fn run_daemon(no_reset: bool) {
         }
     });
 
-    tracing::info!(
-        "daemon started (day {} K / night {} K)",
-        config.day_temp,
-        config.night_temp
-    );
+    tracing::info!("daemon started (day {day_temp} K / night {night_temp} K)");
     if let Err(error) = x11::daemon_loop(&shared, &waker, &resumed, &terminate) {
         fail("daemon failed", error);
     }

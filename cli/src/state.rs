@@ -27,6 +27,29 @@ pub fn renderable(kelvin: u32) -> u32 {
     kelvin.clamp(MIN_TEMPERATURE, MAX_TEMPERATURE)
 }
 
+/// The temperature pair as the daemon will run it: each bound held to what
+/// [`renderable`] allows, and a crossed pair — night above day — dropped to
+/// the defaults entirely.
+///
+/// Only a hand-edited file can cross the pair; the D-Bus setters have kept
+/// the order since AUDIT M4. Run as written, a crossed pair is a schedule in
+/// reverse: the screen turns *bluish* at night, the one thing a night light
+/// exists not to do, silently and till the file is next opened. Falling back
+/// rather than repairing is the same answer `Band::sane()` gives a nonsense
+/// elevation pair (#39): keeping either half would be a guess about which
+/// line holds the typo, and both wrong guesses run all day. The order is
+/// checked after the clamp, which cannot create a crossing (clamping is
+/// monotone) but can close one.
+pub fn sane_temperatures(day: u32, night: u32) -> (u32, u32) {
+    let (day, night) = (renderable(day), renderable(night));
+    if day >= night {
+        (day, night)
+    } else {
+        let fallback = crate::config::Config::default();
+        (fallback.day_temp, fallback.night_temp)
+    }
+}
+
 /// The daemon's live state.
 pub struct State {
     /// Whether the filter is on. When off, the screen is left neutral.
@@ -88,4 +111,40 @@ pub type Shared = Arc<Mutex<State>>;
 /// panicking — a night light must not die because some thread panicked.
 pub fn lock(state: &Shared) -> MutexGuard<'_, State> {
     state.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The pair everyone actually writes passes through untouched, including
+    /// the equal pair the D-Bus setters can produce.
+    #[test]
+    fn an_ordered_pair_is_run_as_written() {
+        assert_eq!(sane_temperatures(6500, 4500), (6500, 4500));
+        assert_eq!(sane_temperatures(8000, 1500), (8000, 1500));
+        assert_eq!(sane_temperatures(5000, 5000), (5000, 5000));
+    }
+
+    /// A crossed pair is the one hand-written typo the setters cannot make.
+    /// It drops to the defaults whole — the same answer Band::sane() gives —
+    /// because run as written it is a schedule in reverse: bluish at night.
+    #[test]
+    fn a_crossed_pair_drops_to_the_defaults() {
+        let fallback = crate::config::Config::default();
+        let want = (fallback.day_temp, fallback.night_temp);
+        // The motivating typo: night_temp = 12000 for 1200.
+        assert_eq!(sane_temperatures(6500, 12_000), want);
+        assert_eq!(sane_temperatures(4499, 4500), want);
+    }
+
+    /// The magnitude clamp runs first and can *close* a crossing: a pair
+    /// that disagrees only beyond the table agrees once both are held to it.
+    #[test]
+    fn a_crossing_that_exists_only_beyond_the_table_is_closed_not_defaulted() {
+        assert_eq!(sane_temperatures(30_000, 90_000), (25_000, 25_000));
+        assert_eq!(sane_temperatures(500, 800), (1000, 1000));
+        // And an ordered pair beyond the table stays ordered, merely clamped.
+        assert_eq!(sane_temperatures(90_000, 1200), (25_000, 1200));
+    }
 }
