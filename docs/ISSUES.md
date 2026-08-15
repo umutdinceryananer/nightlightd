@@ -942,10 +942,11 @@ already at the default leaves nothing to confirm.
 - **Not the AUR, or not yet.** Arch supports split packages from one
   PKGBUILD, but the win there is mostly cosmetic: an Arch desktop
   already has the GL stack, and the minority without it builds from
-  source anyway. What a split would definitely triple is the
-  maintenance surface of a package that is *already a release behind*
-  (the AUR carries 0.2.0 against 0.2.1 released). Fix the lag before
-  adding package names to it.
+  source anyway. What a split would triple is the maintenance surface
+  of a package that has already proved easy to leave behind — 0.2.1
+  never reached it and it served 0.2.0 for a month. It is current as
+  of 0.3.0, and `scripts/aur-push.sh` is what keeps it that way; do
+  not add package names until that has held for a release or two.
 - **Detail:** `cargo deb` does this with
   `[package.metadata.deb.variants]` — three invocations in the release
   workflow instead of one, each with its own `depends`. The GUI and TUI
