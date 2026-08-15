@@ -57,9 +57,16 @@ that cannot be taken back.
 
 ## After CI
 
-- [ ] musl tarball: the static daemon + tui pair, built with the musl
-      target, smoke-tested (`./nightlightd --status` against a live
-      daemon), uploaded to the release.
+- [ ] musl tarball: `scripts/musl-tarball.sh`, then smoke-test it
+      (`./nightlightd --status` against a live daemon) and upload it.
+      The script exists because assembling this by hand drifted twice
+      over: 0.3.0 first shipped without the `INSTALL` every release
+      before it carried, while the README went on telling people to
+      follow it, and the `INSTALL` that had been shipping said the
+      bundled unit starts `~/.local/bin/nightlightd` when the unit
+      said `~/.cargo/bin` — so anyone following it literally got a
+      service that would not start. The script checks both before it
+      writes the archive.
 - [ ] AUR: bump `pkgver` in `dist/aur/PKGBUILD`, put the new archive's
       checksum in it, then `scripts/aur-push.sh`. The script verifies
       the checksum against the tag's real tarball before it pushes

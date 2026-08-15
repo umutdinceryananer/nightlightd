@@ -1,0 +1,16 @@
+Static binaries. No library dependencies, they run on any x86_64 Linux
+with X11 (glibc or musl based, any release).
+
+  install -Dm755 nightlightd     ~/.local/bin/nightlightd
+  install -Dm755 nightlight-tui  ~/.local/bin/nightlight-tui
+  install -Dm644 nightlightd.service ~/.config/systemd/user/nightlightd.service
+  systemctl --user daemon-reload
+  systemctl --user enable --now nightlightd
+
+The bundled service file starts %h/.local/bin/nightlightd, which is where
+the lines above put it. If you install the binary somewhere else, edit
+ExecStart to match.
+
+This tarball carries the daemon and the terminal dashboard only. The tray
+icon and the settings panel need a graphical toolkit and cannot be built
+static, so they are in the .deb and the AUR package instead.

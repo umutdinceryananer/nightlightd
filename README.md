@@ -151,7 +151,7 @@ systemctl --user enable --now nightlightd
 
 ### Any distro (static binaries)
 
-The [release](https://github.com/umutdinceryananer/nightlightd/releases/latest) also carries a musl tarball, fully static builds of the daemon and the terminal dashboard with no library dependencies, for x86_64 Linux of any age. Unpack and follow the bundled `INSTALL`.
+The [release](https://github.com/umutdinceryananer/nightlightd/releases/latest) also carries a musl tarball, fully static builds of the daemon and the terminal dashboard with no library dependencies, for x86_64 Linux of any age. Unpack and follow the bundled `INSTALL`. The tray and the panel are not in it — they need a graphical toolkit and cannot be built static — so take those from the `.deb` or the AUR.
 
 ### From source
 
@@ -184,7 +184,7 @@ Tracked in [`docs/ISSUES.md`](docs/ISSUES.md).
 | M3 | Daemon and event loop | ✅ done |
 | M4 | DBus, CLI, systemd, suspend | ✅ done |
 | M5 | Tray icon, settings panel, terminal dashboard | ✅ done |
-| M6 | Packaging and release | 🔶 v0.2.1 released. The AUR is a release behind at 0.2.0; Flatpak remains |
+| M6 | Packaging and release | 🔶 v0.3.0 released, on the AUR. Flatpak remains |
 
 The timezone fallback went upstream before the Rust port of it was written. [`chinstrap/gammastep!28`](https://gitlab.com/chinstrap/gammastep/-/merge_requests/28), opened 2026-07-10, adds the same provider in C, where it helps far more people. It has been awaiting review since. Upstream's last commit is from March 2025 and its oldest open merge request dates to 2020, so a long wait is expected. What the attempt revealed is recorded in [`docs/PRIOR-ART.md`](docs/PRIOR-ART.md) under "Upstream attempt". If it lands and the remaining defects prove fixable upstream, this repository becomes obsolete, which was always an acceptable outcome.
 
