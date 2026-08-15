@@ -37,34 +37,72 @@ clap = { version = "4", features = ["derive"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# The .deb (#26). Bundles all three binaries plus the systemd user unit and the
-# tray's autostart entry. Build the whole workspace first, then package without
-# rebuilding:
+# The .deb (#26), now two of them (#50). Build the whole workspace first, then
+# package each without rebuilding:
 #   cargo build --release --workspace
 #   cargo deb -p nightlightd --no-build
-# `$auto` reads the binaries' shared-library needs (the panel pulls in GL and
-# X11 libraries via eframe) so apt installs them.
+#   cargo deb -p nightlightd --no-build --variant panel
+#
+# Two rather than one because the four binaries do not cost the same thing.
+# Measured on 0.3.1: the daemon, the tray and the dashboard link libc and
+# nothing else, and come to 16.6 MB between them; the panel alone is 26.6 MB
+# and needs eight X11 and GL libraries that drag in the whole mesa stack. So
+# the panel is its own package and everyone else stops paying for it.
+#
+# Deliberately not three. Splitting the dashboard out as well would save a
+# 4.6 MB file and not one library, in exchange for a third release asset to
+# keep in step — and there is no apt repository here, so every extra package
+# is another file a human has to know to download.
 [package.metadata.deb]
 maintainer = "Umut Dincer Yananer <umutdncr@gmail.com>"
 copyright = "2026 Umut Dincer Yananer"
 license-file = ["../LICENSE", "0"]
 section = "x11"
 priority = "optional"
-# $auto covers what the linker records (libc). The panel's GL and X11 libraries
-# are dlopen'd by eframe/winit at runtime, so ldd can't see them and they must
-# be listed by hand or the panel won't start on a minimal install.
-depends = "$auto, libgl1, libegl1, libxkbcommon0, libxkbcommon-x11-0, libx11-6, libxcursor1, libxrandr2, libxi6"
+# $auto reads what the linker recorded, which for these three is libc, libgcc
+# and libm. The GL and X11 list that used to be here was for the panel and has
+# gone with it to the variant below.
+depends = "$auto"
 extended-description = """\
 Zero-config screen colour temperature daemon for X11. Reads your timezone to \
 find your location, warms the screen after sunset, refuses to run twice, and \
-survives suspend. Ships a system-tray icon, a settings panel with an \
-f.lux-style day/night curve, and a terminal dashboard."""
+survives suspend. Ships a system-tray icon and a terminal dashboard. The \
+settings window, which is the only part needing a graphics stack, is in \
+nightlightd-panel."""
 assets = [
     ["target/release/nightlightd", "usr/bin/", "755"],
     ["target/release/nightlight-tray", "usr/bin/", "755"],
-    ["target/release/nightlight-panel", "usr/bin/", "755"],
     ["target/release/nightlight-tui", "usr/bin/", "755"],
     ["../dist/deb/nightlightd.service", "usr/lib/systemd/user/nightlightd.service", "644"],
     ["../dist/nightlight-tray.desktop", "etc/xdg/autostart/nightlight-tray.desktop", "644"],
     ["../README.md", "usr/share/doc/nightlightd/README.md", "644"],
+]
+
+# The settings window, on its own (#50). Everything not named here is
+# inherited from the package above, including the maintainer and the licence.
+#
+#   cargo deb -p nightlightd --no-build --variant panel
+[package.metadata.deb.variants.panel]
+name = "nightlightd-panel"
+# The eight are dlopen'd by eframe/winit at runtime, so the linker never
+# records them and $auto cannot find them; they are listed by hand or the
+# window does not open on a minimal install. `nightlightd` is unversioned on
+# purpose: a panel and a daemon of different versions already say so for
+# themselves (#42) rather than failing, and a versioned dependency here would
+# be one more line to remember to bump every release.
+depends = "$auto, nightlightd, libgl1, libegl1, libxkbcommon0, libxkbcommon-x11-0, libx11-6, libxcursor1, libxrandr2, libxi6"
+# /usr/bin/nightlight-panel shipped inside `nightlightd` up to and including
+# 0.3.0. Without these two, dpkg refuses to unpack this package over that
+# file and the upgrade stops halfway. The version is historical and never
+# needs bumping: it names the release the file moved in, not the current one.
+replaces = "nightlightd (<< 0.3.1)"
+breaks = "nightlightd (<< 0.3.1)"
+extended-description = """\
+The settings window for nightlightd: the day's colour temperature drawn as a \
+curve you can take hold of, the transition band, a world map for pinning your \
+location, and every bound the daemon runs on. Needs a graphics stack, which \
+is why it is packaged apart from the daemon."""
+assets = [
+    ["target/release/nightlight-panel", "usr/bin/", "755"],
+    ["../dist/nightlight-panel.desktop", "usr/share/applications/nightlight-panel.desktop", "644"],
 ]

@@ -11,6 +11,6 @@ members = ["core", "cli", "tray", "panel", "tui"]
 # Fields shared by every crate in the workspace. Each crate opts in with
 # `<field>.workspace = true`, so the version and edition live in one place.
 [workspace.package]
-version = "0.3.0"
+version = "0.3.1"
 edition = "2024"
 license = "GPL-3.0-or-later"

@@ -979,6 +979,62 @@ already at the default leaves nothing to confirm.
 
 ### #50 Interfaces you did not ask for
 
+**Done.** Shipped in v0.3.1, as *two* packages rather than the three
+proposed here, and the difference came from measuring instead of assuming.
+
+The issue put the tray in with the panel. It does not belong there: `ldd`
+finds libc, libgcc and libm on the daemon, the tray and the dashboard alike,
+and nothing else. All eight libraries are for the panel, which `dlopen`s them
+through eframe and winit. The tray talks StatusNotifierItem over D-Bus and
+sends its icon as pixels, so it needs no display libraries at all. Sizes said
+the same thing louder: 6.7 + 5.3 + 4.6 MB for the three against 26.6 MB for
+the panel alone.
+
+So `nightlightd` carries the daemon, the CLI, the tray and the dashboard, and
+`nightlightd-panel` carries the window. Someone who types the obvious name
+gets a working desktop program with an icon by the clock; the second package
+is for the settings window, and nothing else changes. Splitting the dashboard
+out as well was considered and rejected: it would save a 4.6 MB file and not
+one library, in exchange for a third asset on a release page that has no apt
+repository behind it, where every package is a file a human must know to
+download.
+
+Verified on the built packages, not claimed: `nightlightd` declares
+`Depends: libc6 (>= 2.39)` and nothing more, and `apt-get install --no-act`
+on it pulls exactly one package. The release workflow now asserts this on
+every tag, because a dependency added to the wrong table would silently put
+the whole mesa stack back and nothing else would notice.
+
+Three things the split turned up that the issue did not ask about:
+
+- **The panel had no applications-menu entry.** The only ways in were the
+  tray's "Settings…" item and typing the binary's name, which was survivable
+  while every install carried all four programs. Once someone installs the
+  panel deliberately, a program that appears nowhere in the menu cannot be
+  found. It now ships `dist/nightlight-panel.desktop`.
+- **The tray offered "Settings…" for a panel that may not exist**, and the
+  spawn failure was swallowed, so the click did nothing at all. The item is
+  now only built when the binary is actually there, re-checked on every
+  refresh so installing the panel later needs no restart.
+- **`Replaces`/`Breaks` are not optional and neither is the version bump.**
+  `/usr/bin/nightlight-panel` moves between packages, so without them dpkg
+  refuses to unpack and the upgrade stops halfway. Both name `<< 0.3.1`,
+  which meant the tree had to carry 0.3.1 before the two packages would
+  install together at all — reproduced, then fixed by bumping.
+
+**What upgraders lose, which nothing can fix here.** The panel was in the
+main package up to 0.3.0. Anyone who upgrades `nightlightd` alone has the
+binary removed by dpkg and the tray's "Settings…" quietly stops appearing.
+There is no apt repository to resolve a `Recommends` against, so this is a
+release-note and README problem rather than a packaging one, and both now
+say it.
+
+**The AUR and the musl tarball are untouched**, deliberately. The AUR keeps
+all four binaries in one package: an Arch desktop already has the GL stack,
+and this issue's own note about not multiplying package names until the
+packaging has held for a release or two still stands. The tarball has shipped
+daemon + dashboard only since it existed.
+
 - **What:** Stop making one install carry all four binaries. Split the
   `.deb` into `nightlightd` (daemon, CLI, systemd unit),
   `nightlightd-tui` (the dashboard) and `nightlightd-gui` (the panel
@@ -1014,7 +1070,7 @@ already at the default leaves nothing to confirm.
   no GL library, and `apt install nightlightd-gui` still gets a working
   panel on a minimal Mint.
 - **Difficulty:** Medium
-- **Target:** v0.4
+- **Target:** v0.4, shipped in v0.3.1
 
 ### #51 Photograph the tray menu
 

@@ -1,0 +1,33 @@
+# nightlightd settings panel — XDG application entry (#50).
+#
+# Goes to /usr/share/applications, not /etc/xdg/autostart: the panel is a
+# window you open, not something that starts with the session. The tray's
+# entry is the other way round and that is the whole difference between them.
+#
+# It exists because the panel became its own package. Until then the only
+# ways in were the tray's "Settings…" item and typing the binary's name, and
+# that was survivable while every install carried all four programs. Once
+# someone chooses to install the panel on its own, a program that appears
+# nowhere in the menu is a program they cannot find.
+#
+# Name is the package's own name, not "Night Light": GNOME, KDE, Cinnamon and
+# Windows all ship a feature called exactly that, which is the collision
+# ISSUES.md records as the reason the project is `nightlightd` at all. The
+# menu says what it does through GenericName instead, and Keywords carries
+# the words someone would actually search for — including `redshift`, which
+# is what most people looking for this will type.
+#
+# No StartupNotify: the key promises the desktop a window will announce
+# itself, and an unfulfilled promise leaves a busy cursor spinning for the
+# timeout. Left off rather than claimed.
+
+[Desktop Entry]
+Type=Application
+Name=nightlightd
+GenericName=Screen Colour Temperature
+Comment=Warm the screen after sunset: the day's curve, the transition band, and where you are
+Exec=nightlight-panel
+Icon=night-light-symbolic
+Terminal=false
+Categories=Settings;DesktopSettings;
+Keywords=night;light;redshift;gammastep;colour;color;temperature;gamma;blue;warm;sunset;

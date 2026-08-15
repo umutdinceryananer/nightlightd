@@ -29,8 +29,31 @@ jobs:
       - name: Install cargo-deb
         run: cargo install cargo-deb --locked
 
-      - name: Package .deb
-        run: cargo deb -p nightlightd --no-build
+      # Two packages since #50: the daemon, tray and dashboard need libc and
+      # nothing else, while the panel alone needs eight X11/GL libraries.
+      # The upload glob below takes both.
+      - name: Package the .debs
+        run: |
+          cargo deb -p nightlightd --no-build
+          cargo deb -p nightlightd --no-build --variant panel
+
+      # The point of the split, asserted rather than trusted. A stray
+      # dependency added to the wrong table would put the whole mesa stack
+      # back on every headless install, and nothing else here would notice.
+      - name: The daemon package must pull in no graphics stack
+        run: |
+          depends=$(dpkg-deb -f target/debian/nightlightd_*_amd64.deb Depends)
+          echo "nightlightd Depends: $depends"
+          if echo "$depends" | grep -Eq 'libgl|libegl|libxkbcommon|libx11|libxcursor|libxrandr|libxi'; then
+            echo "::error::the daemon package declares a graphics library (#50)"
+            exit 1
+          fi
+          panel=$(dpkg-deb -f target/debian/nightlightd-panel_*_amd64.deb Depends)
+          echo "nightlightd-panel Depends: $panel"
+          echo "$panel" | grep -q 'libgl1' || {
+            echo "::error::the panel package lost its graphics libraries"
+            exit 1
+          }
 
       # checkout fetches the tag lightweight; force-fetch the real annotated
       # object so its message — the release notes — is readable.

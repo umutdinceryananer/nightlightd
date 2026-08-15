@@ -29,8 +29,8 @@ that cannot be taken back.
 - [ ] Bump `version` in the workspace `Cargo.toml`. One line; all five
       crates inherit it. Then `cargo build` so `Cargo.lock` follows,
       and commit both together.
-- [ ] README: the Status paragraph's version and the `.deb` filename
-      in Install.
+- [ ] README: the Status paragraph's version and *both* `.deb`
+      filenames in Install — there are two packages since #50.
 - [ ] `docs/ISSUES.md`: every issue this release closes carries its
       Done mark.
 - [ ] The showcase, against the build you are about to ship. The
@@ -80,8 +80,13 @@ that cannot be taken back.
       is down, the release is not finished — leave the checklist open
       rather than calling it shipped, because nothing else will
       remind you.
-- [ ] The release page renders, the `.deb` installs on a stock Mint,
-      `systemctl --user restart nightlightd` picks the new binary up.
+- [ ] The release page renders, both `.deb`s install on a stock Mint —
+      `nightlightd` alone first, then `nightlightd-panel` beside it —
+      and `systemctl --user restart nightlightd` picks the new binary
+      up. The workflow already refuses to publish a `nightlightd` that
+      declares a graphics library, so the thing to check by hand is the
+      other half: that the panel actually opens from the applications
+      menu once its package is on.
 
 ## Afterwards
 

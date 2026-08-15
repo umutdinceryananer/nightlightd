@@ -283,14 +283,28 @@ impl ksni::Tray for NightLight {
                 .into(),
             );
         }
+        // Only when there is a panel to open. It ships as its own package
+        // (#50) because it is the one binary of the four that needs a
+        // graphics stack, so a complete and sensible install — daemon, this
+        // tray, the dashboard — can be without it, and a "Settings…" that
+        // silently does nothing would be worse than no "Settings…" at all.
+        //
+        // Asked here rather than once at startup, which costs a `stat` every
+        // REFRESH and means installing the panel later is picked up within
+        // five seconds instead of needing the tray restarted: ksni's
+        // `update` re-runs `update_menu`, which calls this method again.
+        if located(PANEL).is_some() {
+            items.push(
+                StandardItem {
+                    label: "Settings…".into(),
+                    icon_name: "preferences-system".into(),
+                    activate: Box::new(|_| open_panel()),
+                    ..Default::default()
+                }
+                .into(),
+            );
+        }
         items.extend([
-            StandardItem {
-                label: "Settings…".into(),
-                icon_name: "preferences-system".into(),
-                activate: Box::new(|_| open_panel()),
-                ..Default::default()
-            }
-            .into(),
             MenuItem::Separator,
             StandardItem {
                 label: "Quit".into(),
@@ -394,22 +408,49 @@ fn relaunch_once() {
         .exec();
 }
 
-/// The named sibling binary when it exists next to this one (the four
-/// install together, which survives an autostart PATH that lacks
-/// `~/.cargo/bin`), otherwise the bare name so the PATH lookup gets a real
-/// chance instead of being dead code.
-fn sibling(name: &str) -> std::path::PathBuf {
-    std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(|dir| dir.join(name)))
-        .filter(|path| path.exists())
-        .unwrap_or_else(|| std::path::PathBuf::from(name))
+/// The first of `dirs` holding a file called `name`.
+///
+/// Split out from the two lookups below because it is the part worth
+/// testing: everything else is `current_exe` and `PATH`, which a test can
+/// only assert about the machine it runs on.
+fn first_holding(
+    dirs: impl Iterator<Item = std::path::PathBuf>,
+    name: &str,
+) -> Option<std::path::PathBuf> {
+    dirs.map(|dir| dir.join(name)).find(|path| path.is_file())
 }
+
+/// Where a companion binary actually is: next to this one first (they
+/// install together, which survives an autostart `PATH` that lacks
+/// `~/.cargo/bin`), otherwise wherever `PATH` has it. `None` means it is
+/// not installed at all, which since #50 is an ordinary state rather than a
+/// broken one — the panel is its own package now.
+fn located(name: &str) -> Option<std::path::PathBuf> {
+    let beside = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf));
+    first_holding(beside.into_iter(), name).or_else(|| {
+        let path = std::env::var_os("PATH")?;
+        first_holding(std::env::split_paths(&path), name)
+    })
+}
+
+/// The same, for a caller that is going to spawn regardless: the bare name
+/// is a fair last try, since the exec itself does one more `PATH` lookup.
+fn sibling(name: &str) -> std::path::PathBuf {
+    located(name).unwrap_or_else(|| std::path::PathBuf::from(name))
+}
+
+/// The settings panel's binary name. It is one package (#50) and this tray
+/// is in another, so it may simply not be here.
+const PANEL: &str = "nightlight-panel";
 
 /// Launches the settings panel. Errors are swallowed — a failed launch must
 /// not take the tray down.
 fn open_panel() {
-    let _ = std::process::Command::new(sibling("nightlight-panel")).spawn();
+    if let Some(panel) = located(PANEL) {
+        let _ = std::process::Command::new(panel).spawn();
+    }
 }
 
 const USAGE: &str = "usage: nightlight-tray [--version] [--help]
@@ -514,6 +555,36 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The panel is a separate package (#50), so "is it installed" is a
+    /// real question with a real "no". Getting that wrong in either
+    /// direction is a visible defect: a menu item that opens nothing, or a
+    /// missing one on a machine that has the panel.
+    #[test]
+    fn a_companion_binary_is_found_only_where_it_actually_is() {
+        let root = std::env::temp_dir().join("nightlightd-located-test");
+        let (present, absent) = (root.join("bin"), root.join("empty"));
+        std::fs::create_dir_all(&present).expect("temp dir");
+        std::fs::create_dir_all(&absent).expect("temp dir");
+        let panel = present.join(PANEL);
+        std::fs::write(&panel, b"not really a binary").expect("temp file");
+
+        assert_eq!(
+            first_holding([present.clone()].into_iter(), PANEL),
+            Some(panel)
+        );
+        assert_eq!(first_holding([absent.clone()].into_iter(), PANEL), None);
+        // Nothing anywhere is the answer for a daemon-only install.
+        assert_eq!(first_holding(std::iter::empty(), PANEL), None);
+        // A directory of that name is not a binary of that name.
+        std::fs::create_dir_all(absent.join(PANEL)).expect("temp dir");
+        assert_eq!(first_holding([absent].into_iter(), PANEL), None);
+        // Earlier directories win, which is what puts a sibling ahead of PATH.
+        let dirs = [root.join("nowhere"), present, root.join("later")];
+        assert!(first_holding(dirs.into_iter(), PANEL).is_some_and(|p| p.ends_with(PANEL)));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
 
     fn following_at(elevation: f64) -> Status {
         Status {

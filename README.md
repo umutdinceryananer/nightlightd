@@ -14,7 +14,7 @@
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
 [![Built With Ratatui](https://ratatui.rs/built-with-ratatui/badge.svg)](https://ratatui.rs/)
 
-> **Version 0.3.0.** The daemon provides timezone based location, a single instance D-Bus lock, gamma ramps over XRandR, eased transitions between targets, a movable transition band, reapplication on resume from suspend, a ramp it checks and repairs when something else clears it, and a `--status` readout. Three clients ship with it, a tray icon, a settings panel, and a terminal dashboard, both windows carrying the same five tabs and the same themes. A [release with a `.deb`](https://github.com/umutdinceryananer/nightlightd/releases/latest) and an [AUR package](https://aur.archlinux.org/packages/nightlightd) are available. Flatpak is planned. Young software, tested on one machine so far. Report what breaks.
+> **Version 0.3.1.** The daemon provides timezone based location, a single instance D-Bus lock, gamma ramps over XRandR, eased transitions between targets, a movable transition band, reapplication on resume from suspend, a ramp it checks and repairs when something else clears it, and a `--status` readout. Three clients ship with it, a tray icon, a settings panel, and a terminal dashboard, both windows carrying the same five tabs and the same themes. A [release with `.deb` packages](https://github.com/umutdinceryananer/nightlightd/releases/latest) and an [AUR package](https://aur.archlinux.org/packages/nightlightd) are available. Flatpak is planned. Young software, tested on one machine so far. Report what breaks.
 
 <p align="center">
   <img src="docs/screenshots/nightlight-tui.gif" alt="the terminal dashboard's demo reel: a compressed day warms the interface through sunset, the transition band is widened over the curve, the day is summarised, and the themes roll past" width="520">
@@ -132,17 +132,26 @@ The daemon has no interface of its own. If a client dies, the filter keeps runni
 
 ### Debian / Ubuntu / Mint
 
-Grab the `.deb` from the [latest release](https://github.com/umutdinceryananer/nightlightd/releases/latest), then
+Two packages, from the [latest release](https://github.com/umutdinceryananer/nightlightd/releases/latest). `nightlightd` is the daemon, the CLI, the tray icon and the terminal dashboard, and depends on nothing but libc. `nightlightd-panel` is the settings window, kept apart because it is the one piece that needs a graphics stack — eight X11 and GL libraries, and 27 MB against the other three's 17.
 
 ```
-sudo apt install ./nightlightd_0.3.0-1_amd64.deb
+# the daemon, the tray icon and the terminal dashboard
+sudo apt install ./nightlightd_0.3.1-1_amd64.deb
+
+# the settings window, if you want it
+sudo apt install ./nightlightd-panel_0.3.1-1_amd64.deb
+
 systemctl --user enable --now nightlightd
 ```
 
-The package installs all four binaries, the systemd user unit, and the tray's
-autostart entry. A *user* unit cannot be enabled at install time, so the
-daemon needs that one `systemctl --user` line (or a log-out/log-in plus the
-panel's "Start at login" box).
+A *user* unit cannot be enabled at install time, so the daemon needs that one
+`systemctl --user` line (or a log-out/log-in plus the panel's "Start at login"
+box).
+
+**Upgrading from 0.3.0 or earlier:** the settings window used to live in the
+main package. Upgrading `nightlightd` by itself takes it away, and the tray's
+"Settings…" item goes quiet with it. Install `nightlightd-panel` alongside to
+keep the window.
 
 ### Arch (AUR)
 
