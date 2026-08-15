@@ -656,14 +656,28 @@ whole, the same answer `Band::sane()` gives a nonsense elevation pair (#39)
 with one warning in the log and the file left as its author wrote it.
 Verified live: day 6500 / night 12000 in the file ran as 6500/4500.
 
-The two charts that draw against a fixed vertical scale — the panel's curve
-axis and the dashboard's settings rails — grow only when a day bound above
-neutral needs the room, so nobody still on 6500 watches their picture shrink
-to make space for a range they never use. The curve's axis is fed the bound
-the *daemon* holds, never the one a drag is proposing, or it would rescale
-under the hand mid-gesture. The live accent deliberately does not follow
-past neutral: that colour answers "how warm is the screen", and above 6500 K
-the answer is "not at all".
+The two places that draw against a vertical scale — the panel's curve axis
+and the dashboard's settings rails — first tried to grow only when a day
+bound above neutral needed the room, so that nobody still on 6500 would
+watch their picture shrink for a range they never use. That was wrong, and
+it took two rounds of being caught to see why. A scale computed from the
+value it is drawing puts that value at its own ceiling: the dashboard's day
+bar was full at 6500 K and full at 10000 K alike, and the panel drew one
+identical picture for an 8000 K and a 10000 K day whenever the night bound
+sat on the axis floor. Worse, every attempt to quantise the growth — 500 K
+steps, or one scale per regime — made the plateau *fall* as its number rose,
+at 6500 to 6501 K and at the regime edge respectively.
+
+So both are fixed at 1500-10000, the window the controls themselves offer,
+and the panel's curve now spells its two bounds out in the corner, which it
+never did. A narrow pair of bounds draws a shorter curve than it used to.
+What that buys back: at the default 6500 K the day plateau used to sit hard
+against the top edge with nowhere to be dragged, and it now has the headroom
+this issue is about.
+
+The live accent deliberately does not follow past neutral: that colour
+answers "how warm is the screen", and above 6500 K the answer is "not at
+all".
 
 Verified live: 8000 K from the config applied and survived a restart, 9000 K
 over D-Bus applied and persisted, 90000 K clamped to 25000 at both doors.

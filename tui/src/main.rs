@@ -16,7 +16,7 @@ mod theme;
 use std::io;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use nightlightd_core::color::{MAX_TEMPERATURE, UI_TEMPERATURE_RANGE, temperature_to_rgb};
+use nightlightd_core::color::{UI_TEMPERATURE_RANGE, temperature_to_rgb};
 use nightlightd_core::location::nearest_zone;
 use nightlightd_core::schedule::{Milestone, milestones};
 use nightlightd_core::solar::solar_elevation;
@@ -46,19 +46,22 @@ const NIGHT_MIN: u32 = UI_TEMPERATURE_RANGE.0;
 const DAY_MAX: u32 = UI_TEMPERATURE_RANGE.1;
 const NIGHT_STEP: u32 = 100;
 
-/// Where a settings rail ends, for a given day bound. The rails only report,
-/// so unlike a slider they need not reach everything settable — and if they
-/// did, everyone still on a 6500 K day would watch both bounds shrink into
-/// the first half of the rail to make room for a range they never use.
+/// The scale both temperature rails are drawn against: exactly what the
+/// arrow keys can reach, and fixed.
 ///
-/// So the scale is the familiar one until a day bound asks for more, and
-/// then it follows that bound wherever the daemon holds it — the same rule,
-/// and the same ceiling, as the panel's curve axis. Stopping at what a
-/// *control* offers instead would have left a hand-written 15000 K day
-/// saturating the rail in one client while the other drew it properly.
-fn rail_top(day_temp: u32) -> f64 {
-    f64::from(day_temp.clamp(6500, MAX_TEMPERATURE))
-}
+/// It has to be fixed. A ceiling that followed the day bound put that bound
+/// permanently at the end of its own rail — a full bar at 6500 K, a full bar
+/// at 10000 K, no way to tell them apart — because the value being drawn was
+/// also the scale drawing it. The panel's curve survives that rule (a
+/// chart's information is the shape between its plateaus, so a plateau at
+/// the top still reads); a single bar does not, since its fill *is* the
+/// whole message. The two need different rules and briefly shared one.
+///
+/// The cost, paid knowingly: at the default 6500 K day the bar is a little
+/// over half rather than hard against the end. What it buys is a bar that
+/// means something at every value, and the same window the panel's own
+/// slider offers, so the two clients describe one setting one way.
+const RAIL_RANGE: (f64, f64) = (NIGHT_MIN as f64, DAY_MAX as f64);
 
 /// One full day in the `--demo` compressed clock, in real seconds (#30).
 /// Grown from 28 when the band editor and the day summary joined the tour:
@@ -1319,20 +1322,14 @@ impl App {
         // Each slider row carries (value, min, max) for the rail underneath.
         // Both temperature rails share one scale, so the two bounds can be
         // read against each other rather than each against itself.
-        let day_rail = self.status.as_ref().map(|s| {
-            (
-                f64::from(s.day_temp),
-                f64::from(NIGHT_MIN),
-                rail_top(s.day_temp),
-            )
-        });
-        let night_rail = self.status.as_ref().map(|s| {
-            (
-                f64::from(s.night_temp),
-                f64::from(NIGHT_MIN),
-                rail_top(s.day_temp),
-            )
-        });
+        let day_rail = self
+            .status
+            .as_ref()
+            .map(|s| (f64::from(s.day_temp), RAIL_RANGE.0, RAIL_RANGE.1));
+        let night_rail = self
+            .status
+            .as_ref()
+            .map(|s| (f64::from(s.night_temp), RAIL_RANGE.0, RAIL_RANGE.1));
         let gamma_rail = self
             .status
             .as_ref()
@@ -1465,7 +1462,7 @@ impl App {
 
         // The temperature rows carry a real slider (tui-slider) on the row
         // reserved beneath each — the segmented ▰▱ style, no thumb: filled to
-        // where the bound sits in the shared range both rails use, ticks in
+        // where the bound sits in the shared [`RAIL_RANGE`], ticks in
         // the accent so they track the live tint; the empty ticks brighten when
         // their row is selected.
         for (y, (value, min, max), selected) in sliders {
@@ -3330,21 +3327,26 @@ mod tests {
         assert!(approx(band.night_elevation, BAND_UI_MIN));
     }
 
-    /// The rail keeps the scale everyone knows until a day bound past neutral
-    /// (#41) needs room, and never leaves the bound off the end of it.
+    /// The rail's scale is what the arrow keys can reach, so every value a
+    /// key can produce lands somewhere readable on it — and, the point of
+    /// the whole thing, only the very top of the range fills the bar. A
+    /// scale that followed the day bound made that bar full at every day
+    /// bound from 6500 K up, which is no bar at all.
     #[test]
-    fn the_rail_grows_only_for_a_day_bound_that_needs_it() {
-        for day in [1500, 2600, 4500, 6500] {
-            assert_eq!(rail_top(day), 6500.0, "{day} K rescaled the rail");
-        }
-        assert_eq!(rail_top(8000), 8000.0);
-        assert_eq!(rail_top(DAY_MAX), f64::from(DAY_MAX));
-        // A hand-written bound past what any control offers is still drawn
-        // against a scale that holds it, exactly as the panel's axis is.
-        assert_eq!(rail_top(15_000), 15_000.0);
-        assert_eq!(rail_top(90_000), f64::from(MAX_TEMPERATURE));
-        for day in 1500..=MAX_TEMPERATURE {
-            assert!(rail_top(day) >= f64::from(day));
+    fn every_reachable_bound_is_somewhere_readable_on_the_rail() {
+        let (min, max) = RAIL_RANGE;
+        assert_eq!((min, max), (f64::from(NIGHT_MIN), f64::from(DAY_MAX)));
+        let fill = |kelvin: u32| (f64::from(kelvin) - min) / (max - min);
+        // The default day sits well inside, not against the end.
+        assert!((0.55..0.65).contains(&fill(6500)), "{}", fill(6500));
+        // Past neutral it keeps moving, which is the defect this replaced.
+        assert!(fill(8000) > fill(6500));
+        assert!(fill(10_000) > fill(8000));
+        // Only the two ends saturate, and neither overflows.
+        assert_eq!(fill(NIGHT_MIN), 0.0);
+        assert_eq!(fill(DAY_MAX), 1.0);
+        for kelvin in NIGHT_MIN..=DAY_MAX {
+            assert!((0.0..=1.0).contains(&fill(kelvin)), "{kelvin} K fell off");
         }
     }
 
