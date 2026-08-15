@@ -641,7 +641,8 @@ impl App {
                     } else {
                         status.night_temp.saturating_sub(NIGHT_STEP)
                     }
-                    .clamp(NIGHT_MIN, status.day_temp);
+                    .max(NIGHT_MIN)
+                    .min(status.day_temp);
                     self.client.set_night_temp(night);
                     self.last_poll = None;
                 }
@@ -670,6 +671,11 @@ impl App {
 
     /// Left/right on the selected settings row: nudge the bounds (the daemon
     /// clamps and persists), cycle the theme, or flip the login toggle.
+    ///
+    /// The bounds are held by a `min` then a `max` rather than a `clamp`,
+    /// because `clamp` panics when its two ends cross and a hand-written
+    /// config can cross them. The order names the winner: the schedule's
+    /// ordering outranks the control's own end.
     fn adjust_setting(&mut self, increase: bool) {
         match self.settings_selected {
             0 => {
@@ -679,7 +685,8 @@ impl App {
                     } else {
                         status.day_temp.saturating_sub(NIGHT_STEP)
                     }
-                    .clamp(status.night_temp, 6500);
+                    .min(6500)
+                    .max(status.night_temp);
                     self.client.set_day_temp(day);
                     self.last_poll = None;
                 }
@@ -691,7 +698,8 @@ impl App {
                     } else {
                         status.night_temp.saturating_sub(NIGHT_STEP)
                     }
-                    .clamp(NIGHT_MIN, status.day_temp);
+                    .max(NIGHT_MIN)
+                    .min(status.day_temp);
                     self.client.set_night_temp(night);
                     self.last_poll = None;
                 }

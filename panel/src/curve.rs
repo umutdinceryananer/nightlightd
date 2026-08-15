@@ -72,13 +72,23 @@ pub enum Edit {
 /// can never disagree about what is settable, and never below the night
 /// bound — the curve is a schedule, and a schedule that runs backwards is
 /// not a picture of anything.
+///
+/// Written as a `min` then a `max` rather than a `clamp`, here and below,
+/// because `clamp` panics when the two bounds cross and a hand-written
+/// config can cross them — a night light that panics is worse than no night
+/// light. The order picks the winner: the schedule's ordering outranks the
+/// control's own floor and ceiling.
 fn held_day_temp(kelvin: f32, night_temp: u32) -> u32 {
-    (kelvin.round() as u32).clamp(night_temp.max(DAY_FLOOR), 6500)
+    (kelvin.round() as u32)
+        .min(6500)
+        .max(night_temp.max(DAY_FLOOR))
 }
 
 /// The same for the lower plateau, held under the day bound.
 fn held_night_temp(kelvin: f32, day_temp: u32) -> u32 {
-    (kelvin.round() as u32).clamp(1500, day_temp.min(NIGHT_CEIL))
+    (kelvin.round() as u32)
+        .max(AXIS_MIN as u32)
+        .min(day_temp.min(NIGHT_CEIL))
 }
 
 /// Where a ramp drag lands a transition bound: the solar elevation under the
@@ -370,6 +380,16 @@ mod tests {
             held_band(band, -12.0, false).day_elevation,
             band.day_elevation
         );
+    }
+
+    /// Bounds that cross must not panic — a hand-written config can put the
+    /// night bound above the day one, and `clamp` would take the process
+    /// down with it.
+    #[test]
+    fn crossed_bounds_do_not_panic() {
+        assert_eq!(held_day_temp(3000.0, 9000), 9000);
+        assert_eq!(held_night_temp(3000.0, 1000), 1000);
+        assert_eq!(held_night_temp(3000.0, 0), 0);
     }
 
     /// The plateaus obey the sliders' window, so dragging the curve can
