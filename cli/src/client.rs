@@ -89,27 +89,42 @@ pub fn send(request: Request) -> zbus::Result<()> {
     }
 }
 
-/// Prints the daemon snapshot: the headline on the first line, then the details
-/// worth eyeballing indented under it.
-fn print_status(status: &Status, fade: bool, band: (f64, f64)) {
+/// The daemon snapshot as `--status` prints it: the headline on the first
+/// line, then the details worth eyeballing indented under it.
+///
+/// Built as a string rather than printed line by line so it can be checked
+/// without a daemon, and so the whole readout reaches the terminal in one
+/// write.
+fn status_text(status: &Status, fade: bool, band: (f64, f64)) -> String {
+    let mut out = String::new();
+    macro_rules! line {
+        ($($arg:tt)*) => {{
+            out.push_str(&format!($($arg)*));
+            out.push('\n');
+        }};
+    }
     let onoff = if status.enabled { "on" } else { "off" };
-    println!("nightlightd: {onoff}, {} K", status.temperature);
-    println!("  source: {}", status.source);
+    line!("nightlightd: {onoff}, {} K", status.temperature);
+    line!("  source: {}", status.source);
     // The shaping factors earn a line only when they do something.
     if (status.gamma - 1.0).abs() > 1e-9 || (status.brightness - 1.0).abs() > 1e-9 {
-        println!(
+        line!(
             "  ramp:   gamma {:.2}, brightness {:.2} (day {:.2} / night {:.2})",
-            status.gamma, status.brightness, status.day_brightness, status.night_brightness
+            status.gamma,
+            status.brightness,
+            status.day_brightness,
+            status.night_brightness
         );
     }
     // Same rule as the ramp line: the default earns no ink.
     if !fade {
-        println!("  fade:   off");
+        line!("  fade:   off");
     }
     if (band.0 - 3.0).abs() > 1e-9 || (band.1 + 6.0).abs() > 1e-9 {
-        println!(
+        line!(
             "  band:   day above {:+.1}°, night below {:+.1}°",
-            band.0, band.1
+            band.0,
+            band.1
         );
     }
     if status.has_location {
@@ -119,14 +134,94 @@ fn print_status(status: &Status, fade: bool, band: (f64, f64)) {
             day_elevation: band.0,
             night_elevation: band.1,
         };
-        println!(
+        line!(
             "  sun:    {:+.1}° ({})",
             status.elevation,
             nightlightd_core::transition::phase(status.elevation, configured)
         );
-        println!(
+        line!(
             "  place:  {:.2}, {:.2} (resolved)",
-            status.latitude, status.longitude
+            status.latitude,
+            status.longitude
         );
+    }
+    out
+}
+
+/// Prints it.
+///
+/// Written rather than `println!`ed because `println!` panics when the write
+/// fails, and `nightlightd --status | head -1` fails it every time: `head`
+/// closes the pipe as soon as it has its line. Panicking there is absurd —
+/// the readout has already been delivered, and the reader asked for less of
+/// it, not for a backtrace.
+fn print_status(status: &Status, fade: bool, band: (f64, f64)) {
+    let _ = std::io::Write::write_all(
+        &mut std::io::stdout(),
+        status_text(status, fade, band).as_bytes(),
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn following() -> Status {
+        Status {
+            enabled: true,
+            temperature: 4200,
+            source: "auto (following the sun)".into(),
+            elevation: -2.5,
+            has_location: true,
+            latitude: 41.02,
+            longitude: 28.97,
+            following: true,
+            day_temp: 6500,
+            night_temp: 2700,
+            gamma: 1.0,
+            brightness: 1.0,
+            day_brightness: 1.0,
+            night_brightness: 1.0,
+        }
+    }
+
+    /// The readout's rule: a setting that is doing nothing earns no line.
+    /// The alternative is a wall of defaults with the one changed number
+    /// hidden in it.
+    #[test]
+    fn the_defaults_earn_no_ink() {
+        let text = status_text(&following(), true, (3.0, -6.0));
+        assert!(text.starts_with("nightlightd: on, 4200 K\n"));
+        assert!(text.contains("  source: auto"));
+        for absent in ["ramp:", "fade:", "band:"] {
+            assert!(!text.contains(absent), "{absent} printed at its default");
+        }
+        // A resolved location is worth two lines; nothing else is.
+        assert!(text.contains("  sun:"));
+        assert!(text.contains("  place:  41.02, 28.97 (resolved)"));
+        assert_eq!(text.lines().count(), 4);
+    }
+
+    /// And a setting that is doing something earns exactly one.
+    #[test]
+    fn a_changed_setting_earns_a_line() {
+        let mut status = following();
+        status.gamma = 0.9;
+        let text = status_text(&status, false, (1.5, -12.0));
+        assert!(text.contains("  ramp:   gamma 0.90"));
+        assert!(text.contains("  fade:   off"));
+        assert!(text.contains("  band:   day above +1.5°, night below -12.0°"));
+    }
+
+    /// Nothing here reads the location fields when there is no location, so
+    /// their placeholder values never reach the terminal.
+    #[test]
+    fn a_placeless_daemon_prints_no_coordinates() {
+        let mut status = following();
+        status.has_location = false;
+        let text = status_text(&status, true, (3.0, -6.0));
+        assert!(!text.contains("sun:"));
+        assert!(!text.contains("place:"));
+        assert_eq!(text.lines().count(), 2);
     }
 }
