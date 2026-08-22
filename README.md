@@ -202,9 +202,52 @@ Tracked in [`docs/ISSUES.md`](docs/ISSUES.md).
 | M3 | Daemon and event loop | ✅ done |
 | M4 | DBus, CLI, systemd, suspend | ✅ done |
 | M5 | Tray icon, settings panel, terminal dashboard | ✅ done |
-| M6 | Packaging and release | 🔶 v0.3.0 released, on the AUR. Flatpak remains |
+| M6 | Packaging and release | 🔶 v0.3.1 released, on the AUR. Flatpak remains |
 
 The timezone fallback went upstream before the Rust port of it was written. [`chinstrap/gammastep!28`](https://gitlab.com/chinstrap/gammastep/-/merge_requests/28), opened 2026-07-10, adds the same provider in C, where it helps far more people. It has been awaiting review since. Upstream's last commit is from March 2025 and its oldest open merge request dates to 2020, so a long wait is expected. What the attempt revealed is recorded in [`docs/PRIOR-ART.md`](docs/PRIOR-ART.md) under "Upstream attempt". If it lands and the remaining defects prove fixable upstream, this repository becomes obsolete, which was always an acceptable outcome.
+
+### What is not done
+
+**Next, and in this order.** Two numbers reach the clients through side doors:
+`fade` and the transition band each have their own D-Bus getter, parked there
+so a patch release would not change the pinned `Status` signature. The bill is
+five round trips per poll and a seam — a client can read a status and a band
+that disagree, because they arrived separately. Folding both into `Status`
+comes first, and everything below waits behind it.
+
+- **#47, dawn and dusk apart.** The sun crosses the same elevation on the way
+  up and on the way down, and both crossings read off one pair of numbers
+  today, so moving the evening ramp moves the morning one with it. Warm slowly
+  into the evening, snap back quickly at breakfast, is not currently sayable.
+- **#49, shape the ramp.** Handles *inside* the transition, so a dusk can start
+  gently and finish quickly instead of running straight between its two bounds.
+  The points are fractions rather than kelvin, so the brightness bound keeps
+  moving with the colour.
+- **#34, per-monitor temperature.** A different bound on the external screen,
+  keyed by RandR output so the setting survives a replug.
+- **#27, Flatpak.** The last packaging channel, and the only one that appears
+  inside Mint's Software Manager without a maintainer approving anything. A
+  systemd *user* unit cannot be installed from inside a sandbox, which is the
+  part that needs solving rather than writing.
+
+**Later, unscheduled.** Wayland for wlroots compositors only (#31 — Sway,
+Hyprland, river; GNOME and KDE expose no protocol to write to at all).
+Composing with an ICC profile instead of overwriting it (#32). The deep DRM
+`GAMMA_LUT`, 4096 entries where the legacy path this writes through reports
+far fewer, if the banding it would fix turns out to be visible to anyone
+(#36). NVIDIA's gamma-size quirks
+when somebody reports one (#33).
+
+**Never.** Anything adaptive: screen-content sampling, backlight or DDC
+control, brightness that responds to what is on the screen. That is where
+comparable projects drowned, and the static multiplier that shipped in v0.2 is
+the whole of what this project will do with brightness.
+
+**Untested, plainly.** A monitor physically unplugged and plugged back in —
+the code path is there and the silent-wipe half of it was reproduced by hand,
+but no second screen has been attached to it. The tray icon on MATE and
+Cinnamon; only XFCE has been verified. Anything but one Mint Xfce machine with
+one GPU.
 
 ---
 
