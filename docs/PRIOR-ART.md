@@ -303,6 +303,21 @@ X11 screen colour temperature is an unowned space: redshift archived, gammastep 
 
 ---
 
+## QRedshift, and a measurement not taken
+
+Closing GitHub #2 promised a section here on QRedshift, the tool the reporter
+was using. It is not going to be written, and the reason is recorded rather
+than left as a gap someone later mistakes for an oversight: the person who
+raised it has stopped using QRedshift, so the comparison would be measured
+for nobody. This file exists to hold evidence that changed a decision, and
+that evidence would change none.
+
+What QRedshift did contribute is already here, in the places it actually
+influenced: the smart delta write under #40, the ramp-handle design under
+#49, its wlroots backend under #31, and its 25000 K ceiling under #41. Those
+are cited where they were used, which is worth more than a section nobody
+asked for.
+
 ## What this establishes
 
 The three differentiators, restated as measured claims rather than intentions:
