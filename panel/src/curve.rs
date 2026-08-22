@@ -110,6 +110,21 @@ fn held_night_temp(kelvin: f32, day_temp: u32) -> u32 {
         .min(day_temp.min(NIGHT_CEIL))
 }
 
+/// What the chart has to say about the screen, or `None` when the schedule
+/// drawn on it is the thing the screen is following (#52).
+///
+/// Two states take the schedule out of force and they are not the same: a
+/// hold is a temperature someone chose, off is the screen left neutral. Off
+/// outranks a hold, the precedence every readout here already uses — a
+/// filter that is off is off whether or not a hold sits remembered under it.
+fn out_of_force(enabled: bool, following: bool, temperature: u32) -> Option<String> {
+    match (enabled, following) {
+        (true, true) => None,
+        (true, false) => Some(format!("held at {temperature} K")),
+        (false, _) => Some(format!("off · {temperature} K")),
+    }
+}
+
 /// Where a ramp drag lands a transition bound: the solar elevation under the
 /// pointer, stopped before it crosses its neighbour. The pointer can be
 /// anywhere on a 24-hour axis, so without this a drag past noon would invert
@@ -161,6 +176,15 @@ pub fn show(ui: &mut egui::Ui, view: View<'_>, held: &mut Option<Handle>) -> Opt
         ui.weak("Waiting for the daemon / location…");
         return None;
     };
+
+    // Whether this curve is a picture of what the screen is doing, or only of
+    // what it would do if it were left alone (#52). A manual hold and a
+    // filter switched off both take the schedule out of force while leaving
+    // it perfectly valid — it is what "Back to automatic" returns to, so it
+    // stays drawn and stays draggable, but it stops being the answer to
+    // "what colour is my screen".
+    let out_of_force = out_of_force(status.enabled, status.following, status.temperature);
+    let in_force = out_of_force.is_none();
 
     // Kelvin at a given local hour today, from the same maths the daemon runs.
     let kelvin_at = |hour: f32| -> f32 {
@@ -284,14 +308,22 @@ pub fn show(ui: &mut egui::Ui, view: View<'_>, held: &mut Option<Handle>) -> Opt
         painter.add(egui::Shape::convex_polygon(quad, fill, Stroke::NONE));
     }
 
-    // The curve itself, warm orange.
+    // The curve itself, warm orange — or demoted to chrome when it is not
+    // what the screen is following. Muted rather than faint: it is still a
+    // handle and still has to be seen to be grabbed, it just stops being the
+    // brightest thing in the frame.
     let line: Vec<Pos2> = (0..=96)
         .map(|i| {
             let h = i as f32 * 0.25;
             egui::pos2(to_x(h), to_y(kelvin_at(h)))
         })
         .collect();
-    painter.add(egui::Shape::line(line, Stroke::new(2.0, pal.accent)));
+    let curve = if in_force {
+        Stroke::new(2.0, pal.accent)
+    } else {
+        Stroke::new(1.5, pal.muted)
+    };
+    painter.add(egui::Shape::line(line, curve));
 
     // The part under the pointer glows — the hint, with the grab cursor, that
     // the line is a handle. Only the stretch that would actually move.
@@ -350,6 +382,27 @@ pub fn show(ui: &mut egui::Ui, view: View<'_>, held: &mut Option<Handle>) -> Opt
         pal.muted,
     );
 
+    // What the screen is actually wearing, when that is not the curve: one
+    // flat line across the whole day, because a held temperature has no
+    // schedule — that is the entire point of holding it. Takes the accent
+    // the curve just gave up, so the brightest line in the frame is always
+    // the true one.
+    let held_y = (!in_force).then(|| to_y(status.temperature as f32));
+    if let Some(y) = held_y {
+        painter.line_segment(
+            [egui::pos2(plot.left(), y), egui::pos2(plot.right(), y)],
+            Stroke::new(2.0, pal.accent),
+        );
+        // Labelled, or a flat line at 4400 K reads as a third bound.
+        painter.text(
+            egui::pos2(plot.left() + 6.0, y - 3.0),
+            egui::Align2::LEFT_BOTTOM,
+            out_of_force.unwrap_or_default(),
+            egui::FontId::proportional(10.0),
+            pal.accent,
+        );
+    }
+
     // "Now": a vertical marker and a dot on the line.
     let now_x = to_x(now_hour);
     painter.line_segment(
@@ -359,7 +412,9 @@ pub fn show(ui: &mut egui::Ui, view: View<'_>, held: &mut Option<Handle>) -> Opt
         ],
         Stroke::new(1.0, pal.faint),
     );
-    painter.circle_filled(egui::pos2(now_x, to_y(kelvin_at(now_hour))), 4.0, pal.text);
+    // The dot marks where the screen is, so it rides whichever line is true.
+    let now_y = held_y.unwrap_or_else(|| to_y(kelvin_at(now_hour)));
+    painter.circle_filled(egui::pos2(now_x, now_y), 4.0, pal.text);
 
     // Hour ticks, edge-aligned so 0 and 24 are not clipped.
     for h in [0, 6, 12, 18, 24] {
@@ -383,6 +438,28 @@ pub fn show(ui: &mut egui::Ui, view: View<'_>, held: &mut Option<Handle>) -> Opt
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The chart speaks only when the screen is not following what it draws
+    /// (#52), and it distinguishes the two ways that happens. The `off` case
+    /// is the one the issue did not think of: a switched-off filter leaves
+    /// the screen neutral while the curve goes on drawing a full day.
+    #[test]
+    fn the_chart_speaks_only_when_the_screen_is_not_following_it() {
+        assert_eq!(out_of_force(true, true, 4200), None);
+        assert_eq!(
+            out_of_force(true, false, 2800).as_deref(),
+            Some("held at 2800 K")
+        );
+        assert_eq!(
+            out_of_force(false, true, 6500).as_deref(),
+            Some("off · 6500 K")
+        );
+        // Off outranks a hold, the way every readout here already orders them.
+        assert_eq!(
+            out_of_force(false, false, 2800).as_deref(),
+            Some("off · 2800 K")
+        );
+    }
 
     /// The axis is a constant, so raising a bound always raises its plateau.
     /// Every scheme that scaled to the value it drew failed exactly here: a

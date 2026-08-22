@@ -1109,6 +1109,37 @@ daemon + dashboard only since it existed.
 
 ### #52 The curve keeps drawing a schedule nobody is following
 
+**Done.** Shipped in v0.3.1, in both charts, and it turned out to be two
+states rather than one. The issue describes a manual hold; a filter switched
+*off* tells exactly the same lie, and worse — the screen is neutral while the
+curve draws a full day and night. Both are now one predicate, `enabled &&
+following`, with off outranking a hold the way every readout here already
+orders them.
+
+Out of force, three things change. The curve is demoted from the accent to
+chrome — still drawn, still grabbable, because it is what "automatic" returns
+to, but no longer the brightest thing in the frame. A flat line takes the
+accent and runs the width of the day at the temperature the screen is really
+wearing, labelled at its left end so it cannot read as a third bound. And the
+"you are here" dot moves onto that line, since the dot marks where the screen
+is, not where the schedule would have put it. In the dashboard the per-hour
+tint strip also collapses to one colour, which is the honest picture: held,
+the screen is that colour at every hour of the day.
+
+Verified by driving the real daemon through all three states and reading the
+dashboard back out of a pty:
+
+```
+held:  ━ held at 2200 K ━━━━━━━━━━━━━━━━━●━━━━━━━━━━━━━━━━━━━
+off:   ━ off · 6491 K ━━━━━━━━━━━━━━━━━━━●━━━━━━━━━━━━━━━━━━━
+auto:  ╭────────────────●────────────────╮
+```
+
+The colour demotion does not show in a text capture, so it was counted
+instead: 16 distinct foreground colours in the frame while following the sun,
+9 held, 8 off — the gradient collapsing to a single tint and the step giving
+up its per-hour colour.
+
 - **What:** During a manual hold the panel's day/night curve carries on
   at full strength, and its "you are here" dot sits at the temperature
   the *schedule* would be applying — while the readout two lines above
@@ -1132,7 +1163,7 @@ daemon + dashboard only since it existed.
 - **Done when:** A manual hold is legible from the chart alone, in both
   the panel and the dashboard.
 - **Difficulty:** Easy
-- **Target:** v0.3.1
+- **Target:** v0.3.1, shipped
 
 ---
 

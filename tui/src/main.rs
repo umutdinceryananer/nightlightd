@@ -46,6 +46,21 @@ const NIGHT_MIN: u32 = UI_TEMPERATURE_RANGE.0;
 const DAY_MAX: u32 = UI_TEMPERATURE_RANGE.1;
 const NIGHT_STEP: u32 = 100;
 
+/// What the chart has to say about the screen, or `None` when the schedule
+/// drawn on it is the thing the screen is following (#52).
+///
+/// Two states take the schedule out of force and they are not the same: a
+/// hold is a temperature someone chose, off is the screen left neutral. Off
+/// outranks a hold, the precedence every readout here already uses — a
+/// filter that is off is off whether or not a hold sits remembered under it.
+fn out_of_force(enabled: bool, following: bool, temperature: u32) -> Option<String> {
+    match (enabled, following) {
+        (true, true) => None,
+        (true, false) => Some(format!("held at {temperature} K")),
+        (false, _) => Some(format!("off · {temperature} K")),
+    }
+}
+
 /// The scale both temperature rails are drawn against: exactly what the
 /// arrow keys can reach, and fixed.
 ///
@@ -2719,6 +2734,14 @@ impl App {
             return;
         };
 
+        // Whether this schedule is what the screen is following (#52). A
+        // manual hold and a filter switched off both leave it true as a
+        // schedule and false as a picture: it is what "automatic" returns
+        // to, so it stays drawn, but it stops answering "what colour is my
+        // screen" and everything below that reads as an answer is demoted.
+        let out_of_force = out_of_force(status.enabled, status.following, status.temperature);
+        let in_force = out_of_force.is_none();
+
         let (midnight, now_hour) = self.day_context();
         let elev_at = |hour: f64| -> f64 {
             solar_elevation(status.latitude, status.longitude, midnight + hour * 3600.0)
@@ -2731,6 +2754,9 @@ impl App {
                 status.night_temp,
             ))
         };
+        // The one colour the screen is actually wearing, when it is not
+        // wearing the curve's.
+        let held_tint = theme::display_tint(status.temperature);
 
         // Hand-drawn axes as before: a left gutter for the kelvin labels, a
         // bottom row for the hours (ratatui's built-in x labels sit off by
@@ -2824,10 +2850,18 @@ impl App {
             })
             .collect();
         let buf = frame.buffer_mut();
+        // Out of force the step gives up its per-hour tint for flat chrome:
+        // those colours are a claim about the screen, and the claim is false.
+        let step_tint = |kelvin: f64| {
+            if in_force {
+                theme::display_tint(kelvin.round() as u32)
+            } else {
+                pal.muted
+            }
+        };
         for (x, &(row, kelvin)) in columns.iter().enumerate() {
             if let Some(cell) = buf.cell_mut(Position::new(plot.x + x as u16, row)) {
-                cell.set_symbol("─")
-                    .set_fg(theme::display_tint(kelvin.round() as u32));
+                cell.set_symbol("─").set_fg(step_tint(kelvin));
             }
         }
         for x in 0..w.saturating_sub(1) {
@@ -2839,7 +2873,7 @@ impl App {
             let col = plot.x + (x + 1) as u16;
             // The join wears the blend of its two ends; on a full flip that
             // is the old mid tint, on a staircase step a local gradient.
-            let colour = theme::display_tint(((before + after) / 2.0).round() as u32);
+            let colour = step_tint((before + after) / 2.0);
             let (top_sym, bottom_sym) = if to > from {
                 ("╮", "╰")
             } else {
@@ -2862,9 +2896,16 @@ impl App {
         // Layer 3: the tint strip — every column wears the colour the screen
         // will be at that hour. This is f.lux's fill, one row tall.
         for x in 0..w {
-            let kelvin = kelvin_at((x as f64 + 0.5) / w as f64 * 24.0).round() as u32;
+            // Held, the screen is this colour at every hour of the day, so
+            // the strip says so — one flat band instead of a sunset.
+            let tint = if in_force {
+                let kelvin = kelvin_at((x as f64 + 0.5) / w as f64 * 24.0).round() as u32;
+                theme::display_tint(kelvin)
+            } else {
+                held_tint
+            };
             if let Some(cell) = buf.cell_mut(Position::new(plot.x + x as u16, strip_y)) {
-                cell.set_symbol("▂").set_fg(theme::display_tint(kelvin));
+                cell.set_symbol("▂").set_fg(tint);
             }
         }
 
@@ -2890,15 +2931,42 @@ impl App {
             }
         }
 
+        // Layer 4b (#52): the line the screen is actually on, when that is
+        // not the curve. Flat across the whole day, because a held
+        // temperature has no schedule — having none is the point of holding
+        // it. Heavier than the step it crosses, in the colour the screen
+        // really is, and worded at its left end so it cannot be read as a
+        // third bound. Its row comes from the same `row_of` as everything
+        // else, so a held temperature outside the day/night span lands on
+        // the nearest edge; the words carry the true number.
+        let held_row = (!in_force).then(|| row_of(f64::from(status.temperature)));
+        if let Some(row) = held_row {
+            for x in 0..w {
+                if let Some(cell) = buf.cell_mut(Position::new(plot.x + x as u16, row)) {
+                    cell.set_symbol("━").set_fg(held_tint);
+                }
+            }
+            let label = format!(" {} ", out_of_force.unwrap_or_default());
+            if label.chars().count() + 2 < w {
+                for (offset, glyph) in label.chars().enumerate() {
+                    let col = plot.x + 1 + offset as u16;
+                    if let Some(cell) = buf.cell_mut(Position::new(col, row)) {
+                        cell.set_symbol(&glyph.to_string()).set_fg(held_tint);
+                    }
+                }
+            }
+        }
+
         // Layer 5: now — a dot riding the line, f.lux's sun bead. The row is
         // looked up from the drawn line, not recomputed: on a staircase the
         // slope runs rows per column, so any independent rounding of "now"
-        // parks the dot beside the line instead of on it.
+        // parks the dot beside the line instead of on it. Out of force it
+        // rides the flat line instead: the dot marks where the screen is.
         let now_x = (now_hour / 24.0 * w as f64 - 0.5)
             .round()
             .clamp(0.0, (w - 1) as f64) as usize;
         let now_col = plot.x + now_x as u16;
-        let now_row = columns[now_x].0;
+        let now_row = held_row.unwrap_or(columns[now_x].0);
         if let Some(cell) = buf.cell_mut(Position::new(now_col, now_row)) {
             cell.set_symbol("●").set_fg(pal.text);
         }
@@ -3266,6 +3334,28 @@ fn local_offset_seconds() -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The chart speaks only when the screen is not following what it draws
+    /// (#52), and it distinguishes the two ways that happens. The `off` case
+    /// is the one the issue did not think of: a switched-off filter leaves
+    /// the screen neutral while the curve goes on drawing a full day.
+    #[test]
+    fn the_chart_speaks_only_when_the_screen_is_not_following_it() {
+        assert_eq!(out_of_force(true, true, 4200), None);
+        assert_eq!(
+            out_of_force(true, false, 2800).as_deref(),
+            Some("held at 2800 K")
+        );
+        assert_eq!(
+            out_of_force(false, true, 6500).as_deref(),
+            Some("off · 6500 K")
+        );
+        // Off outranks a hold, the way every readout here already orders them.
+        assert_eq!(
+            out_of_force(false, false, 2800).as_deref(),
+            Some("off · 2800 K")
+        );
+    }
 
     fn approx(a: f64, b: f64) -> bool {
         (a - b).abs() < 1e-9
