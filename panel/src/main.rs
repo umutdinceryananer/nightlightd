@@ -33,6 +33,28 @@ use crate::daemon::{Client, Status};
 const WARMEST: u32 = nightlightd_core::color::UI_TEMPERATURE_RANGE.0;
 const COOLEST: u32 = nightlightd_core::color::UI_TEMPERATURE_RANGE.1;
 
+/// What the bounds are until the daemon says otherwise: the config's own
+/// defaults, so a panel opened before the first status shows the shape most
+/// people are actually running.
+const DEFAULT_DAY: u32 = 6500;
+const DEFAULT_NIGHT: u32 = 4500;
+
+/// Except in a demo, which has no daemon to correct it — so what it starts
+/// with is what the reel shows for its whole length.
+///
+/// The dashboard's demo has used a deep night since it existed. This one
+/// kept the config default, which was fine while the curve's axis stopped at
+/// neutral and a 6500/4500 day filled two fifths of the frame. On the fixed
+/// 1500-10000 axis (#41) the same pair draws as a nearly flat line, and a
+/// reel whose subject is taking hold of the curve needs a curve with a shape
+/// in it. Matched to the dashboard's value so the two reels, shown side by
+/// side in the README, are pictures of the same day.
+const DEMO_NIGHT: u32 = 2600;
+
+fn default_night(demo: bool) -> u32 {
+    if demo { DEMO_NIGHT } else { DEFAULT_NIGHT }
+}
+
 /// Where the slider starts before the user has touched it.
 const START_KELVIN: u32 = 2800;
 
@@ -2407,11 +2429,11 @@ fn main() -> eframe::Result<()> {
             Ok(Box::new(Panel {
                 client,
                 kelvin: START_KELVIN,
-                day_temp: 6500,
-                night_temp: 4500,
+                day_temp: DEFAULT_DAY,
+                night_temp: default_night(args.demo),
                 anchors_synced: false,
-                orig_day: 6500,
-                orig_night: 4500,
+                orig_day: DEFAULT_DAY,
+                orig_night: default_night(args.demo),
                 gamma: 1.0,
                 night_dim: 1.0,
                 orig_gamma: 1.0,

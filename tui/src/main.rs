@@ -340,8 +340,10 @@ struct App {
     demo_key: Option<(&'static str, Instant)>,
 }
 
-/// The stand-in snapshot for `--demo` without a daemon: Istanbul, the
-/// defaults, following the sun. Honest about itself in the source field.
+/// The snapshot `--demo` runs on, daemon or no daemon: Istanbul, following
+/// the sun, and a night deep enough to draw a curve with a shape in it.
+/// Honest about itself in the source field. The panel's demo starts from the
+/// same pair, so the two reels are one day seen twice.
 fn demo_status() -> Status {
     Status {
         enabled: true,
@@ -2330,11 +2332,12 @@ impl App {
         self.fade = Some(true);
         self.band = Band::default();
         self.band_known = true;
-        let mut status = self
-            .status
-            .take()
-            .filter(|s| s.has_location)
-            .unwrap_or_else(demo_status);
+        // The stand-in always, never the recorder's own daemon. Borrowing
+        // whatever bounds happen to be configured makes a reel nobody else
+        // can reproduce — and it made the two reels in the README pictures
+        // of different days, since the panel's demo has muted its client
+        // since it existed.
+        let mut status = demo_status();
         let (midnight, _) = self.day_context();
         let elevation =
             solar_elevation(status.latitude, status.longitude, midnight + hour * 3600.0);
