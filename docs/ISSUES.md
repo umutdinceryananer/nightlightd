@@ -1074,6 +1074,39 @@ daemon + dashboard only since it existed.
 
 ### #51 Photograph the tray menu
 
+**Done.** Shipped in v0.3.1 as `scripts/tray-menu.sh`, after two attempts
+that both damaged the machine they ran on. What finally worked was giving up
+on photographing the live session at all.
+
+The menu is now opened inside a desktop built to be thrown away: a nested X
+server on `:9`, a private D-Bus session, a private `HOME`, and one
+`xfce4-panel` carrying a single systray plugin so the icon is always hard
+against its left edge and needs no hunting. The click that opens the menu —
+which that systray also delivers as Activate, toggling the filter — lands on
+a daemon that lives for fifteen seconds and on a screen nobody is looking at.
+The old dance of reading the filter's state, clicking, and putting it back
+while the menu was still up is gone with the session it protected.
+
+Two details cost a run each and are worth keeping:
+
+- **The isolation has to include `HOME`, and it has to be set before
+  `dbus-run-session`.** Services D-Bus activates inherit the *bus daemon's*
+  environment, not the calling script's, so an `XDG_CONFIG_HOME` exported
+  inside the script never reaches `xfconfd`. The second attempt did exactly
+  that: the throwaway panel opened the real `~/.config` panel configuration
+  and cleared 23 values out of it — position, length, and which plugin each
+  of plugin-2 through plugin-14 was. Recoverable only because the running
+  `xfconfd` still had every value in memory and could be read back with
+  `xfconf-query`. `HOME` is reset as well, because a program that ignores
+  the XDG variables still writes to `$HOME/.config`.
+- **The capture has to be armed before the click.** A screenshot tool that
+  takes focus closes the menu it was aimed at, so `xfce4-screenshooter -d 4`
+  starts first and the click happens underneath it.
+
+The script fingerprints every file under `~/.config/xfce4` before it starts
+and re-checks between phases, so a future variation of the same mistake stops
+the run instead of being discovered afterwards.
+
 - **What:** A screenshot of the tray's menu (#46) for the README. It is
   the only interface with no picture at all, and the first thing a
   desktop user sees.
@@ -1105,7 +1138,7 @@ daemon + dashboard only since it existed.
   window (`xwininfo -root -tree` rather than `-children`), or drive a
   second systray host in a nested X server where the geometry is known.
 - **Difficulty:** Easy to describe, fiddly to do
-- **Target:** v0.4
+- **Target:** v0.4, shipped in v0.3.1
 
 ### #52 The curve keeps drawing a schedule nobody is following
 

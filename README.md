@@ -68,7 +68,14 @@ The daemon runs headless and needs no interface. Three thin clients ship with it
 - **`nightlight-panel`** is a desktop window with the same five tabs as the dashboard. **now** draws the day/night curve, and the curve is also the control: drag a ramp to move the transition band, a plateau to move a temperature, Apply when the shape looks right. **today** lists the day's milestones with the next one lit, under how much daylight there is and how that compares with yesterday. **location** takes a pin on a world map. **outputs** shows every screen the ramp is reaching. **settings** holds the bounds, gamma, night dim, the switches and the theme.
 - **`nightlight-tui`** is a terminal dashboard built with [ratatui](https://ratatui.rs).
 
-Both wear the same eight themes, each remembering its own choice.
+The tray's menu is the whole of that client: what the screen is doing this
+minute, and the four things worth changing without opening a window.
+
+<p align="center">
+  <img src="docs/screenshots/tray-menu.png" alt="the tray icon's menu: a readout of the current temperature and the sun's phase, then turn off, automatic, fade transitions, settings and quit" width="150">
+</p>
+
+Both windows wear the same eight themes, each remembering its own choice.
 
 <p align="center">
   <img src="docs/screenshots/panel-now.png" alt="the panel's now tab: the day/night curve, with the sliders and the manual hold beneath it" width="200">
