@@ -177,8 +177,13 @@ impl Daemon {
 
     /// Pin a manual location (degrees) and persist it; the sun is followed
     /// there from now on, including after a trip through "auto". Out-of-range
-    /// values are clamped, not rejected.
+    /// values are clamped, not rejected. A coordinate that is not a finite
+    /// number is ignored rather than trusted, like every other door, and takes
+    /// the pair with it: half a location is not a location.
     fn set_location(&self, latitude: f64, longitude: f64) {
+        if !(latitude.is_finite() && longitude.is_finite()) {
+            return;
+        }
         {
             let mut state = lock(&self.state);
             let mode = Mode::ManualLocation {
@@ -457,6 +462,34 @@ mod tests {
         let s = lock(&d.state);
         assert_eq!(s.mode, Mode::Automatic);
         assert_eq!(s.configured_mode, Mode::Automatic);
+    }
+
+    #[test]
+    fn a_location_that_is_not_a_number_is_ignored() {
+        // NaN passes through clamp() untouched and would aim the solar maths
+        // at nothing: 0 K, drawn as the table's deepest red. Every other door
+        // ignores a non-finite number; this one must too, and whole — half a
+        // location is not a location.
+        // config_damaged keeps persist() away from the real config file.
+        let pinned = Mode::ManualLocation {
+            lat: 39.93,
+            lon: 32.85,
+        };
+        let mut s = state(true, None, pinned);
+        s.configured_mode = pinned;
+        s.config_damaged = true;
+        let d = daemon(s);
+        for (lat, lon) in [
+            (f64::NAN, 32.85),
+            (39.93, f64::NAN),
+            (f64::INFINITY, 0.0),
+            (0.0, f64::NEG_INFINITY),
+        ] {
+            d.set_location(lat, lon);
+            let s = lock(&d.state);
+            assert_eq!(s.mode, pinned, "{lat}, {lon}");
+            assert_eq!(s.configured_mode, pinned, "{lat}, {lon}");
+        }
     }
 
     #[test]

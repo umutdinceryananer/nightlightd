@@ -67,10 +67,15 @@ impl Default for Config {
 
 impl Config {
     /// The operating mode the config implies: a manual location when both
-    /// coordinates are given, otherwise automatic (derived from the timezone).
+    /// coordinates are given and both are finite numbers, otherwise automatic
+    /// (derived from the timezone). TOML can spell `nan` and `inf`, and a
+    /// location made of either would paint the screen the deepest red the
+    /// table has.
     pub fn mode(&self) -> Mode {
         match (self.latitude, self.longitude) {
-            (Some(lat), Some(lon)) => Mode::ManualLocation { lat, lon },
+            (Some(lat), Some(lon)) if lat.is_finite() && lon.is_finite() => {
+                Mode::ManualLocation { lat, lon }
+            }
             _ => Mode::Automatic,
         }
     }
@@ -218,6 +223,20 @@ mod tests {
     fn a_lone_coordinate_stays_automatic() {
         let config: Config = toml::from_str("latitude = 39.93").unwrap();
         assert_eq!(config.mode(), Mode::Automatic);
+    }
+
+    #[test]
+    fn coordinates_that_are_not_numbers_stay_automatic() {
+        // TOML can spell nan and inf, and neither is a place on Earth.
+        for text in [
+            "latitude = nan\nlongitude = 32.85\n",
+            "latitude = 39.93\nlongitude = nan\n",
+            "latitude = inf\nlongitude = 32.85\n",
+            "latitude = 39.93\nlongitude = -inf\n",
+        ] {
+            let config: Config = toml::from_str(text).unwrap();
+            assert_eq!(config.mode(), Mode::Automatic, "{text}");
+        }
     }
 
     #[test]

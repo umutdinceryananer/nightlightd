@@ -202,6 +202,13 @@ fn run_daemon(no_reset: bool) {
             night_temp
         );
     }
+    // The same courtesy for a location that is not a pair of numbers: the
+    // daemon follows the timezone instead, and the log says why.
+    if let (Some(lat), Some(lon)) = (config.latitude, config.longitude)
+        && !(lat.is_finite() && lon.is_finite())
+    {
+        tracing::warn!("config location ({lat}, {lon}) is not a place; following the timezone");
+    }
 
     let waker = match waker::waker() {
         Ok(waker) => waker,
