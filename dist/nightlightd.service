@@ -14,7 +14,8 @@
 #   systemctl --user status nightlightd
 #   journalctl --user -u nightlightd
 #
-# When packaged (#26) the binary lives at /usr/bin/nightlightd; adjust ExecStart.
+# The .deb and the AUR package do not use this file: they ship
+# dist/deb/nightlightd.service, which starts /usr/bin/nightlightd.
 
 [Unit]
 Description=Screen colour temperature (nightlightd)
