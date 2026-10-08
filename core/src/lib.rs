@@ -7,6 +7,7 @@
 //! The implementations are milestone M1 (issues #4-#9), added one module at a
 //! time.
 
+pub mod clock;
 pub mod color;
 pub mod fade;
 pub mod location;

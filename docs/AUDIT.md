@@ -27,7 +27,7 @@ still in place. M9 was never a defect: it records the single-writer
 decision, which still holds. M10's pinned signature has since grown to
 `(busdbddbuudddd)`, pinned in all four crates.
 
-Of the sixteen low notes, seven are fixed. `current_temp` only ever holds
+Of the sixteen low notes, eight are fixed. `current_temp` only ever holds
 what the table can render, since every door holds its input there
 (`85a633a`, #41). "Back to automatic" is a single `SetMode("auto")` since
 M1 made it turn the filter on. `load()` tells a missing file from a
@@ -37,15 +37,16 @@ and a non-finite coordinate is refused at both doors (`0c04baa`). A
 settings row in the panel now clamps only what the user enters, never the
 value handed to it. egui's default had clamped that too, quietly, on the
 first frame: a night of 5000 K from the config file read 4500 K, and an
-Apply after a curve drag sent the clamped copy back to the daemon.
+Apply after a curve drag sent the clamped copy back to the daemon. The
+panel and the dashboard read the UTC offset again after every whole and
+half hour of UTC, the only moments a local clock moves, so a DST change
+reaches a window left open within a poll.
 
-Six are still open, all small:
+Five are still open, all small:
 
 - `SetMode` ignores any name but `"auto"` without a word.
 - The suspend watcher's thread is never restarted if its signal stream
   ends. The minute tick still repairs the ramp after a resume.
-- The panel and the dashboard read the UTC offset once, so a DST change
-  while either is open shifts the curve by an hour until it is reopened.
 - The panel's `acquire()` reads a session bus it cannot reach as another
   panel already running.
 - Children are never waited on: the panel and `systemctl` spawned by the

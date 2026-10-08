@@ -16,6 +16,7 @@ mod theme;
 use std::io;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use nightlightd_core::clock::{LocalOffset, parse_utc_offset};
 use nightlightd_core::color::{UI_TEMPERATURE_RANGE, temperature_to_rgb};
 use nightlightd_core::location::nearest_zone;
 use nightlightd_core::schedule::{Milestone, milestones};
@@ -303,7 +304,9 @@ struct App {
     /// arrows that change nothing is the lie the fade row already refuses.
     band_known: bool,
     last_poll: Option<Instant>,
-    offset_secs: i32,
+    /// The local clock's distance from UTC, read again after every whole and
+    /// half hour so a DST change reaches the chart within a poll.
+    offset: LocalOffset,
     theme_index: usize,
     tab: usize,
     settings_selected: usize,
@@ -400,7 +403,7 @@ fn main() -> io::Result<()> {
         band: Band::default(),
         band_known: false,
         last_poll: None,
-        offset_secs: local_offset_seconds(),
+        offset: LocalOffset::new(unix_secs(), read_utc_offset()),
         // The flag is a one-off override, like `--tab`: it dresses this run
         // without rewriting what you last chose from inside the dashboard.
         theme_index: theme_index.unwrap_or_else(remembered_theme),
@@ -519,6 +522,7 @@ impl App {
                 self.band = reported.unwrap_or_default();
                 self.band_known = reported.is_some();
                 self.mismatch = self.status.is_none() && self.client.daemon_on_bus();
+                self.offset.refresh(unix_secs(), read_utc_offset);
                 self.last_poll = Some(Instant::now());
             }
             // The demo clock rewrites the snapshot every frame, so it runs
@@ -2294,7 +2298,7 @@ impl App {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs_f64())
             .unwrap_or(0.0);
-        let secs_into_day = (now as i64 + i64::from(self.offset_secs)).rem_euclid(86_400) as f64;
+        let secs_into_day = (now as i64 + i64::from(self.offset.secs)).rem_euclid(86_400) as f64;
         let hour = self.demo_hour().unwrap_or(secs_into_day / 3600.0);
         (now - secs_into_day, hour)
     }
@@ -2308,7 +2312,7 @@ impl App {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
-        let day_secs = (now + i64::from(self.offset_secs)).rem_euclid(86_400);
+        let day_secs = (now + i64::from(self.offset.secs)).rem_euclid(86_400);
         format!("{:02}:{:02}", day_secs / 3600, (day_secs % 3600) / 60)
     }
 
@@ -3315,23 +3319,24 @@ fn relative(delta_hours: f64) -> String {
     }
 }
 
-/// The local clock's offset from UTC in seconds, read once from `date +%z`
-/// (e.g. `+0300` → 10800). Zero on any failure — the curve then reads in UTC,
-/// which is wrong by the offset but never crashes.
-fn local_offset_seconds() -> i32 {
-    let output = std::process::Command::new("date").arg("+%z").output();
-    let text = output
-        .ok()
-        .and_then(|out| String::from_utf8(out.stdout).ok())
-        .unwrap_or_default();
-    let text = text.trim();
-    if text.len() < 5 {
-        return 0;
-    }
-    let sign = if text.starts_with('-') { -1 } else { 1 };
-    let hours: i32 = text[1..3].parse().unwrap_or(0);
-    let minutes: i32 = text[3..5].parse().unwrap_or(0);
-    sign * (hours * 3600 + minutes * 60)
+/// The local clock's offset from UTC in seconds, as `date +%z` reports it
+/// (`+0300` → 10800). [`None`] when `date` cannot be run or answers with
+/// anything else: a first reading then counts as UTC, which is wrong by the
+/// offset but never crashes, and a later one keeps the last good value.
+fn read_utc_offset() -> Option<i32> {
+    let output = std::process::Command::new("date")
+        .arg("+%z")
+        .output()
+        .ok()?;
+    parse_utc_offset(std::str::from_utf8(&output.stdout).ok()?)
+}
+
+/// Seconds since the epoch, for the offset's half-hour schedule. Zero if the
+/// system clock is somehow before 1970.
+fn unix_secs() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs() as i64)
 }
 
 #[cfg(test)]

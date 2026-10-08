@@ -17,6 +17,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use eframe::egui;
 
+use nightlightd_core::clock::{LocalOffset, parse_utc_offset};
 use nightlightd_core::location::nearest_zone;
 use nightlightd_core::schedule::{Milestone, day_length, hour_of, milestones};
 use nightlightd_core::solar::solar_elevation;
@@ -191,7 +192,9 @@ struct Panel {
     orig_gamma: f64,
     orig_night_dim: f64,
     start_at_login: bool,
-    offset_secs: i32,
+    /// The local clock's distance from UTC, read again after every whole and
+    /// half hour so a DST change reaches the curve within a poll.
+    offset: LocalOffset,
     /// Set by the single-instance `Present` call; the loop clears it and raises
     /// the window.
     focus: Arc<AtomicBool>,
@@ -292,7 +295,7 @@ impl Panel {
                 .duration_since(UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
-            let secs = (now as i64 + i64::from(self.offset_secs)).rem_euclid(86_400);
+            let secs = (now as i64 + i64::from(self.offset.secs)).rem_euclid(86_400);
             format!("{:02}:{:02}", secs / 3600, (secs % 3600) / 60)
         };
         match self.place.as_ref() {
@@ -731,7 +734,7 @@ impl Panel {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs_f64())
             .unwrap_or(0.0);
-        let secs_into_day = (now as i64 + i64::from(self.offset_secs)).rem_euclid(86_400) as f64;
+        let secs_into_day = (now as i64 + i64::from(self.offset.secs)).rem_euclid(86_400) as f64;
         let hour = self.demo_hour().unwrap_or(secs_into_day / 3600.0);
         (now - secs_into_day, hour)
     }
@@ -2165,6 +2168,7 @@ impl eframe::App for Panel {
                 // afterwards means the disk needs the user.
                 relaunch_once();
             }
+            self.offset.refresh(unix_secs(), read_utc_offset);
             self.last_poll = Some(Instant::now());
         }
         let status = self.status.clone();
@@ -2308,23 +2312,24 @@ fn relaunch_once() {
         .exec();
 }
 
-/// The local clock's offset from UTC in seconds, read once from `date +%z`
-/// (e.g. `+0300` → 10800). Zero on any failure — the curve then reads in UTC,
-/// which is wrong by the offset but never crashes.
-fn local_offset_seconds() -> i32 {
-    let output = std::process::Command::new("date").arg("+%z").output();
-    let text = output
-        .ok()
-        .and_then(|out| String::from_utf8(out.stdout).ok())
-        .unwrap_or_default();
-    let text = text.trim();
-    if text.len() < 5 {
-        return 0;
-    }
-    let sign = if text.starts_with('-') { -1 } else { 1 };
-    let hours: i32 = text[1..3].parse().unwrap_or(0);
-    let minutes: i32 = text[3..5].parse().unwrap_or(0);
-    sign * (hours * 3600 + minutes * 60)
+/// The local clock's offset from UTC in seconds, as `date +%z` reports it
+/// (`+0300` → 10800). [`None`] when `date` cannot be run or answers with
+/// anything else: a first reading then counts as UTC, which is wrong by the
+/// offset but never crashes, and a later one keeps the last good value.
+fn read_utc_offset() -> Option<i32> {
+    let output = std::process::Command::new("date")
+        .arg("+%z")
+        .output()
+        .ok()?;
+    parse_utc_offset(std::str::from_utf8(&output.stdout).ok()?)
+}
+
+/// Seconds since the epoch, for the offset's half-hour schedule. Zero if the
+/// system clock is somehow before 1970.
+fn unix_secs() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs() as i64)
 }
 
 /// What the command line asked the window to be.
@@ -2450,7 +2455,7 @@ fn main() -> eframe::Result<()> {
                 orig_gamma: 1.0,
                 orig_night_dim: 1.0,
                 start_at_login: autostart::enabled(),
-                offset_secs: local_offset_seconds(),
+                offset: LocalOffset::new(unix_secs(), read_utc_offset()),
                 focus: Arc::clone(&focus),
                 status: None,
                 fade: None,
