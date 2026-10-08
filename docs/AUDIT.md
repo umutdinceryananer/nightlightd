@@ -12,6 +12,54 @@ were refuted** — everything below survived its jury.
 Severity: **high** = a user hits it and the product promise breaks;
 **medium** = real defect in a plausible path; **low** = latent risk, noted.
 
+## Status, 2026-10-08
+
+Every high and medium finding was fixed on the day of the audit, in the
+order recommended at the bottom of this file:
+
+`a986ee7` H1 · `ea22958` H2 · `a65911f` H3 · `ec6850f` M1, M2 ·
+`dffbba0` M3, M7, M8 · `586d0c6` M4, M10–M12 · `dc75a6b` M5, M6 ·
+`2105951` M13, M14, M17 · `ba5325c` M15 · `91798c7` M16 · `cf24f62` M18 ·
+`e82af85` M19 · `df92394` M20 · `f9a2c43` M21 and the doc truth pass.
+
+Each fix was checked against the code as it stands on 2026-10-08 and is
+still in place. M9 was never a defect: it records the single-writer
+decision, which still holds. M10's pinned signature has since grown to
+`(busdbddbuudddd)`, pinned in all four crates.
+
+Of the sixteen low notes, six are fixed. `current_temp` only ever holds
+what the table can render, since every door holds its input there
+(`85a633a`, #41). "Back to automatic" is a single `SetMode("auto")` since
+M1 made it turn the filter on. `load()` tells a missing file from a
+broken one (M8). The panel has its own menu entry (`b065f25`, #50). The
+timezone lookup no longer stops at a `TZ` it cannot place (`7cb4c8c`),
+and a non-finite coordinate is refused at both doors (`0c04baa`).
+
+Seven are still open, all small:
+
+- `SetMode` ignores any name but `"auto"` without a word.
+- The suspend watcher's thread is never restarted if its signal stream
+  ends. The minute tick still repairs the ramp after a resume.
+- The panel and the dashboard read the UTC offset once, so a DST change
+  while either is open shifts the curve by an hour until it is reopened.
+- The panel's `acquire()` reads a session bus it cannot reach as another
+  panel already running.
+- A config value outside a slider's window is clamped in the panel's own
+  copy the first time the settings tab draws it. egui clamps by default:
+  checked headless, a night of 5000 K becomes 4500 K and no change is
+  reported, so nothing is sent then. The row shows the wrong number, and
+  an Apply after dragging the curve sends both bounds from that copy.
+- Children are never waited on: the panel and `systemctl` spawned by the
+  tray, and a daemon spawned by any client, linger as zombies until their
+  parent exits.
+- `save()` reports success when neither `XDG_CONFIG_HOME` nor `HOME` is
+  set.
+
+Two are unchanged by choice: the icon names follow Adwaita, and the .deb,
+like the AUR package, autostarts the tray for every user of the machine.
+One was not checked: the tray outliving its own service when the host
+dies.
+
 ---
 
 ## High — these can strand a user
