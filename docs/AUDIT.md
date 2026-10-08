@@ -27,15 +27,19 @@ still in place. M9 was never a defect: it records the single-writer
 decision, which still holds. M10's pinned signature has since grown to
 `(busdbddbuudddd)`, pinned in all four crates.
 
-Of the sixteen low notes, six are fixed. `current_temp` only ever holds
+Of the sixteen low notes, seven are fixed. `current_temp` only ever holds
 what the table can render, since every door holds its input there
 (`85a633a`, #41). "Back to automatic" is a single `SetMode("auto")` since
 M1 made it turn the filter on. `load()` tells a missing file from a
 broken one (M8). The panel has its own menu entry (`b065f25`, #50). The
 timezone lookup no longer stops at a `TZ` it cannot place (`7cb4c8c`),
-and a non-finite coordinate is refused at both doors (`0c04baa`).
+and a non-finite coordinate is refused at both doors (`0c04baa`). A
+settings row in the panel now clamps only what the user enters, never the
+value handed to it. egui's default had clamped that too, quietly, on the
+first frame: a night of 5000 K from the config file read 4500 K, and an
+Apply after a curve drag sent the clamped copy back to the daemon.
 
-Seven are still open, all small:
+Six are still open, all small:
 
 - `SetMode` ignores any name but `"auto"` without a word.
 - The suspend watcher's thread is never restarted if its signal stream
@@ -44,11 +48,6 @@ Seven are still open, all small:
   while either is open shifts the curve by an hour until it is reopened.
 - The panel's `acquire()` reads a session bus it cannot reach as another
   panel already running.
-- A config value outside a slider's window is clamped in the panel's own
-  copy the first time the settings tab draws it. egui clamps by default:
-  checked headless, a night of 5000 K becomes 4500 K and no change is
-  reported, so nothing is sent then. The row shows the wrong number, and
-  an Apply after dragging the curve sends both bounds from that copy.
 - Children are never waited on: the panel and `systemctl` spawned by the
   tray, and a daemon spawned by any client, linger as zombies until their
   parent exits.

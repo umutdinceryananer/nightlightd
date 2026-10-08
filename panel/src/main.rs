@@ -2084,7 +2084,18 @@ fn slider_row<'a>(
         // A Slider allocates `spacing.slider_width` for its rail and ignores
         // whatever size it was added at, so the width has to be set here.
         ui.spacing_mut().slider_width = rail;
-        response = Some(ui.add(slider.show_value(false).update_while_editing(false)));
+        // Clamp what the user enters, never the value handed in. egui's
+        // default clamps that too, on the first frame and without reporting
+        // a change: a 5000 K night from the config file read 4500 K here,
+        // and the next Apply sent the clamped copy back.
+        response = Some(
+            ui.add(
+                slider
+                    .show_value(false)
+                    .update_while_editing(false)
+                    .clamping(egui::SliderClamping::Edits),
+            ),
+        );
         ui.allocate_ui_with_layout(
             egui::vec2(READING_WIDTH, ROW_HEIGHT),
             egui::Layout::right_to_left(egui::Align::Center),
@@ -2470,6 +2481,27 @@ fn main() -> eframe::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A settings row shows the value it was handed, even one outside its
+    /// rail: a night of 5000 K from the config file is not 4500 K because the
+    /// rail stops there. egui clamps a handed-in value by default, quietly,
+    /// and an Apply after a curve drag sent that clamped copy back to the
+    /// daemon (docs/AUDIT.md, low notes).
+    #[test]
+    fn a_row_never_rewrites_the_value_it_was_handed() {
+        let ctx = egui::Context::default();
+        let pal = theme::Palette::of(0, None);
+        for start in [5000_u32, 1200] {
+            let mut night = start;
+            let mut changed = true;
+            let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let slider = egui::Slider::new(&mut night, 1500..=4500);
+                changed = slider_row(ui, &pal, "Nighttime", String::new(), slider).changed();
+            });
+            assert_eq!(night, start);
+            assert!(!changed, "{start}");
+        }
+    }
 
     /// The schedule's fourth column has to read without arithmetic: a row is
     /// ahead, behind, or happening.
