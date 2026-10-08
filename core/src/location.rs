@@ -101,12 +101,16 @@ fn zone_from_tz_value(value: &str) -> Option<&str> {
     (!name.is_empty()).then_some(name)
 }
 
-/// Determines the system's IANA zone name: `TZ` first (handy for testing),
-/// then the `/etc/localtime` symlink, then `/etc/timezone` as plain text.
-fn zone_name() -> Option<String> {
-    zone_from_env()
-        .or_else(zone_from_localtime)
-        .or_else(zone_from_etc_timezone)
+/// The coordinate of the first name in `candidates` that `resolve` turns
+/// into one, in the order given. A name that resolves to nothing — `UTC`, a
+/// POSIX rule, a `TZ` of `:/etc/localtime` — passes the turn to the next
+/// source instead of ending the search. Kept apart from the files so the
+/// order can be tested against strings.
+fn first_resolvable(
+    candidates: &[Option<&str>],
+    resolve: impl Fn(&str) -> Option<(f64, f64)>,
+) -> Option<(f64, f64)> {
+    candidates.iter().flatten().find_map(|zone| resolve(zone))
 }
 
 /// Zone name from the `TZ` environment variable, if set and non-empty.
@@ -211,13 +215,20 @@ fn resolve_alias(zone: &str) -> Option<String> {
 }
 
 /// The system's approximate location as `(latitude, longitude)` in degrees,
-/// derived from its timezone. A name missing from the coordinate table is
-/// retried through the backward-link aliases (`TZ=Turkey` still finds
-/// Istanbul). Returns [`None`] if the timezone or the zoneinfo database cannot
-/// be read.
+/// derived from its timezone: `TZ` first (handy for testing), then the
+/// `/etc/localtime` symlink, then `/etc/timezone` as plain text. A name
+/// missing from the coordinate table is retried through the backward-link
+/// aliases (`TZ=Turkey` still finds Istanbul). Returns [`None`] if no source
+/// names a zone the zoneinfo database can place.
 pub fn location_from_timezone() -> Option<(f64, f64)> {
-    let zone = zone_name()?;
-    lookup_zone(&zone).or_else(|| lookup_zone(&resolve_alias(&zone)?))
+    first_resolvable(
+        &[
+            zone_from_env().as_deref(),
+            zone_from_localtime().as_deref(),
+            zone_from_etc_timezone().as_deref(),
+        ],
+        |zone| lookup_zone(zone).or_else(|| lookup_zone(&resolve_alias(zone)?)),
+    )
 }
 
 #[cfg(test)]
@@ -302,6 +313,51 @@ this line is malformed and has no tabs
         assert_eq!(name, "America/New_York");
         // An empty table has no answer.
         assert!(nearest_in_zone_tab("", 0.0, 0.0).is_none());
+    }
+
+    /// Resolves names against [`SAMPLE`], standing in for the system's table.
+    fn in_sample(zone: &str) -> Option<(f64, f64)> {
+        coordinate_from_zone_tab(SAMPLE, zone)
+    }
+
+    #[test]
+    fn a_name_the_table_does_not_know_passes_the_turn() {
+        // TZ=UTC, TZ=:/etc/localtime or a POSIX rule names no city. The
+        // symlink behind it still does, and must get its turn rather than
+        // the search ending on the first name found.
+        for unknown in ["UTC", "/etc/localtime", "EST5EDT"] {
+            assert_eq!(
+                first_resolvable(&[Some(unknown), Some("Europe/Istanbul"), None], in_sample),
+                in_sample("Europe/Istanbul"),
+                "{unknown}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_first_name_that_resolves_still_wins() {
+        // A TZ naming a real city keeps its place ahead of the system's own
+        // zone; that is what makes it handy for testing.
+        assert_eq!(
+            first_resolvable(
+                &[Some("America/New_York"), Some("Europe/Istanbul"), None],
+                in_sample
+            ),
+            in_sample("America/New_York")
+        );
+    }
+
+    #[test]
+    fn missing_sources_are_skipped_and_no_city_is_none() {
+        assert_eq!(
+            first_resolvable(&[None, None, Some("Europe/Andorra")], in_sample),
+            in_sample("Europe/Andorra")
+        );
+        assert_eq!(
+            first_resolvable(&[Some("UTC"), None, None], in_sample),
+            None
+        );
+        assert_eq!(first_resolvable(&[], in_sample), None);
     }
 
     #[test]
