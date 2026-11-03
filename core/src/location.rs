@@ -3,8 +3,9 @@
 //! This is the tool's headline trick: no network, no Geoclue, no permission
 //! prompt, no question asked. It reads the timezone the system already knows
 //! (`Europe/Istanbul`) and looks its representative coordinate up in the IANA
-//! `zone.tab` file that ships on every Linux install. An error of a degree or
-//! so shifts sunset by a few minutes — nobody notices.
+//! `zone.tab` file that ships on every Linux install, wherever the system
+//! keeps it. An error of a degree or so shifts sunset by a few minutes —
+//! nobody notices.
 //!
 //! Everything degrades to [`None`] rather than panicking when a file is
 //! missing or malformed.
@@ -14,6 +15,9 @@
 //
 //   Copyright (c) 2026  Umut Dincer Yananer <umutdncr@gmail.com>
 //   SPDX-License-Identifier: GPL-3.0-or-later
+
+use std::ffi::OsStr;
+use std::path::{Path, PathBuf};
 
 /// Parses one signed, packed ISO 6709 angle such as `+4101` or `-0740023`.
 ///
@@ -134,16 +138,60 @@ fn zone_from_etc_timezone() -> Option<String> {
     (!name.is_empty()).then(|| name.to_owned())
 }
 
-/// Reads the zoneinfo coordinate table: `zone.tab`, then `zone1970.tab`,
-/// whichever opens first.
-fn read_zone_table() -> Option<String> {
-    const PATHS: [&str; 2] = [
-        "/usr/share/zoneinfo/zone.tab",
-        "/usr/share/zoneinfo/zone1970.tab",
-    ];
-    PATHS
-        .iter()
+/// The directories the zoneinfo tables may live in, in the order to try
+/// them: `TZDIR` first, as glibc reads it; then the directory
+/// `/etc/localtime` points into; then `/etc/zoneinfo`, where NixOS keeps
+/// the database; then `/usr/share/zoneinfo`, where most distributions do.
+/// Up to 0.3.1 only the last was tried, so on NixOS no zone ever resolved
+/// and the screen stayed at the day temperature, silently. Kept apart from
+/// the environment and the filesystem so the order can be tested against
+/// strings.
+fn zoneinfo_dirs(tzdir: Option<&OsStr>, localtime: Option<&Path>) -> Vec<PathBuf> {
+    let candidates = tzdir
+        .filter(|dir| !dir.is_empty())
+        .map(PathBuf::from)
+        .into_iter()
+        .chain(localtime.and_then(zoneinfo_dir_of))
+        .chain(["/etc/zoneinfo", "/usr/share/zoneinfo"].map(PathBuf::from));
+    let mut dirs = Vec::new();
+    for dir in candidates {
+        if !dirs.contains(&dir) {
+            dirs.push(dir);
+        }
+    }
+    dirs
+}
+
+/// The zoneinfo directory an `/etc/localtime` link points into:
+/// `/etc/zoneinfo/Europe/Tallinn` gives `/etc/zoneinfo`. A relative link, as
+/// Fedora writes it (`../usr/share/zoneinfo/...`), is read from `/etc`, where
+/// the link lives.
+fn zoneinfo_dir_of(target: &Path) -> Option<PathBuf> {
+    let (before, _) = target.to_str()?.split_once("zoneinfo/")?;
+    Some(Path::new("/etc").join(format!("{before}zoneinfo")))
+}
+
+/// [`zoneinfo_dirs`] for this system, as it stands right now.
+fn system_zoneinfo_dirs() -> Vec<PathBuf> {
+    zoneinfo_dirs(
+        std::env::var_os("TZDIR").as_deref(),
+        std::fs::read_link("/etc/localtime").ok().as_deref(),
+    )
+}
+
+/// The first of `names` that opens in the first directory holding any of
+/// them: each directory is searched in full before the next is tried, so
+/// the table `TZDIR` points at is never passed over for a fallback's.
+fn read_first(dirs: &[PathBuf], names: &[&str]) -> Option<String> {
+    dirs.iter()
+        .flat_map(|dir| names.iter().map(move |name| dir.join(name)))
         .find_map(|path| std::fs::read_to_string(path).ok())
+}
+
+/// Reads the zoneinfo coordinate table: `zone.tab`, then `zone1970.tab`,
+/// whichever opens first, from wherever this system keeps it.
+fn read_zone_table() -> Option<String> {
+    read_first(&system_zoneinfo_dirs(), &["zone.tab", "zone1970.tab"])
 }
 
 /// Looks up `zone` in the zoneinfo coordinate table.
@@ -210,7 +258,7 @@ fn canonical_from_links<'a>(contents: &'a str, zone: &str) -> Option<&'a str> {
 /// canonical form via the system's `tzdata.zi`. These aliases never appear in
 /// `zone.tab`, so without this step they would silently resolve to no location.
 fn resolve_alias(zone: &str) -> Option<String> {
-    let contents = std::fs::read_to_string("/usr/share/zoneinfo/tzdata.zi").ok()?;
+    let contents = read_first(&system_zoneinfo_dirs(), &["tzdata.zi"])?;
     canonical_from_links(&contents, zone).map(String::from)
 }
 
@@ -358,6 +406,72 @@ this line is malformed and has no tabs
             None
         );
         assert_eq!(first_resolvable(&[], in_sample), None);
+    }
+
+    #[test]
+    fn zoneinfo_is_looked_for_where_each_system_keeps_it() {
+        let etc = PathBuf::from("/etc/zoneinfo");
+        let usr = PathBuf::from("/usr/share/zoneinfo");
+        let link = |target: &'static str| Some(Path::new(target));
+        // Nothing known: NixOS's place, then everyone else's.
+        assert_eq!(zoneinfo_dirs(None, None), [etc.clone(), usr.clone()]);
+        // Debian, Arch: the link points where the database has always been.
+        assert_eq!(
+            zoneinfo_dirs(None, link("/usr/share/zoneinfo/Europe/Tallinn")),
+            [usr.clone(), etc.clone()]
+        );
+        // A NixOS session: TZDIR and the link agree, and count once.
+        assert_eq!(
+            zoneinfo_dirs(
+                Some(OsStr::new("/etc/zoneinfo")),
+                link("/etc/zoneinfo/Europe/Tallinn")
+            ),
+            [etc.clone(), usr.clone()]
+        );
+        // A NixOS service: TZDIR names the store path, and goes first.
+        let store = PathBuf::from("/nix/store/abc-tzdata/share/zoneinfo");
+        assert_eq!(
+            zoneinfo_dirs(
+                Some(store.as_os_str()),
+                link("/etc/zoneinfo/Europe/Tallinn")
+            ),
+            [store, etc.clone(), usr.clone()]
+        );
+        // Fedora: a relative link, read from /etc where it lives.
+        assert_eq!(
+            zoneinfo_dirs(None, link("../usr/share/zoneinfo/Europe/Tallinn")),
+            [
+                PathBuf::from("/etc/../usr/share/zoneinfo"),
+                etc.clone(),
+                usr.clone()
+            ]
+        );
+        // An empty TZDIR is no setting, and a link into nowhere names no
+        // directory.
+        assert_eq!(
+            zoneinfo_dirs(Some(OsStr::new("")), link("/etc/localtime.copy")),
+            [etc, usr]
+        );
+    }
+
+    #[test]
+    fn each_directory_is_searched_in_full_before_the_next() {
+        let base =
+            std::env::temp_dir().join(format!("nightlightd-zoneinfo-{}", std::process::id()));
+        let (first, second) = (base.join("first"), base.join("second"));
+        std::fs::create_dir_all(&first).unwrap();
+        std::fs::create_dir_all(&second).unwrap();
+        std::fs::write(first.join("zone1970.tab"), "first's table").unwrap();
+        std::fs::write(second.join("zone.tab"), "second's table").unwrap();
+        let names = ["zone.tab", "zone1970.tab"];
+        let missing = base.join("missing");
+        // The first directory's own fallback beats a later directory's
+        // preferred file; a directory that does not exist is passed over.
+        let found = read_first(&[missing.clone(), first, second], &names);
+        let none = read_first(&[missing], &names);
+        std::fs::remove_dir_all(&base).unwrap();
+        assert_eq!(found.as_deref(), Some("first's table"));
+        assert_eq!(none, None);
     }
 
     #[test]
