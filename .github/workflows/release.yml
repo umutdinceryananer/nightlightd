@@ -14,7 +14,12 @@ permissions:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    # Pinned, not ubuntu-latest. The .debs ask for the glibc they were built
+    # against, so the build machine sets the oldest system they install on.
+    # ubuntu-latest became 26.04 between 0.3.1 and 0.3.2, and the 0.3.2 panel
+    # came out asking for glibc 2.43, which no Mint 22 has. 24.04 is what
+    # Mint 22 is built on; move this only when the audience moves.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
