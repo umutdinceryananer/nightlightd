@@ -60,6 +60,21 @@ jobs:
             exit 1
           }
 
+      # The 0.3.2 lesson, asserted rather than trusted. A package that asks
+      # for a newer glibc than Mint 22 ships cannot be installed by the
+      # people this is for, and nothing else here would notice. 2.39 is
+      # Ubuntu 24.04's, which Mint 22 is built on.
+      - name: No package may ask for a newer glibc than Mint 22 has
+        run: |
+          for deb in target/debian/*.deb; do
+            need=$(dpkg-deb -f "$deb" Depends | grep -oP 'libc6 \(>= \K[0-9.]+' || true)
+            echo "$(basename "$deb") needs glibc ${need:-any}"
+            if [ -n "$need" ] && dpkg --compare-versions "$need" gt 2.39; then
+              echo "::error::$(basename "$deb") needs glibc $need; Mint 22 has 2.39"
+              exit 1
+            fi
+          done
+
       # checkout fetches the tag lightweight; force-fetch the real annotated
       # object so its message — the release notes — is readable.
       - name: Extract the tag message as release notes
