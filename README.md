@@ -64,12 +64,12 @@ Everything else (packaging, systemd units, solar elevation scheduling) gammastep
 
 The daemon runs headless and needs no interface. Three thin clients ship with it. Each is a separate process that holds no state and talks only over D-Bus, so if one crashes the filter keeps running.
 
-- **`nightlight-tray`** puts on/off, automatic/manual and the current temperature in the notification area. Its icon is the theme's plain symbol or, picked from the menu, one of three colour designs that follow the screen's temperature.
+- **`nightlight-tray`** puts on/off, automatic/manual and the current temperature in the notification area. Its icon is the theme's plain symbol or, chosen in the panel's or the dashboard's settings, one of three colour designs that follow the screen's temperature.
 - **`nightlight-panel`** is a desktop window with the same five tabs as the dashboard. **now** draws the day/night curve, and the curve is also the control: drag a ramp to move the transition band, a plateau to move a temperature, Apply when the shape looks right. **today** lists the day's milestones with the next one lit, under how much daylight there is and how that compares with yesterday. **location** takes a pin on a world map. **outputs** shows every screen the ramp is reaching. **settings** holds the bounds, gamma, night dim, the switches and the theme.
 - **`nightlight-tui`** is a terminal dashboard built with [ratatui](https://ratatui.rs).
 
 The tray's menu is the whole of that client: what the screen is doing this
-minute, and the few things worth changing without opening a window.
+minute, and the four things worth changing without opening a window.
 
 <p align="center">
   <img src="docs/screenshots/tray-menu.png" alt="the tray icon's menu: a readout of the current temperature and the sun's phase, then turn off, automatic, fade transitions, settings and quit" width="150">

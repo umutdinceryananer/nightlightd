@@ -1209,11 +1209,11 @@ up its per-hour colour.
 
 ### #53 Coloured tray icon (GitHub #4)
 
-**Done on `main`, waiting for a release.** The tray's menu has an Icon
-submenu: the theme's plain symbol, which stays the default, and three
-painted designs. The night badge's crescent, the horizon's sun and sky,
-and the screen's display all follow the temperature, and all three go
-grey when the filter is off.
+**Done on `main`, waiting for a release.** The settings in the panel and
+the dashboard have a tray icon row: the theme's plain symbol, which stays
+the default, and three painted designs. The night badge's crescent, the
+horizon's sun and sky, and the screen's display all follow the
+temperature, and all three go grey when the filter is off.
 
 Painted in `tray/src/icon.rs`, pixel by pixel, instead of shipped as
 image files. A file can only say day or night, and pixels leave nothing
@@ -1222,10 +1222,11 @@ passed over for the same reasons. No new dependency: `ksni` already
 takes pixmaps and radio groups.
 
 Verified on a real Xfce 4.18 panel in a Mint 22.3 container, against the
-real daemon: the plain icon at start, each design picked through the
-menu's D-Bus interface, the choice written to disk, and the icon redrawn
-at 6500 K, at 2700 K and with the filter off. Not seen: the reporter's
-own panel and theme, a panel other than Xfce's, a doubled screen.
+real daemon: the plain icon at start, the three designs drawn at 6500 K,
+at 2700 K and with the filter off, and one choice made in the dashboard's
+settings and another in the panel's, each picked up by the running tray
+within its refresh. Not seen: the reporter's own panel and theme, a panel
+other than Xfce's, a doubled screen.
 
 - **What:** A colour icon for panels where a monochrome one is the odd
   one out.
@@ -1233,9 +1234,10 @@ own panel and theme, a panel other than Xfce's, a doubled screen.
   Visibility was not the complaint, so the plain symbol stays, and stays
   the default.
 - **How:** Signed-distance shapes drawn directly at each size, so small
-  icons drop detail instead of blurring it. The choice is remembered by
-  name in `tray-icon` beside the config, as the panel and the dashboard
-  keep their themes.
+  icons drop detail instead of blurring it. The choice is one small file
+  beside the config, written by the panel and the dashboard and read by
+  the tray on each refresh, so the daemon stays out of it and no D-Bus
+  interface is added.
 - **Done when:** The reporter can pick one and it looks right on their
   panel.
 - **Difficulty:** Medium
