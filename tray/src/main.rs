@@ -2,25 +2,28 @@
 //! open a terminal.
 //!
 //! It is a *thin client* and holds no state of its own beyond the last status
-//! it read — the daemon owns everything; this asks, displays, and forwards
-//! clicks. It is a separate binary in a separate crate on purpose: the daemon
-//! must never link the GUI stack, so if the tray dies, the filter lives.
+//! it read and which icon it wears — the daemon owns everything else; this
+//! asks, displays, and forwards clicks. It is a separate binary in a separate
+//! crate on purpose: the daemon must never link the GUI stack, so if the tray
+//! dies, the filter lives.
 //!
 //! Speaks StatusNotifierItem (SNI) over D-Bus via `ksni`, which XFCE's own
 //! systray already hosts — no panel plugin for the user to install.
 
 mod daemon;
+mod icon;
 
 use std::time::Duration;
 
 use ksni::blocking::TrayMethods;
 use ksni::menu::Disposition;
 use ksni::menu::Disposition::{Alert, Informative, Warning};
-use ksni::menu::{CheckmarkItem, StandardItem};
+use ksni::menu::{CheckmarkItem, RadioGroup, RadioItem, StandardItem, SubMenu};
 use ksni::{MenuItem, ToolTip};
 use nightlightd_core::transition::{Band, phase};
 
 use crate::daemon::{Client, Status};
+use crate::icon::{Look, Style};
 
 /// How often to re-read the daemon's status. The temperature only moves once a
 /// minute, so a few seconds keeps the display fresh without busy-polling.
@@ -42,6 +45,11 @@ struct NightLight {
     /// sun's phase the way the screen behaves rather than the way the
     /// defaults used to.
     band: Band,
+    /// The icon picked from the menu (GitHub #4). Lives here rather than in
+    /// the daemon because it describes this window on the panel and nothing
+    /// about the screen, the same way the panel and the dashboard each keep
+    /// their own theme.
+    style: Style,
 }
 
 impl NightLight {
@@ -135,6 +143,15 @@ impl NightLight {
         self.client.set_enabled(enabled);
         self.refresh();
     }
+
+    /// Wears the icon at `index` in the menu and remembers it. ksni re-reads
+    /// the icon when this returns, so the panel answers the click at once.
+    fn choose_style(&mut self, index: usize) {
+        if let Some(style) = Style::ALL.get(index).copied() {
+            self.style = style;
+            remember_style(style);
+        }
+    }
 }
 
 impl ksni::Tray for NightLight {
@@ -151,6 +168,11 @@ impl ksni::Tray for NightLight {
     /// daemon is unreachable), so a left click visibly changes the icon. Both
     /// names are Adwaita's, which the mainstream themes inherit from.
     fn icon_name(&self) -> String {
+        // Empty when a colour icon is worn, because panels prefer a name
+        // over pixels whenever they are given both.
+        if self.style != Style::Plain {
+            return String::new();
+        }
         // A version mismatch (#42) shows the plain icon: the daemon *is*
         // running, and the disabled variant here is exactly the lie that
         // motivated the issue.
@@ -160,6 +182,12 @@ impl ksni::Tray for NightLight {
         } else {
             "night-light-disabled-symbolic".into()
         }
+    }
+
+    /// The colour icon (GitHub #4), painted for what the screen is doing
+    /// now. Empty when the plain icon is worn.
+    fn icon_pixmap(&self) -> Vec<ksni::Icon> {
+        icon::pixmaps(self.style, look_of(self.status.as_ref(), self.mismatch))
     }
 
     /// Left click toggles the filter — the one action people want most.
@@ -283,6 +311,7 @@ impl ksni::Tray for NightLight {
                 .into(),
             );
         }
+        items.push(self.icon_menu());
         // Only when there is a panel to open. It ships as its own package
         // (#50) because it is the one binary of the four that needs a
         // graphics stack, so a complete and sensible install — daemon, this
@@ -354,6 +383,45 @@ impl NightLight {
             }
             .into(),
         )
+    }
+
+    /// The icon chooser (GitHub #4). A submenu so the choice costs the menu
+    /// one line, and in the application's block because it changes nothing
+    /// about the screen. Always there, working or not: an icon can be
+    /// chosen with no daemon running.
+    fn icon_menu(&self) -> MenuItem<Self> {
+        SubMenu {
+            label: "Icon".into(),
+            submenu: vec![
+                RadioGroup {
+                    selected: self.style.index(),
+                    select: Box::new(|this: &mut Self, index| this.choose_style(index)),
+                    options: Style::ALL
+                        .iter()
+                        .map(|style| RadioItem {
+                            label: style.label().into(),
+                            ..Default::default()
+                        })
+                        .collect(),
+                }
+                .into(),
+            ],
+            ..Default::default()
+        }
+        .into()
+    }
+}
+
+/// What a colour icon should show, kept out of the `Tray` impl so it can be
+/// tested without a daemon. A version mismatch (#42) reads as on, by the same
+/// reasoning as the plain icon: the daemon *is* running, and grey here would
+/// be the lie that issue was about. Its temperature is unknowable, so it
+/// shows the day.
+fn look_of(status: Option<&Status>, mismatch: bool) -> Look {
+    match status {
+        Some(status) if status.enabled => Look::warmed(status.temperature),
+        None if mismatch => Look::warmed(6500),
+        _ => Look::Off,
     }
 }
 
@@ -453,6 +521,32 @@ fn open_panel() {
     }
 }
 
+/// Where the chosen icon is remembered, beside the config.
+const STYLE_FILE: &str = "tray-icon";
+
+/// The icon this tray last wore, or the plain one when it has never been
+/// asked. Anything unreadable, empty or unknown lands on the default without
+/// complaint: the file is a convenience.
+fn remembered_style() -> Style {
+    nightlightd_core::paths::config_file(STYLE_FILE)
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|name| Style::from_name(name.trim()))
+        .unwrap_or(Style::Plain)
+}
+
+/// Remembers the choice by name, as the panel and the dashboard do with
+/// their themes. Failure is silence: the icon still changes for this session,
+/// it just will not survive a restart.
+fn remember_style(style: Style) {
+    let Some(path) = nightlightd_core::paths::config_file(STYLE_FILE) else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(path, style.name());
+}
+
 const USAGE: &str = "usage: nightlight-tray [--version] [--help]
 
 Puts the filter's state and its controls in the notification area.
@@ -532,6 +626,7 @@ fn main() {
         fade,
         mismatch,
         band,
+        style: remembered_style(),
     })
     .assume_sni_available(true)
     .spawn()
@@ -659,6 +754,21 @@ mod tests {
         assert_ne!(stopped, stale);
         assert_eq!(stopped_tone, Warning);
         assert_eq!(stale_tone, Alert);
+    }
+
+    /// The colour icon has to tell the same four states apart that the
+    /// readout does, and must not turn grey for a daemon that is running.
+    #[test]
+    fn the_icon_looks_the_way_the_screen_is() {
+        let on = following_at(45.0);
+        assert_eq!(look_of(Some(&on), false), Look::warmed(4200));
+
+        let mut off = on.clone();
+        off.enabled = false;
+        assert_eq!(look_of(Some(&off), false), Look::Off);
+
+        assert_eq!(look_of(None, false), Look::Off);
+        assert_eq!(look_of(None, true), Look::warmed(6500));
     }
 
     /// An off filter is off whatever the sun is doing: the phase word must
