@@ -292,14 +292,7 @@ impl Panel {
     /// a location is resolved, so the strip stays quiet rather than claiming
     /// a city it has not found.
     fn where_and_when(&self) -> String {
-        let clock = {
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
-            let secs = (now as i64 + i64::from(self.offset.secs)).rem_euclid(86_400);
-            format!("{:02}:{:02}", secs / 3600, (secs % 3600) / 60)
-        };
+        let clock = clock_text(self.day_context().1);
         match self.place.as_ref() {
             Some((_, _, city)) => format!("{city} · {clock}"),
             None => clock,
@@ -1846,6 +1839,14 @@ fn remember_theme(index: usize) {
     let _ = std::fs::write(path, name);
 }
 
+/// An hour of the day as the state card prints it. Rounded to the second
+/// first, so that an hour computed in floating point cannot read a minute
+/// behind for the instant it lands exactly on one.
+fn clock_text(hour: f64) -> String {
+    let secs = ((hour * 3600.0).round() as i64).rem_euclid(86_400);
+    format!("{:02}:{:02}", secs / 3600, (secs % 3600) / 60)
+}
+
 /// Writes down the tray's icon, which the tray notices on its next refresh.
 /// Failure is silence: the tray just goes on wearing the one it has.
 fn remember_tray_icon(icon: TrayIcon) {
@@ -2530,6 +2531,17 @@ fn main() -> eframe::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The state card tells the time it is given, which in a demo run is the
+    /// demo's: a card reading "day" beside the real 23:03 is a picture of
+    /// nothing.
+    #[test]
+    fn the_clock_prints_the_hour_it_is_given() {
+        assert_eq!(clock_text(14.5), "14:30");
+        assert_eq!(clock_text(0.0), "00:00");
+        assert_eq!(clock_text(23.0 + 59.0 / 60.0), "23:59");
+        assert_eq!(clock_text(24.0), "00:00");
+    }
 
     /// A settings row shows the value it was handed, even one outside its
     /// rail: a night of 5000 K from the config file is not 4500 K because the
