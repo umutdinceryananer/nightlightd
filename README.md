@@ -81,7 +81,7 @@ Both windows wear the same eight themes, each remembering its own choice.
   <img src="docs/screenshots/panel-now.png" alt="the panel's now tab: the day/night curve, with the sliders and the manual hold beneath it" width="200">
   <img src="docs/screenshots/panel-today.png" alt="the panel's today tab: the day's milestones, under how long the day is and how that compares with yesterday" width="200">
   <img src="docs/screenshots/panel-location.png" alt="the panel's location tab: a world map with the resolved place pinned on it" width="200">
-  <img src="docs/screenshots/panel-settings.png" alt="the panel's settings tab in the nord theme: the bounds, the theme picker and the config path" width="200">
+  <img src="docs/screenshots/panel-settings.png" alt="the panel's settings tab in the nord theme: the bounds, the theme and tray icon pickers and the config path" width="200">
 </p>
 
 The dashboard has five tabs.
