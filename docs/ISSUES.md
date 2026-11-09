@@ -1209,7 +1209,7 @@ up its per-hour colour.
 
 ### #53 Coloured tray icon (GitHub #4)
 
-**Done on `main`, waiting for a release.** The settings in the panel and
+**Done.** Shipped in v0.4.0. The settings in the panel and
 the dashboard have a tray icon row: the theme's plain symbol, which stays
 the default, and three painted designs. The night badge's crescent, the
 horizon's sun and sky, and the screen's display all follow the
@@ -1241,7 +1241,7 @@ other than Xfce's, a doubled screen.
 - **Done when:** The reporter can pick one and it looks right on their
   panel.
 - **Difficulty:** Medium
-- **Target:** the next release
+- **Target:** v0.4.0, shipped
 
 ---
 

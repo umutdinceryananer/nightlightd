@@ -14,7 +14,7 @@
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
 [![Built With Ratatui](https://ratatui.rs/built-with-ratatui/badge.svg)](https://ratatui.rs/)
 
-> **Version 0.3.2.** The daemon provides timezone based location, a single instance D-Bus lock, gamma ramps over XRandR, eased transitions between targets, a movable transition band, reapplication on resume from suspend, a ramp it checks and repairs when something else clears it, and a `--status` readout. Three clients ship with it, a tray icon, a settings panel, and a terminal dashboard, both windows carrying the same five tabs and the same themes. A [release with `.deb` packages](https://github.com/umutdinceryananer/nightlightd/releases/latest) and an [AUR package](https://aur.archlinux.org/packages/nightlightd) are available. Flatpak is planned. Young software, tested on one machine so far. Report what breaks.
+> **Version 0.4.0.** The daemon provides timezone based location, a single instance D-Bus lock, gamma ramps over XRandR, eased transitions between targets, a movable transition band, reapplication on resume from suspend, a ramp it checks and repairs when something else clears it, and a `--status` readout. Three clients ship with it, a tray icon, a settings panel, and a terminal dashboard, both windows carrying the same five tabs and the same themes. A [release with `.deb` packages](https://github.com/umutdinceryananer/nightlightd/releases/latest) and an [AUR package](https://aur.archlinux.org/packages/nightlightd) are available. Flatpak is planned. Young software, tested on one machine so far. Report what breaks.
 
 <p align="center">
   <img src="docs/screenshots/nightlight-tui.gif" alt="the terminal dashboard's demo reel: a compressed day warms the interface through sunset, the transition band is widened over the curve, the day is summarised, and the themes roll past" width="520">
@@ -143,10 +143,10 @@ Two packages, from the [latest release](https://github.com/umutdinceryananer/nig
 
 ```
 # the daemon, the tray icon and the terminal dashboard
-sudo apt install ./nightlightd_0.3.2-1_amd64.deb
+sudo apt install ./nightlightd_0.4.0-1_amd64.deb
 
 # the settings window, if you want it
-sudo apt install ./nightlightd-panel_0.3.2-1_amd64.deb
+sudo apt install ./nightlightd-panel_0.4.0-1_amd64.deb
 
 systemctl --user enable --now nightlightd
 ```
@@ -202,7 +202,7 @@ Tracked in [`docs/ISSUES.md`](docs/ISSUES.md).
 | M3 | Daemon and event loop | ✅ done |
 | M4 | DBus, CLI, systemd, suspend | ✅ done |
 | M5 | Tray icon, settings panel, terminal dashboard | ✅ done |
-| M6 | Packaging and release | 🔶 v0.3.2 released, on the AUR. Flatpak remains |
+| M6 | Packaging and release | 🔶 v0.4.0 released, on the AUR. Flatpak remains |
 
 The timezone fallback went upstream before the Rust port of it was written. [`chinstrap/gammastep!28`](https://gitlab.com/chinstrap/gammastep/-/merge_requests/28), opened 2026-07-10, adds the same provider in C, where it helps far more people. It has been awaiting review since. Upstream's last commit is from March 2025 and its oldest open merge request dates to 2020, so a long wait is expected. What the attempt revealed is recorded in [`docs/PRIOR-ART.md`](docs/PRIOR-ART.md) under "Upstream attempt". If it lands and the remaining defects prove fixable upstream, this repository becomes obsolete, which was always an acceptable outcome.
 
