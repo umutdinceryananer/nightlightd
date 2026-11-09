@@ -31,8 +31,8 @@ const REFRESH: Duration = Duration::from_secs(5);
 struct NightLight {
     client: Client,
     status: Option<Status>,
-    /// Whether the fade walk (#44) is on; `None` against a daemon that is
-    /// unreachable or predates `GetFade`, and then no menu item shows.
+    /// Whether the fade walk (#44) is on; `None` when the status cannot be
+    /// read, and then no menu item shows.
     fade: Option<bool>,
     /// Set when the status is unreadable but the daemon's name is owned
     /// (#42): the two are different versions, and saying "not running"
@@ -48,8 +48,8 @@ impl NightLight {
     /// Re-reads the daemon and stores the result (`None` when unreachable).
     fn refresh(&mut self) {
         self.status = self.client.status();
-        self.fade = self.client.fade();
-        self.band = self.client.band();
+        self.fade = self.status.as_ref().map(|status| status.fade);
+        self.band = self.status.as_ref().map(Status::band).unwrap_or_default();
         self.mismatch = self.status.is_none() && self.client.daemon_on_bus();
         if self.mismatch {
             // Maybe this process is simply older than the file it came from;
@@ -514,8 +514,8 @@ fn main() {
     }
 
     let status = client.status();
-    let fade = client.fade();
-    let band = client.band();
+    let fade = status.as_ref().map(|status| status.fade);
+    let band = status.as_ref().map(Status::band).unwrap_or_default();
     let mismatch = status.is_none() && client.daemon_on_bus();
     if mismatch {
         // Heal a stale process before the icon even registers.
@@ -602,6 +602,9 @@ mod tests {
             brightness: 1.0,
             day_brightness: 1.0,
             night_brightness: 1.0,
+            fade: true,
+            day_elevation: 3.0,
+            night_elevation: -6.0,
         }
     }
 

@@ -32,9 +32,22 @@ pub struct Status {
     pub brightness: f64,
     pub day_brightness: f64,
     pub night_brightness: f64,
+    pub fade: bool,
+    pub day_elevation: f64,
+    pub night_elevation: f64,
 }
 
 impl Status {
+    /// The transition band (#39) the daemon runs, `sane()`d so the tooltip
+    /// names the sun's phase by the band actually applied.
+    pub fn band(&self) -> Band {
+        Band {
+            day_elevation: self.day_elevation,
+            night_elevation: self.night_elevation,
+        }
+        .sane()
+    }
+
     /// A few lines for the hover tooltip: on/off and the applied temperature,
     /// what is driving it, and — when a location is known — where the sun is.
     /// This is the tray's version of `--status`. `band` names the sun's phase;
@@ -70,8 +83,6 @@ trait Daemon {
     fn set_temperature(&self, kelvin: u32) -> zbus::Result<()>;
     fn set_mode(&self, mode: &str) -> zbus::Result<()>;
     fn set_fade(&self, fade: bool) -> zbus::Result<()>;
-    fn get_fade(&self) -> zbus::Result<bool>;
-    fn get_transition_band(&self) -> zbus::Result<(f64, f64)>;
 }
 
 /// A live handle to the daemon: the session-bus connection plus a proxy.
@@ -122,22 +133,6 @@ impl Client {
         }
     }
 
-    /// The transition band (#39) the daemon is running, already `sane()`d so
-    /// the tooltip names the sun's phase by the band actually applied. Falls
-    /// back to the default against a daemon too old to answer.
-    pub fn band(&self) -> Band {
-        self.proxy
-            .get_transition_band()
-            .map(|(day, night)| {
-                Band {
-                    day_elevation: day,
-                    night_elevation: night,
-                }
-                .sane()
-            })
-            .unwrap_or_default()
-    }
-
     /// The current status, or `None` when the daemon cannot be reached.
     pub fn status(&self) -> Option<Status> {
         self.proxy.get_status().ok()
@@ -159,13 +154,6 @@ impl Client {
     /// Turns the fade walk (#44) on or off. Errors swallowed.
     pub fn set_fade(&self, fade: bool) {
         let _ = self.proxy.set_fade(fade);
-    }
-
-    /// Whether the fade walk is on, or `None` when the daemon is unreachable
-    /// or too old to know `GetFade` — the caller then shows no fade item at
-    /// all rather than a checkbox that lies.
-    pub fn fade(&self) -> Option<bool> {
-        self.proxy.get_fade().ok()
     }
 
     /// Pins `kelvin`, freezing the screen there and leaving the sun — what
@@ -190,7 +178,7 @@ mod tests {
     /// work, which reads as "daemon not running" with a working left-click.
     #[test]
     fn wire_signature_is_pinned() {
-        assert_eq!(Status::SIGNATURE.to_string(), "(busdbddbuudddd)");
+        assert_eq!(Status::SIGNATURE.to_string(), "(busdbddbuuddddbdd)");
     }
 
     fn somewhere_at(elevation: f64) -> Status {
@@ -209,6 +197,9 @@ mod tests {
             brightness: 1.0,
             day_brightness: 1.0,
             night_brightness: 1.0,
+            fade: true,
+            day_elevation: 3.0,
+            night_elevation: -6.0,
         }
     }
 
