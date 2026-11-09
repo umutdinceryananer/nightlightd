@@ -288,20 +288,19 @@ const MAP_LAT_MAX: f64 = 75.0;
 struct App {
     client: Client,
     status: Option<Status>,
-    /// The fade switch (#44), read through the additive `GetFade`; `None`
-    /// against a daemon that is unreachable or too old to answer.
+    /// The fade switch (#44); `None` when the status cannot be read.
     fade: Option<bool>,
     /// Status unreadable but the daemon's name owned (#42): different
     /// versions, which deserves a different banner than "not running".
     mismatch: bool,
     /// The transition band (#39) as the daemon last reported it, so every
     /// curve and schedule drawn here matches what the screen actually does;
-    /// the default against a daemon that cannot answer.
+    /// the default when the status cannot be read.
     band: Band,
     /// Whether that band came from the daemon or is the drawing fallback.
-    /// The settings rows (#45) show blanks when it is the fallback: a v0.2.1
-    /// daemon answers `GetStatus` but knows nothing of a band, and offering
-    /// arrows that change nothing is the lie the fade row already refuses.
+    /// The settings rows (#45) show blanks when it is the fallback: with no
+    /// status to read there is no daemon listening, and offering arrows that
+    /// change nothing is the lie the fade row already refuses.
     band_known: bool,
     last_poll: Option<Instant>,
     /// The local clock's distance from UTC, read again after every whole and
@@ -363,6 +362,9 @@ fn demo_status() -> Status {
         brightness: 1.0,
         day_brightness: 1.0,
         night_brightness: 1.0,
+        fade: true,
+        day_elevation: 3.0,
+        night_elevation: -6.0,
     }
 }
 
@@ -507,18 +509,12 @@ impl App {
             if poll_due {
                 self.status = self.client.status();
                 self.outputs = self.client.outputs();
-                self.fade = self.client.fade();
-                let reported = self.client.band().map(|(day, night)| {
-                    Band {
-                        day_elevation: day,
-                        night_elevation: night,
-                    }
-                    .sane()
-                });
+                self.fade = self.status.as_ref().map(|status| status.fade);
+                let reported = self.status.as_ref().map(Status::band);
                 // The schedule still needs a band to draw with, so it falls
                 // back to the default; the settings rows need to know it was
-                // a fallback, or they would offer to edit a band the daemon
-                // has never heard of.
+                // a fallback, or they would offer to edit a band with nobody
+                // there to receive it.
                 self.band = reported.unwrap_or_default();
                 self.band_known = reported.is_some();
                 self.mismatch = self.status.is_none() && self.client.daemon_on_bus();

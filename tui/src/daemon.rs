@@ -4,6 +4,7 @@
 //! `org.nightlightd.Daemon` it uses: the contract is the interface, not a Rust
 //! type. It reads the status and sends the few controls the keybindings need.
 
+use nightlightd_core::transition::Band;
 use serde::Deserialize;
 use zbus::blocking::Connection;
 use zbus::proxy;
@@ -30,6 +31,21 @@ pub struct Status {
     pub brightness: f64,
     pub day_brightness: f64,
     pub night_brightness: f64,
+    pub fade: bool,
+    pub day_elevation: f64,
+    pub night_elevation: f64,
+}
+
+impl Status {
+    /// The transition band (#39) the daemon runs, `sane()`d so every chart is
+    /// drawn the way the screen behaves.
+    pub fn band(&self) -> Band {
+        Band {
+            day_elevation: self.day_elevation,
+            night_elevation: self.night_elevation,
+        }
+        .sane()
+    }
 }
 
 /// The slice of the daemon interface the TUI uses. `zbus::proxy` generates
@@ -48,9 +64,7 @@ trait Daemon {
     fn set_gamma(&self, gamma: f64) -> zbus::Result<()>;
     fn set_brightness(&self, day: f64, night: f64) -> zbus::Result<()>;
     fn set_fade(&self, fade: bool) -> zbus::Result<()>;
-    fn get_fade(&self) -> zbus::Result<bool>;
     fn set_transition_band(&self, day: f64, night: f64) -> zbus::Result<()>;
-    fn get_transition_band(&self) -> zbus::Result<(f64, f64)>;
     fn set_location(&self, latitude: f64, longitude: f64) -> zbus::Result<()>;
     fn clear_location(&self) -> zbus::Result<()>;
     fn get_outputs(&self) -> zbus::Result<Vec<(u32, u16)>>;
@@ -130,24 +144,10 @@ impl Client {
         let _ = self.proxy.set_fade(fade);
     }
 
-    /// Whether the fade walk is on, or `None` when the daemon is unreachable
-    /// or predates `GetFade` — the settings row then shows a dash and the
-    /// toggle does nothing.
-    pub fn fade(&self) -> Option<bool> {
-        self.proxy.get_fade().ok()
-    }
-
-    /// The transition band (#39), or `None` against a daemon that is
-    /// unreachable or predates `GetTransitionBand` — the drawings then fall
-    /// back to the default band.
     /// Sets the transition band (#45); the daemon carries the pair verbatim
     /// and persists it. Errors swallowed.
     pub fn set_band(&self, day: f64, night: f64) {
         let _ = self.proxy.set_transition_band(day, night);
-    }
-
-    pub fn band(&self) -> Option<(f64, f64)> {
-        self.proxy.get_transition_band().ok()
     }
 
     /// Pins a manual location (degrees); the daemon clamps and persists it.
@@ -176,6 +176,6 @@ mod tests {
     /// while writes still work.
     #[test]
     fn wire_signature_is_pinned() {
-        assert_eq!(Status::SIGNATURE.to_string(), "(busdbddbuudddd)");
+        assert_eq!(Status::SIGNATURE.to_string(), "(busdbddbuuddddbdd)");
     }
 }
