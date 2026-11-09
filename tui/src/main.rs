@@ -22,6 +22,7 @@ use nightlightd_core::location::nearest_zone;
 use nightlightd_core::schedule::{Milestone, milestones};
 use nightlightd_core::solar::solar_elevation;
 use nightlightd_core::transition::{Band, phase, target_temperature};
+use nightlightd_core::tray_icon::{self, TrayIcon};
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Alignment, Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Style};
@@ -141,11 +142,11 @@ const TABS: &[&str] = &["now", "today", "location", "outputs", "settings"];
 const THEME_FILE: &str = "tui-theme";
 const LOCATION_TAB: usize = 2;
 /// The settings tab's index and its selectable rows: day, night, gamma,
-/// night dim, fade, theme, login. The transition band is deliberately not
+/// night dim, fade, theme, the tray's icon, login. The transition band is deliberately not
 /// here (#45): it changes the shape of the curve, so it is edited over the
 /// curve, with `b`, where the change can be watched.
 const SETTINGS_TAB: usize = 4;
-const SETTINGS_ITEMS: usize = 7;
+const SETTINGS_ITEMS: usize = 8;
 /// The tabs that draw the schedule, and so accept `b`.
 const NOW_TAB: usize = 0;
 const TODAY_TAB: usize = 1;
@@ -307,6 +308,8 @@ struct App {
     /// half hour so a DST change reaches the chart within a poll.
     offset: LocalOffset,
     theme_index: usize,
+    /// The tray's icon (GitHub #4), chosen here and worn by the tray.
+    tray_icon: TrayIcon,
     tab: usize,
     settings_selected: usize,
     /// The theme picker popup: `Some(highlighted index)` while open.
@@ -409,6 +412,7 @@ fn main() -> io::Result<()> {
         // The flag is a one-off override, like `--tab`: it dresses this run
         // without rewriting what you last chose from inside the dashboard.
         theme_index: theme_index.unwrap_or_else(remembered_theme),
+        tray_icon: tray_icon::remembered(),
         tab,
         settings_selected: 0,
         theme_popup: None,
@@ -699,7 +703,8 @@ impl App {
             KeyCode::Enter | KeyCode::Char(' ') => match self.settings_selected {
                 4 => self.toggle_fade(),
                 5 => self.theme_popup = Some(self.theme_index),
-                6 => self.toggle_login(),
+                6 => self.wear_tray_icon(self.tray_icon.stepped(true)),
+                7 => self.toggle_login(),
                 _ => {}
             },
             _ => {}
@@ -707,7 +712,8 @@ impl App {
     }
 
     /// Left/right on the selected settings row: nudge the bounds (the daemon
-    /// clamps and persists), cycle the theme, or flip the login toggle.
+    /// clamps and persists), cycle the theme or the tray's icon, or flip the
+    /// login toggle.
     ///
     /// The bounds are held by a `min` then a `max` rather than a `clamp`,
     /// because `clamp` panics when its two ends cross and a hand-written
@@ -768,7 +774,8 @@ impl App {
                     (self.theme_index + count - 1) % count
                 });
             }
-            6 => self.toggle_login(),
+            6 => self.wear_tray_icon(self.tray_icon.stepped(increase)),
+            7 => self.toggle_login(),
             _ => {}
         }
     }
@@ -955,6 +962,16 @@ impl App {
         // whoever recorded it wearing whatever the tour stopped on.
         if self.demo.is_none() {
             remember_theme(index);
+        }
+    }
+
+    /// Chooses the tray's icon. The tray notices on its next refresh. Not in
+    /// a demo run, for the reason the theme is not: a recording is not a
+    /// session.
+    fn wear_tray_icon(&mut self, icon: TrayIcon) {
+        self.tray_icon = icon;
+        if self.demo.is_none() {
+            remember_tray_icon(icon);
         }
     }
 
@@ -1320,8 +1337,8 @@ impl App {
         );
     }
 
-    /// Tab 5: the settings — the two bounds, the theme, autostart, and where
-    /// the config lives. Row-based: arrows select and adjust, enter acts.
+    /// Tab 5: the settings — the two bounds, the theme, the tray's icon,
+    /// autostart, and where the config lives. Row-based: arrows select and adjust, enter acts.
     fn draw_settings_tab(&self, frame: &mut Frame<'_>, area: Rect, pal: &Palette) {
         let block = card(" settings ", pal).padding(Padding::new(2, 1, 1, 0));
         let inner = block.inner(area);
@@ -1371,6 +1388,12 @@ impl App {
                 "theme",
                 THEMES[self.theme_index].name.to_string(),
                 "⏎ choose · ‹ › cycle",
+                None,
+            ),
+            (
+                "tray icon",
+                self.tray_icon.label().to_string(),
+                "‹ › cycle",
                 None,
             ),
             (
@@ -3283,6 +3306,18 @@ fn remember_theme(index: usize) {
         let _ = std::fs::create_dir_all(parent);
     }
     let _ = std::fs::write(path, name);
+}
+
+/// Writes down the tray's icon, which the tray notices on its next refresh.
+/// Failure is silence: the tray just goes on wearing the one it has.
+fn remember_tray_icon(icon: TrayIcon) {
+    let Some(path) = nightlightd_core::paths::config_file(tray_icon::FILE) else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(path, icon.name());
 }
 
 /// "41.0°N 29.0°E" for a signed coordinate pair.
