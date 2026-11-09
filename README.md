@@ -208,12 +208,7 @@ The timezone fallback went upstream before the Rust port of it was written. [`ch
 
 ### What is not done
 
-**Next, and in this order.** Two numbers reach the clients through side doors:
-`fade` and the transition band each have their own D-Bus getter, parked there
-so a patch release would not change the pinned `Status` signature. The bill is
-five round trips per poll and a seam — a client can read a status and a band
-that disagree, because they arrived separately. Folding both into `Status`
-comes first, and everything below waits behind it.
+**Next, and in this order.**
 
 - **#47, dawn and dusk apart.** The sun crosses the same elevation on the way
   up and on the way down, and both crossings read off one pair of numbers

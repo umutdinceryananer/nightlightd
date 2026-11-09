@@ -486,6 +486,13 @@ Keep all of these **out of v0.1.** Scope creep is what kills projects like this.
   #47 and #49 are both queued behind exactly that: one turns the band
   into four numbers, the other into a list. Neither should be parked
   beside the other two.
+- **Honoured (2026-11):** `fade`, `day_elevation` and `night_elevation`
+  now ride in Status and the two getters are gone, ahead of this issue
+  rather than with it, because #47 and #49 were waiting at the same
+  door. A poll is two round trips in the panel and the dashboard and
+  one in the tray. The five counted above included `NameHasOwner`,
+  which is asked only when the status cannot be read. `GetOutputs`
+  stays its own question.
 
 ### #37 Brightness control
 
