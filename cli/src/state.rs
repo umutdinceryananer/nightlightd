@@ -87,9 +87,7 @@ pub struct State {
     /// setting) only mid-fade (#38); the fade needs to know where the screen
     /// is, not where it is headed. Not on the wire.
     pub current_gamma: f64,
-    /// Whether target changes ease onto the screen (#44). Read through the
-    /// additive `GetFade`, not `GetStatus` — the consolidation promise is
-    /// recorded under #34 in ISSUES.md.
+    /// Whether target changes ease onto the screen (#44).
     pub fade: bool,
     /// The transition band (#39), carried verbatim from the config; core
     /// degrades a nonsensical pair to the default where it is spent.

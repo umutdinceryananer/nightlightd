@@ -121,13 +121,6 @@ impl Daemon {
         self.waker.wake();
     }
 
-    /// The transition band's bounds. Additive, like GetFade (#44); the
-    /// consolidation promise under #34 covers this pair too.
-    fn get_transition_band(&self) -> (f64, f64) {
-        let state = lock(&self.state);
-        (state.band.day_elevation, state.band.night_elevation)
-    }
-
     /// Turn the fade walk (#44) on or off, then persist. Off means the next
     /// target change lands in one write; a walk in flight completes on the
     /// wake this triggers.
@@ -138,13 +131,6 @@ impl Daemon {
         }
         persist(&self.state);
         self.waker.wake();
-    }
-
-    /// Whether the fade walk is on. An additive method, not a Status field,
-    /// so the pinned wire signature survives a patch release — the
-    /// consolidation promise is recorded under #34 in ISSUES.md.
-    fn get_fade(&self) -> bool {
-        lock(&self.state).fade
     }
 
     fn set_gamma(&self, gamma: f64) {
