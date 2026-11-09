@@ -18,7 +18,7 @@ use std::time::Duration;
 use ksni::blocking::TrayMethods;
 use ksni::menu::Disposition;
 use ksni::menu::Disposition::{Alert, Informative, Warning};
-use ksni::menu::{CheckmarkItem, RadioGroup, RadioItem, StandardItem, SubMenu};
+use ksni::menu::{CheckmarkItem, StandardItem};
 use ksni::{MenuItem, ToolTip};
 use nightlightd_core::transition::{Band, phase};
 use nightlightd_core::tray_icon::{self, TrayIcon};
@@ -143,15 +143,6 @@ impl NightLight {
     fn set_enabled(&mut self, enabled: bool) {
         self.client.set_enabled(enabled);
         self.refresh();
-    }
-
-    /// Wears the icon at `index` in the menu and remembers it. ksni re-reads
-    /// the icon when this returns, so the panel answers the click at once.
-    fn choose_style(&mut self, index: usize) {
-        if let Some(style) = TrayIcon::ALL.get(index).copied() {
-            self.style = style;
-            remember_style(style);
-        }
     }
 }
 
@@ -312,7 +303,6 @@ impl ksni::Tray for NightLight {
                 .into(),
             );
         }
-        items.push(self.icon_menu());
         // Only when there is a panel to open. It ships as its own package
         // (#50) because it is the one binary of the four that needs a
         // graphics stack, so a complete and sensible install — daemon, this
@@ -384,35 +374,6 @@ impl NightLight {
             }
             .into(),
         )
-    }
-
-    /// The icon chooser (GitHub #4). A submenu so the choice costs the menu
-    /// one line, and in the application's block because it changes nothing
-    /// about the screen. Always there, working or not: an icon can be
-    /// chosen with no daemon running.
-    fn icon_menu(&self) -> MenuItem<Self> {
-        SubMenu {
-            label: "Icon".into(),
-            submenu: vec![
-                RadioGroup {
-                    selected: TrayIcon::ALL
-                        .iter()
-                        .position(|style| *style == self.style)
-                        .unwrap_or(0),
-                    select: Box::new(|this: &mut Self, index| this.choose_style(index)),
-                    options: TrayIcon::ALL
-                        .iter()
-                        .map(|style| RadioItem {
-                            label: style.label().into(),
-                            ..Default::default()
-                        })
-                        .collect(),
-                }
-                .into(),
-            ],
-            ..Default::default()
-        }
-        .into()
     }
 }
 
@@ -523,19 +484,6 @@ fn open_panel() {
     if let Some(panel) = located(PANEL) {
         let _ = std::process::Command::new(panel).spawn();
     }
-}
-
-/// Remembers the choice by name, as the panel and the dashboard do with
-/// their themes. Failure is silence: the icon still changes for this session,
-/// it just will not survive a restart.
-fn remember_style(style: TrayIcon) {
-    let Some(path) = nightlightd_core::paths::config_file(tray_icon::FILE) else {
-        return;
-    };
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let _ = std::fs::write(path, style.name());
 }
 
 const USAGE: &str = "usage: nightlight-tray [--version] [--help]
