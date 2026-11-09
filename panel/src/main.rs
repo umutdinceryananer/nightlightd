@@ -22,6 +22,7 @@ use nightlightd_core::location::nearest_zone;
 use nightlightd_core::schedule::{Milestone, day_length, hour_of, milestones};
 use nightlightd_core::solar::solar_elevation;
 use nightlightd_core::transition::{Band, phase, target_temperature};
+use nightlightd_core::tray_icon::{self, TrayIcon};
 use nightlightd_core::world::COASTLINE;
 
 use crate::daemon::{Client, Status};
@@ -246,6 +247,8 @@ struct Panel {
     /// written to disk, since indices are a release away from meaning
     /// something else.
     theme_index: usize,
+    /// The tray's icon (GitHub #4), chosen here and worn by the tray.
+    tray_icon: TrayIcon,
     /// The demo clock, set by `--demo` and otherwise absent. Its presence is
     /// the only thing that makes this window synthesise a day rather than
     /// read one, and it is what mutes every write.
@@ -1530,6 +1533,7 @@ impl Panel {
         // name here and a name there have to mean one palette, or "nord" is
         // two different programs.
         let mut chosen = None;
+        let mut chosen_icon = None;
         card(ui, pal.surface, |ui| {
             let applied = self.status.as_ref().map(|s| s.temperature);
             ui.horizontal(|ui| {
@@ -1557,10 +1561,40 @@ impl Panel {
                         }
                     });
             });
+            // In the theme's card because it is the same kind of choice: how
+            // this program looks, and nothing about the screen.
+            ui.horizontal(|ui| {
+                ui.allocate_ui_with_layout(
+                    egui::vec2(LABEL_WIDTH, ROW_HEIGHT),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        ui.label(egui::RichText::new("Tray icon").color(pal.muted));
+                    },
+                );
+                egui::ComboBox::from_id_salt("tray-icon")
+                    .width(THEME_WIDTH)
+                    .selected_text(egui::RichText::new(self.tray_icon.label()).color(pal.accent))
+                    .show_ui(ui, |ui| {
+                        ui.set_min_width(THEME_WIDTH);
+                        for icon in TrayIcon::ALL {
+                            if ui
+                                .selectable_label(icon == self.tray_icon, icon.label())
+                                .clicked()
+                            {
+                                chosen_icon = Some(icon);
+                                ui.close();
+                            }
+                        }
+                    });
+            });
         });
         if let Some(index) = chosen {
             self.theme_index = index;
             remember_theme(index);
+        }
+        if let Some(icon) = chosen_icon {
+            self.tray_icon = icon;
+            remember_tray_icon(icon);
         }
 
         // The two switches share a card and a row. They are the only things
@@ -1808,6 +1842,18 @@ fn remember_theme(index: usize) {
         let _ = std::fs::create_dir_all(parent);
     }
     let _ = std::fs::write(path, name);
+}
+
+/// Writes down the tray's icon, which the tray notices on its next refresh.
+/// Failure is silence: the tray just goes on wearing the one it has.
+fn remember_tray_icon(icon: TrayIcon) {
+    let Some(path) = nightlightd_core::paths::config_file(tray_icon::FILE) else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(path, icon.name());
 }
 
 /// The same path with the home directory written as `~`. The panel is a few
@@ -2464,6 +2510,7 @@ fn main() -> eframe::Result<()> {
                 bounds_dragging: false,
                 place: None,
                 theme_index: remembered_theme(),
+                tray_icon: tray_icon::remembered(),
                 outputs: None,
                 tab: args.tab,
                 demo: args.demo.then(Instant::now),
