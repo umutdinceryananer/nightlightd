@@ -202,8 +202,7 @@ struct Panel {
     /// while interacting; polling on a timer keeps that from becoming a
     /// blocking D-Bus round trip per frame. `None` forces a fresh read.
     status: Option<Status>,
-    /// The fade switch (#44), read through the additive `GetFade`; `None`
-    /// against a daemon that is unreachable or too old to answer, and then
+    /// The fade switch (#44); `None` when the status cannot be read, and then
     /// the checkbox does not show. Not part of "Revert changes" — it is a
     /// behaviour switch, not a session's slider fiddling.
     fade: Option<bool>,
@@ -211,8 +210,8 @@ struct Panel {
     /// versions, which deserves a different notice than silence.
     mismatch: bool,
     /// The transition band (#39) as the daemon last reported it, so the
-    /// curve matches what the screen actually does; the default against a
-    /// daemon that cannot answer.
+    /// curve matches what the screen actually does; the default when the
+    /// status cannot be read.
     band: Band,
     /// A band proposed by dragging the curve's ramp (#45), not yet sent.
     /// The curve draws this while it exists; Apply sends it, Revert drops
@@ -786,6 +785,9 @@ impl Panel {
             brightness: 1.0,
             day_brightness: 1.0,
             night_brightness: self.night_dim,
+            fade: true,
+            day_elevation: band.day_elevation,
+            night_elevation: band.night_elevation,
         });
     }
 
@@ -2134,19 +2136,9 @@ impl eframe::App for Panel {
             .is_none_or(|t| t.elapsed() >= Duration::from_secs(1))
         {
             self.status = self.client.status();
-            self.fade = self.client.fade();
+            self.fade = self.status.as_ref().map(|status| status.fade);
             self.outputs = self.client.outputs();
-            self.band = self
-                .client
-                .band()
-                .map(|(day, night)| {
-                    Band {
-                        day_elevation: day,
-                        night_elevation: night,
-                    }
-                    .sane()
-                })
-                .unwrap_or_default();
+            self.band = self.status.as_ref().map(Status::band).unwrap_or_default();
             match self.status.as_ref().filter(|s| s.has_location) {
                 Some(s) => {
                     let moved = self.place.as_ref().is_none_or(|(lat, lon, _)| {

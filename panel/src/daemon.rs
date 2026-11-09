@@ -5,6 +5,7 @@
 //! reads the status (to keep the slider in step with automatic mode) and sends
 //! a temperature when the user drags.
 
+use nightlightd_core::transition::Band;
 use serde::Deserialize;
 use zbus::blocking::Connection;
 use zbus::proxy;
@@ -31,6 +32,21 @@ pub struct Status {
     pub brightness: f64,
     pub day_brightness: f64,
     pub night_brightness: f64,
+    pub fade: bool,
+    pub day_elevation: f64,
+    pub night_elevation: f64,
+}
+
+impl Status {
+    /// The transition band (#39) the daemon runs, `sane()`d so the curve is
+    /// drawn the way the screen behaves.
+    pub fn band(&self) -> Band {
+        Band {
+            day_elevation: self.day_elevation,
+            night_elevation: self.night_elevation,
+        }
+        .sane()
+    }
 }
 
 /// The slice of the daemon interface the panel uses. `zbus::proxy` generates
@@ -50,11 +66,9 @@ trait Daemon {
     fn set_gamma(&self, gamma: f64) -> zbus::Result<()>;
     fn set_brightness(&self, day: f64, night: f64) -> zbus::Result<()>;
     fn set_fade(&self, fade: bool) -> zbus::Result<()>;
-    fn get_fade(&self) -> zbus::Result<bool>;
     fn set_location(&self, latitude: f64, longitude: f64) -> zbus::Result<()>;
     fn clear_location(&self) -> zbus::Result<()>;
     fn set_transition_band(&self, day: f64, night: f64) -> zbus::Result<()>;
-    fn get_transition_band(&self) -> zbus::Result<(f64, f64)>;
     fn get_outputs(&self) -> zbus::Result<Vec<(u32, u16)>>;
 }
 
@@ -182,19 +196,6 @@ impl Client {
         let _ = self.proxy.set_fade(fade);
     }
 
-    /// Whether the fade walk is on, or `None` when the daemon is unreachable
-    /// or too old to know `GetFade` — the checkbox then does not show.
-    pub fn fade(&self) -> Option<bool> {
-        self.proxy.get_fade().ok()
-    }
-
-    /// The transition band (#39), or `None` against a daemon that is
-    /// unreachable or predates `GetTransitionBand` — the curve then falls
-    /// back to the default band.
-    pub fn band(&self) -> Option<(f64, f64)> {
-        self.proxy.get_transition_band().ok()
-    }
-
     /// Every screen the ramp is being written to, as `(crtc, ramp size)`.
     /// `None` when the daemon is unreachable; empty when it is running but
     /// has not applied anything yet — two different silences, and the tab
@@ -240,6 +241,6 @@ mod tests {
     /// work: no curve, no mirror, but sliders that still move the screen.
     #[test]
     fn wire_signature_is_pinned() {
-        assert_eq!(Status::SIGNATURE.to_string(), "(busdbddbuudddd)");
+        assert_eq!(Status::SIGNATURE.to_string(), "(busdbddbuuddddbdd)");
     }
 }
