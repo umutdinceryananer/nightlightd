@@ -234,39 +234,33 @@ impl Daemon {
         if matches!(state.mode, Mode::Automatic) {
             state.location = location;
         }
-        match location {
-            Some((latitude, longitude)) => Status {
-                enabled: state.enabled,
-                temperature: state.current_temp,
-                source,
-                elevation: solar_elevation(latitude, longitude, unix_now()),
-                has_location: true,
+        let (has_location, latitude, longitude, elevation) = match location {
+            Some((latitude, longitude)) => (
+                true,
                 latitude,
                 longitude,
-                following,
-                day_temp: state.day_temp,
-                night_temp: state.night_temp,
-                gamma: state.gamma,
-                brightness: state.current_brightness,
-                day_brightness: state.day_brightness,
-                night_brightness: state.night_brightness,
-            },
-            None => Status {
-                enabled: state.enabled,
-                temperature: state.current_temp,
-                source,
-                elevation: 0.0,
-                has_location: false,
-                latitude: 0.0,
-                longitude: 0.0,
-                following,
-                day_temp: state.day_temp,
-                night_temp: state.night_temp,
-                gamma: state.gamma,
-                brightness: state.current_brightness,
-                day_brightness: state.day_brightness,
-                night_brightness: state.night_brightness,
-            },
+                solar_elevation(latitude, longitude, unix_now()),
+            ),
+            None => (false, 0.0, 0.0, 0.0),
+        };
+        Status {
+            enabled: state.enabled,
+            temperature: state.current_temp,
+            source,
+            elevation,
+            has_location,
+            latitude,
+            longitude,
+            following,
+            day_temp: state.day_temp,
+            night_temp: state.night_temp,
+            gamma: state.gamma,
+            brightness: state.current_brightness,
+            day_brightness: state.day_brightness,
+            night_brightness: state.night_brightness,
+            fade: state.fade,
+            day_elevation: state.band.day_elevation,
+            night_elevation: state.band.night_elevation,
         }
     }
 }
@@ -433,6 +427,19 @@ mod tests {
         let status = daemon(s).get_status();
         assert!(status.has_location);
         assert_eq!((status.latitude, status.longitude), (10.0, 20.0));
+    }
+
+    #[test]
+    fn status_carries_the_fade_and_the_band_as_configured() {
+        let mut s = state(true, None, Mode::Fixed(2800));
+        s.fade = false;
+        // Verbatim, even a nonsensical pair: judging it is core's job, at
+        // spend time, and the settings have to show what the file says.
+        s.band.day_elevation = -9.0;
+        s.band.night_elevation = 4.0;
+        let status = daemon(s).get_status();
+        assert!(!status.fade);
+        assert_eq!((status.day_elevation, status.night_elevation), (-9.0, 4.0));
     }
 
     #[test]

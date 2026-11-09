@@ -48,20 +48,27 @@ pub struct Status {
     pub day_brightness: f64,
     /// The configured night brightness bound.
     pub night_brightness: f64,
+    /// Whether a change of target eases onto the screen (#44).
+    pub fade: bool,
+    /// The solar elevation at or above which it is full daytime (#39), as
+    /// configured; a nonsensical pair is repaired where it is spent.
+    pub day_elevation: f64,
+    /// The solar elevation at or below which it is full night, as configured.
+    pub night_elevation: f64,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// The tray and the panel re-declare this struct by hand; all copies must
-    /// serialize to exactly this D-Bus signature or clients half-break (reads
-    /// fail, writes still work). Drift shipped once — commit c177090 — and this
-    /// pin is what turns the next drift into a red test instead of a silent
-    /// "daemon not running". The same literal is pinned in tray/src/daemon.rs
-    /// and panel/src/daemon.rs; change all three together.
+    /// The tray, the panel and the dashboard re-declare this struct by hand;
+    /// all copies must serialize to exactly this D-Bus signature or clients
+    /// half-break (reads fail, writes still work). Drift shipped once — commit
+    /// c177090 — and this pin is what turns the next drift into a red test
+    /// instead of a silent "daemon not running". The same literal is pinned in
+    /// each client's daemon.rs; change all four together.
     #[test]
     fn wire_signature_is_pinned() {
-        assert_eq!(Status::SIGNATURE.to_string(), "(busdbddbuudddd)");
+        assert_eq!(Status::SIGNATURE.to_string(), "(busdbddbuuddddbdd)");
     }
 }

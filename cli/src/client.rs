@@ -182,6 +182,9 @@ mod tests {
             brightness: 1.0,
             day_brightness: 1.0,
             night_brightness: 1.0,
+            fade: true,
+            day_elevation: 3.0,
+            night_elevation: -6.0,
         }
     }
 
