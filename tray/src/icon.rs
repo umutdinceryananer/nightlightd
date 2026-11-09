@@ -105,17 +105,28 @@ pub enum Style {
     Plain,
     /// A navy disc holding a crescent in the screen's colour.
     NightBadge,
+    /// A sun that sinks and a sky that darkens as the screen warms.
+    Horizon,
+    /// A monitor whose display takes the screen's colour.
+    Screen,
 }
 
 impl Style {
     /// Every style, in menu order.
-    pub const ALL: [Style; 2] = [Style::Plain, Style::NightBadge];
+    pub const ALL: [Style; 4] = [
+        Style::Plain,
+        Style::NightBadge,
+        Style::Horizon,
+        Style::Screen,
+    ];
 
     /// What the menu calls it.
     pub fn label(self) -> &'static str {
         match self {
             Style::Plain => "Plain",
             Style::NightBadge => "Night badge",
+            Style::Horizon => "Horizon",
+            Style::Screen => "Screen",
         }
     }
 
@@ -125,6 +136,8 @@ impl Style {
         match self {
             Style::Plain => "plain",
             Style::NightBadge => "night-badge",
+            Style::Horizon => "horizon",
+            Style::Screen => "screen",
         }
     }
 
@@ -143,13 +156,36 @@ impl Style {
 
 /// An outline, answering how far any point is from its edge.
 enum Shape {
-    Circle { x: f64, y: f64, r: f64 },
+    Circle {
+        x: f64,
+        y: f64,
+        r: f64,
+    },
+    RoundBox {
+        x: f64,
+        y: f64,
+        half_width: f64,
+        half_height: f64,
+        r: f64,
+    },
     Union(Vec<Shape>),
     Minus(Box<Shape>, Box<Shape>),
+    /// The first shape, only where it is inside the second.
+    Inside(Box<Shape>, Box<Shape>),
 }
 
 fn circle(x: f64, y: f64, r: f64) -> Shape {
     Shape::Circle { x, y, r }
+}
+
+fn round_box(x: f64, y: f64, half_width: f64, half_height: f64, r: f64) -> Shape {
+    Shape::RoundBox {
+        x,
+        y,
+        half_width,
+        half_height,
+        r,
+    }
 }
 
 fn minus(shape: Shape, taken: Shape) -> Shape {
@@ -160,11 +196,23 @@ impl Shape {
     fn distance(&self, px: f64, py: f64) -> f64 {
         match self {
             Shape::Circle { x, y, r } => (px - x).hypot(py - y) - r,
+            Shape::RoundBox {
+                x,
+                y,
+                half_width,
+                half_height,
+                r,
+            } => {
+                let dx = (px - x).abs() - (half_width - r);
+                let dy = (py - y).abs() - (half_height - r);
+                dx.max(0.0).hypot(dy.max(0.0)) + dx.max(dy).min(0.0) - r
+            }
             Shape::Union(parts) => parts
                 .iter()
                 .map(|part| part.distance(px, py))
                 .fold(f64::INFINITY, f64::min),
             Shape::Minus(shape, taken) => shape.distance(px, py).max(-taken.distance(px, py)),
+            Shape::Inside(shape, within) => shape.distance(px, py).max(within.distance(px, py)),
         }
     }
 }
@@ -176,6 +224,7 @@ enum Paint {
     Diagonal {
         light: Rgb,
         dark: Rgb,
+        spread: f64,
     },
     /// From `top` at `from` to `bottom` at `to`.
     Vertical {
@@ -190,9 +239,15 @@ impl Paint {
     fn at(&self, x: f64, y: f64) -> Rgb {
         match self {
             Paint::Flat(colour) => *colour,
-            Paint::Diagonal { light, dark } => {
-                mix(*light, *dark, ((x + y + 1.2) / 2.4).clamp(0.0, 1.0))
-            }
+            Paint::Diagonal {
+                light,
+                dark,
+                spread,
+            } => mix(
+                *light,
+                *dark,
+                ((x + y + spread) / (2.0 * spread)).clamp(0.0, 1.0),
+            ),
             Paint::Vertical {
                 top,
                 bottom,
@@ -260,6 +315,7 @@ fn night_badge(look: Look, size: i32) -> Vec<Layer> {
             paint: Paint::Diagonal {
                 light: mix(colour, WHITE, 0.30),
                 dark: mix(colour, BLACK, 0.08),
+                spread: 1.2,
             },
         },
         Layer {
@@ -269,10 +325,131 @@ fn night_badge(look: Look, size: i32) -> Vec<Layer> {
     ]
 }
 
+/// How far toward night a temperature is: 0 in full daylight, 1 from 2700 K
+/// down. Absolute rather than measured against the configured night, so that
+/// someone who only ever warms to 4500 K gets a dusk, which is what their
+/// screen looks like, and not a midnight.
+fn nightfall(kelvin: u32) -> f64 {
+    ((6500.0 - f64::from(kelvin)) / 3800.0).clamp(0.0, 1.0)
+}
+
+fn horizon(look: Look, size: i32) -> Vec<Layer> {
+    let small = size <= SMALL;
+    let (dusk, sky_top, sky_low, land, sun) = match look {
+        Look::Warmed(kelvin) => {
+            let dusk = nightfall(kelvin);
+            (
+                dusk,
+                mix(hex(0x2F9BEA), hex(0x33358A), dusk),
+                mix(hex(0xA8E0F7), hex(0xC8507A), dusk),
+                mix(hex(0x3D9A5B), hex(0x1F2A4A), dusk),
+                // Toward gold as it sets: the sky behind it turns orange and
+                // rose, and a sun the same colour as its sky is not there.
+                mix(tint(kelvin), hex(0xFFD45A), 0.55 * dusk),
+            )
+        }
+        Look::Off => (
+            0.8,
+            hex(0x6A6F78),
+            hex(0xB5B9C0),
+            hex(0x555A62),
+            hex(0xE2E4E8),
+        ),
+    };
+    let sun_y = -0.24 + 0.64 * dusk;
+    let radius = if small { 0.46 } else { 0.40 };
+    let badge = || circle(0.0, 0.0, 0.96);
+
+    let mut stack = vec![Layer {
+        shape: badge(),
+        paint: Paint::Vertical {
+            top: sky_top,
+            bottom: sky_low,
+            from: -0.96,
+            to: 0.6,
+        },
+    }];
+    // The halo is one more thing a small icon cannot afford.
+    if !small {
+        stack.push(Layer {
+            shape: circle(0.0, sun_y, radius + 0.09),
+            paint: Paint::Flat(mix(mix(sky_top, sky_low, 0.6), mix(sun, WHITE, 0.2), 0.45)),
+        });
+    }
+    stack.push(Layer {
+        shape: circle(0.0, sun_y, radius),
+        paint: Paint::Vertical {
+            top: if small { sun } else { mix(sun, WHITE, 0.22) },
+            bottom: sun,
+            from: sun_y - radius,
+            to: sun_y + radius,
+        },
+    });
+    stack.push(Layer {
+        shape: Shape::Inside(Box::new(circle(0.0, 2.34, 1.72)), Box::new(badge())),
+        paint: Paint::Flat(land),
+    });
+    stack
+}
+
+fn screen(look: Look, size: i32) -> Vec<Layer> {
+    let colour = look.colour();
+    let small = size <= SMALL;
+    let (frame, display, neck, base, moon) = if small {
+        // The display takes everything it can; it is the part with the news.
+        (
+            round_box(0.0, -0.14, 0.98, 0.74, 0.14),
+            round_box(0.0, -0.14, 0.84, 0.60, 0.06),
+            round_box(0.0, 0.68, 0.20, 0.14, 0.01),
+            round_box(0.0, 0.86, 0.56, 0.11, 0.06),
+            minus(circle(-0.08, -0.13, 0.44), circle(0.14, -0.29, 0.36)),
+        )
+    } else {
+        (
+            round_box(0.0, -0.16, 0.96, 0.70, 0.17),
+            round_box(0.0, -0.16, 0.81, 0.55, 0.08),
+            round_box(0.0, 0.64, 0.17, 0.16, 0.02),
+            round_box(0.0, 0.84, 0.50, 0.075, 0.07),
+            minus(circle(-0.06, -0.15, 0.38), circle(0.12, -0.29, 0.33)),
+        )
+    };
+    let (body, ink) = match look {
+        Look::Warmed(_) => (hex(0x39404F), NAVY),
+        Look::Off => (hex(0x62666E), mix(GREY, BLACK, 0.5)),
+    };
+    vec![
+        Layer {
+            shape: Shape::Union(vec![frame, neck, base]),
+            paint: Paint::Vertical {
+                top: mix(body, WHITE, 0.14),
+                bottom: body,
+                from: -1.0,
+                to: 1.0,
+            },
+        },
+        Layer {
+            shape: display,
+            paint: Paint::Diagonal {
+                // Less highlight when small: a pale top half disappears on a
+                // light panel.
+                light: mix(colour, WHITE, if small { 0.16 } else { 0.38 }),
+                dark: mix(colour, BLACK, 0.12),
+                spread: 1.0,
+            },
+        },
+        Layer {
+            shape: moon,
+            paint: Paint::Flat(ink),
+        },
+    ]
+}
+
 fn layers(style: Style, look: Look, size: i32) -> Vec<Layer> {
     match style {
         Style::Plain => Vec::new(),
         Style::NightBadge => night_badge(look, size),
+        Style::Horizon => horizon(look, size),
+        Style::Screen => screen(look, size),
     }
 }
 
@@ -436,13 +613,52 @@ mod tests {
 
     #[test]
     fn a_filter_that_is_off_is_grey() {
-        let (x, y) = IN_THE_CRESCENT;
-        let [_, red, green, blue] = sample(&largest(Style::NightBadge, Look::Off), x, y);
-        let spread = red.max(green).max(blue) - red.min(green).min(blue);
-        assert!(
-            spread < 24,
-            "off should carry no warmth: {red},{green},{blue}"
-        );
+        for style in colour_styles() {
+            let icon = largest(style, Look::Off);
+            for (x, y) in [(0.0, 0.0), IN_THE_CRESCENT, (0.0, -0.7)] {
+                let [_, red, green, blue] = sample(&icon, x, y);
+                let spread = red.max(green).max(blue) - red.min(green).min(blue);
+                assert!(
+                    spread < 24,
+                    "{style:?} at ({x}, {y}) should carry no warmth: {red},{green},{blue}"
+                );
+            }
+        }
+    }
+
+    /// Where the sun stands at noon is empty sky by night.
+    #[test]
+    fn the_sun_goes_down_on_the_horizon() {
+        let (x, y) = (0.0, -0.24);
+        let day = sample(&largest(Style::Horizon, Look::Warmed(6500)), x, y);
+        let night = sample(&largest(Style::Horizon, Look::Warmed(2700)), x, y);
+        assert!(day[2] > night[2] + 60, "day {day:?}, night {night:?}");
+    }
+
+    #[test]
+    fn the_display_takes_the_colour_of_the_temperature() {
+        let (x, y) = (-0.7, 0.2);
+        let day = sample(&largest(Style::Screen, Look::Warmed(6500)), x, y);
+        let night = sample(&largest(Style::Screen, Look::Warmed(2700)), x, y);
+        assert!(night[2] < day[2], "day {day:?}, night {night:?}");
+    }
+
+    #[test]
+    fn a_warm_setting_is_a_full_night_and_a_mild_one_is_a_dusk() {
+        assert_eq!(nightfall(6500), 0.0);
+        assert_eq!(nightfall(9000), 0.0);
+        assert_eq!(nightfall(2700), 1.0);
+        assert_eq!(nightfall(1700), 1.0);
+        assert!((0.3..0.7).contains(&nightfall(4500)));
+    }
+
+    #[test]
+    fn a_round_box_measures_from_its_edge() {
+        let shape = round_box(0.0, 0.0, 0.5, 0.25, 0.05);
+        assert!((shape.distance(0.0, 0.0) + 0.25).abs() < 1e-9);
+        assert!((shape.distance(1.0, 0.0) - 0.5).abs() < 1e-9);
+        // The rounded corner leaves the exact corner just outside.
+        assert!(shape.distance(0.5, 0.25) > 0.0);
     }
 
     #[test]
