@@ -12,6 +12,8 @@
 //! soft border, so an icon is drawn directly at each size instead of being
 //! shrunk from a big one, which is where small icons go to mud.
 
+use nightlightd_core::tray_icon::TrayIcon;
+
 /// Red, green and blue, each from 0 to 255.
 type Rgb = [f64; 3];
 
@@ -94,63 +96,6 @@ impl Look {
             Look::Warmed(kelvin) => tint(kelvin),
             Look::Off => GREY,
         }
-    }
-}
-
-/// Which icon the tray wears.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Style {
-    /// The icon theme's own monochrome symbol, and the default: nobody's
-    /// panel changes unless they ask it to.
-    Plain,
-    /// A navy disc holding a crescent in the screen's colour.
-    NightBadge,
-    /// A sun that sinks and a sky that darkens as the screen warms.
-    Horizon,
-    /// A monitor whose display takes the screen's colour.
-    Screen,
-}
-
-impl Style {
-    /// Every style, in menu order.
-    pub const ALL: [Style; 4] = [
-        Style::Plain,
-        Style::NightBadge,
-        Style::Horizon,
-        Style::Screen,
-    ];
-
-    /// What the menu calls it.
-    pub fn label(self) -> &'static str {
-        match self {
-            Style::Plain => "Plain",
-            Style::NightBadge => "Night badge",
-            Style::Horizon => "Horizon",
-            Style::Screen => "Screen",
-        }
-    }
-
-    /// What the choice is remembered as. Separate from the label so that
-    /// rewording the menu cannot forget anybody's choice.
-    pub fn name(self) -> &'static str {
-        match self {
-            Style::Plain => "plain",
-            Style::NightBadge => "night-badge",
-            Style::Horizon => "horizon",
-            Style::Screen => "screen",
-        }
-    }
-
-    pub fn from_name(name: &str) -> Option<Style> {
-        Style::ALL.into_iter().find(|style| style.name() == name)
-    }
-
-    /// Where it sits in the menu.
-    pub fn index(self) -> usize {
-        Style::ALL
-            .iter()
-            .position(|style| *style == self)
-            .unwrap_or(0)
     }
 }
 
@@ -444,12 +389,12 @@ fn screen(look: Look, size: i32) -> Vec<Layer> {
     ]
 }
 
-fn layers(style: Style, look: Look, size: i32) -> Vec<Layer> {
+fn layers(style: TrayIcon, look: Look, size: i32) -> Vec<Layer> {
     match style {
-        Style::Plain => Vec::new(),
-        Style::NightBadge => night_badge(look, size),
-        Style::Horizon => horizon(look, size),
-        Style::Screen => screen(look, size),
+        TrayIcon::Plain => Vec::new(),
+        TrayIcon::NightBadge => night_badge(look, size),
+        TrayIcon::Horizon => horizon(look, size),
+        TrayIcon::Screen => screen(look, size),
     }
 }
 
@@ -496,8 +441,8 @@ fn painted(layers: &[Layer], size: i32) -> ksni::Icon {
 
 /// The icon at every size, or nothing for the plain one, which the theme
 /// draws from its name instead.
-pub fn pixmaps(style: Style, look: Look) -> Vec<ksni::Icon> {
-    if style == Style::Plain {
+pub fn pixmaps(style: TrayIcon, look: Look) -> Vec<ksni::Icon> {
+    if style == TrayIcon::Plain {
         return Vec::new();
     }
     SIZES
@@ -512,14 +457,14 @@ mod tests {
 
     const LOOKS: [Look; 3] = [Look::Warmed(6500), Look::Warmed(2700), Look::Off];
 
-    fn colour_styles() -> impl Iterator<Item = Style> {
-        Style::ALL
+    fn colour_styles() -> impl Iterator<Item = TrayIcon> {
+        TrayIcon::ALL
             .into_iter()
-            .filter(|style| *style != Style::Plain)
+            .filter(|style| *style != TrayIcon::Plain)
     }
 
     /// The largest of `style`'s icons in `look`.
-    fn largest(style: Style, look: Look) -> ksni::Icon {
+    fn largest(style: TrayIcon, look: Look) -> ksni::Icon {
         pixmaps(style, look).pop().expect("a colour icon has sizes")
     }
 
@@ -541,34 +486,12 @@ mod tests {
     /// Inside the night badge's crescent at every size above [`SMALL`].
     const IN_THE_CRESCENT: (f64, f64) = (-0.45, 0.25);
 
-    #[test]
-    fn every_choice_can_be_read_back_from_its_name() {
-        for style in Style::ALL {
-            assert_eq!(Style::from_name(style.name()), Some(style));
-        }
-    }
-
-    /// A remembered name that no longer exists, or that somebody typed into
-    /// the file, is no choice at all rather than an error.
-    #[test]
-    fn a_name_nobody_knows_is_no_choice() {
-        assert_eq!(Style::from_name("sparkles"), None);
-        assert_eq!(Style::from_name(""), None);
-    }
-
-    #[test]
-    fn the_menu_position_of_a_style_is_where_it_is_listed() {
-        for (position, style) in Style::ALL.into_iter().enumerate() {
-            assert_eq!(style.index(), position);
-        }
-    }
-
     /// The plain icon is the theme's to draw. Handing the panel pixels as
     /// well would leave which one it shows up to the panel.
     #[test]
     fn the_plain_icon_paints_nothing() {
         for look in LOOKS {
-            assert!(pixmaps(Style::Plain, look).is_empty());
+            assert!(pixmaps(TrayIcon::Plain, look).is_empty());
         }
     }
 
@@ -605,8 +528,8 @@ mod tests {
     #[test]
     fn the_crescent_warms_with_the_screen() {
         let (x, y) = IN_THE_CRESCENT;
-        let day = sample(&largest(Style::NightBadge, Look::Warmed(6500)), x, y);
-        let night = sample(&largest(Style::NightBadge, Look::Warmed(2700)), x, y);
+        let day = sample(&largest(TrayIcon::NightBadge, Look::Warmed(6500)), x, y);
+        let night = sample(&largest(TrayIcon::NightBadge, Look::Warmed(2700)), x, y);
         assert!(night[2] < day[2], "day {day:?}, night {night:?}");
         assert!(night[1] > night[3], "night should be red, not blue");
     }
@@ -630,16 +553,16 @@ mod tests {
     #[test]
     fn the_sun_goes_down_on_the_horizon() {
         let (x, y) = (0.0, -0.24);
-        let day = sample(&largest(Style::Horizon, Look::Warmed(6500)), x, y);
-        let night = sample(&largest(Style::Horizon, Look::Warmed(2700)), x, y);
+        let day = sample(&largest(TrayIcon::Horizon, Look::Warmed(6500)), x, y);
+        let night = sample(&largest(TrayIcon::Horizon, Look::Warmed(2700)), x, y);
         assert!(day[2] > night[2] + 60, "day {day:?}, night {night:?}");
     }
 
     #[test]
     fn the_display_takes_the_colour_of_the_temperature() {
         let (x, y) = (-0.7, 0.2);
-        let day = sample(&largest(Style::Screen, Look::Warmed(6500)), x, y);
-        let night = sample(&largest(Style::Screen, Look::Warmed(2700)), x, y);
+        let day = sample(&largest(TrayIcon::Screen, Look::Warmed(6500)), x, y);
+        let night = sample(&largest(TrayIcon::Screen, Look::Warmed(2700)), x, y);
         assert!(night[2] < day[2], "day {day:?}, night {night:?}");
     }
 

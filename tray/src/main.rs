@@ -21,9 +21,10 @@ use ksni::menu::Disposition::{Alert, Informative, Warning};
 use ksni::menu::{CheckmarkItem, RadioGroup, RadioItem, StandardItem, SubMenu};
 use ksni::{MenuItem, ToolTip};
 use nightlightd_core::transition::{Band, phase};
+use nightlightd_core::tray_icon::{self, TrayIcon};
 
 use crate::daemon::{Client, Status};
-use crate::icon::{Look, Style};
+use crate::icon::Look;
 
 /// How often to re-read the daemon's status. The temperature only moves once a
 /// minute, so a few seconds keeps the display fresh without busy-polling.
@@ -45,11 +46,9 @@ struct NightLight {
     /// sun's phase the way the screen behaves rather than the way the
     /// defaults used to.
     band: Band,
-    /// The icon picked from the menu (GitHub #4). Lives here rather than in
-    /// the daemon because it describes this window on the panel and nothing
-    /// about the screen, the same way the panel and the dashboard each keep
-    /// their own theme.
-    style: Style,
+    /// The icon chosen in the settings (GitHub #4). Not the daemon's, because
+    /// it describes this icon on the panel and nothing about the screen.
+    style: TrayIcon,
 }
 
 impl NightLight {
@@ -59,6 +58,8 @@ impl NightLight {
         self.fade = self.status.as_ref().map(|status| status.fade);
         self.band = self.status.as_ref().map(Status::band).unwrap_or_default();
         self.mismatch = self.status.is_none() && self.client.daemon_on_bus();
+        // Read every time, because it is the other windows that change it.
+        self.style = tray_icon::remembered();
         if self.mismatch {
             // Maybe this process is simply older than the file it came from;
             // one silent relaunch answers that. If it comes back still
@@ -147,7 +148,7 @@ impl NightLight {
     /// Wears the icon at `index` in the menu and remembers it. ksni re-reads
     /// the icon when this returns, so the panel answers the click at once.
     fn choose_style(&mut self, index: usize) {
-        if let Some(style) = Style::ALL.get(index).copied() {
+        if let Some(style) = TrayIcon::ALL.get(index).copied() {
             self.style = style;
             remember_style(style);
         }
@@ -170,7 +171,7 @@ impl ksni::Tray for NightLight {
     fn icon_name(&self) -> String {
         // Empty when a colour icon is worn, because panels prefer a name
         // over pixels whenever they are given both.
-        if self.style != Style::Plain {
+        if self.style != TrayIcon::Plain {
             return String::new();
         }
         // A version mismatch (#42) shows the plain icon: the daemon *is*
@@ -394,9 +395,12 @@ impl NightLight {
             label: "Icon".into(),
             submenu: vec![
                 RadioGroup {
-                    selected: self.style.index(),
+                    selected: TrayIcon::ALL
+                        .iter()
+                        .position(|style| *style == self.style)
+                        .unwrap_or(0),
                     select: Box::new(|this: &mut Self, index| this.choose_style(index)),
-                    options: Style::ALL
+                    options: TrayIcon::ALL
                         .iter()
                         .map(|style| RadioItem {
                             label: style.label().into(),
@@ -521,24 +525,11 @@ fn open_panel() {
     }
 }
 
-/// Where the chosen icon is remembered, beside the config.
-const STYLE_FILE: &str = "tray-icon";
-
-/// The icon this tray last wore, or the plain one when it has never been
-/// asked. Anything unreadable, empty or unknown lands on the default without
-/// complaint: the file is a convenience.
-fn remembered_style() -> Style {
-    nightlightd_core::paths::config_file(STYLE_FILE)
-        .and_then(|path| std::fs::read_to_string(path).ok())
-        .and_then(|name| Style::from_name(name.trim()))
-        .unwrap_or(Style::Plain)
-}
-
 /// Remembers the choice by name, as the panel and the dashboard do with
 /// their themes. Failure is silence: the icon still changes for this session,
 /// it just will not survive a restart.
-fn remember_style(style: Style) {
-    let Some(path) = nightlightd_core::paths::config_file(STYLE_FILE) else {
+fn remember_style(style: TrayIcon) {
+    let Some(path) = nightlightd_core::paths::config_file(tray_icon::FILE) else {
         return;
     };
     if let Some(parent) = path.parent() {
@@ -626,7 +617,7 @@ fn main() {
         fade,
         mismatch,
         band,
-        style: remembered_style(),
+        style: tray_icon::remembered(),
     })
     .assume_sni_available(true)
     .spawn()

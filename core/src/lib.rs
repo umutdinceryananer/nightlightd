@@ -17,4 +17,5 @@ pub mod schedule;
 pub mod solar;
 pub mod theme;
 pub mod transition;
+pub mod tray_icon;
 pub mod world;
