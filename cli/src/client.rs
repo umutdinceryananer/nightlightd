@@ -20,9 +20,7 @@ trait Daemon {
     fn set_mode(&self, mode: &str) -> zbus::Result<()>;
     fn set_gamma(&self, gamma: f64) -> zbus::Result<()>;
     fn set_fade(&self, fade: bool) -> zbus::Result<()>;
-    fn get_fade(&self) -> zbus::Result<bool>;
     fn set_transition_band(&self, day_elevation: f64, night_elevation: f64) -> zbus::Result<()>;
-    fn get_transition_band(&self) -> zbus::Result<(f64, f64)>;
     fn set_brightness(&self, day: f64, night: f64) -> zbus::Result<()>;
     fn get_status(&self) -> zbus::Result<Status>;
 }
@@ -78,12 +76,7 @@ pub fn send(request: Request) -> zbus::Result<()> {
         Request::SetFade(fade) => proxy.set_fade(fade),
         Request::SetBand(day, night) => proxy.set_transition_band(day, night),
         Request::Status => {
-            // A daemon too old to know GetFade means the fade is not there
-            // to report; defaulting to "on" keeps the line silent. Same for
-            // the band: the default earns no ink.
-            let fade = proxy.get_fade().unwrap_or(true);
-            let band = proxy.get_transition_band().unwrap_or((3.0, -6.0));
-            print_status(&proxy.get_status()?, fade, band);
+            print_status(&proxy.get_status()?);
             Ok(())
         }
     }
@@ -95,7 +88,7 @@ pub fn send(request: Request) -> zbus::Result<()> {
 /// Built as a string rather than printed line by line so it can be checked
 /// without a daemon, and so the whole readout reaches the terminal in one
 /// write.
-fn status_text(status: &Status, fade: bool, band: (f64, f64)) -> String {
+fn status_text(status: &Status) -> String {
     let mut out = String::new();
     macro_rules! line {
         ($($arg:tt)*) => {{
@@ -117,22 +110,22 @@ fn status_text(status: &Status, fade: bool, band: (f64, f64)) -> String {
         );
     }
     // Same rule as the ramp line: the default earns no ink.
-    if !fade {
+    if !status.fade {
         line!("  fade:   off");
     }
-    if (band.0 - 3.0).abs() > 1e-9 || (band.1 + 6.0).abs() > 1e-9 {
+    if (status.day_elevation - 3.0).abs() > 1e-9 || (status.night_elevation + 6.0).abs() > 1e-9 {
         line!(
             "  band:   day above {:+.1}°, night below {:+.1}°",
-            band.0,
-            band.1
+            status.day_elevation,
+            status.night_elevation
         );
     }
     if status.has_location {
         // Named by the band this daemon runs, not by the one it shipped
         // with — the line above may have just printed a different pair.
         let configured = nightlightd_core::transition::Band {
-            day_elevation: band.0,
-            night_elevation: band.1,
+            day_elevation: status.day_elevation,
+            night_elevation: status.night_elevation,
         };
         line!(
             "  sun:    {:+.1}° ({})",
@@ -155,11 +148,8 @@ fn status_text(status: &Status, fade: bool, band: (f64, f64)) -> String {
 /// closes the pipe as soon as it has its line. Panicking there is absurd —
 /// the readout has already been delivered, and the reader asked for less of
 /// it, not for a backtrace.
-fn print_status(status: &Status, fade: bool, band: (f64, f64)) {
-    let _ = std::io::Write::write_all(
-        &mut std::io::stdout(),
-        status_text(status, fade, band).as_bytes(),
-    );
+fn print_status(status: &Status) {
+    let _ = std::io::Write::write_all(&mut std::io::stdout(), status_text(status).as_bytes());
 }
 
 #[cfg(test)]
@@ -193,7 +183,7 @@ mod tests {
     /// hidden in it.
     #[test]
     fn the_defaults_earn_no_ink() {
-        let text = status_text(&following(), true, (3.0, -6.0));
+        let text = status_text(&following());
         assert!(text.starts_with("nightlightd: on, 4200 K\n"));
         assert!(text.contains("  source: auto"));
         for absent in ["ramp:", "fade:", "band:"] {
@@ -210,7 +200,10 @@ mod tests {
     fn a_changed_setting_earns_a_line() {
         let mut status = following();
         status.gamma = 0.9;
-        let text = status_text(&status, false, (1.5, -12.0));
+        status.fade = false;
+        status.day_elevation = 1.5;
+        status.night_elevation = -12.0;
+        let text = status_text(&status);
         assert!(text.contains("  ramp:   gamma 0.90"));
         assert!(text.contains("  fade:   off"));
         assert!(text.contains("  band:   day above +1.5°, night below -12.0°"));
@@ -222,7 +215,7 @@ mod tests {
     fn a_placeless_daemon_prints_no_coordinates() {
         let mut status = following();
         status.has_location = false;
-        let text = status_text(&status, true, (3.0, -6.0));
+        let text = status_text(&status);
         assert!(!text.contains("sun:"));
         assert!(!text.contains("place:"));
         assert_eq!(text.lines().count(), 2);
