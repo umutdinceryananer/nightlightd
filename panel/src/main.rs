@@ -1541,6 +1541,7 @@ impl Panel {
                     egui::vec2(LABEL_WIDTH, ROW_HEIGHT),
                     egui::Layout::left_to_right(egui::Align::Center),
                     |ui| {
+                        ui.set_min_width(LABEL_WIDTH);
                         ui.label(egui::RichText::new("Theme").color(pal.muted));
                     },
                 );
@@ -1568,6 +1569,7 @@ impl Panel {
                     egui::vec2(LABEL_WIDTH, ROW_HEIGHT),
                     egui::Layout::left_to_right(egui::Align::Center),
                     |ui| {
+                        ui.set_min_width(LABEL_WIDTH);
                         ui.label(egui::RichText::new("Tray icon").color(pal.muted));
                     },
                 );
@@ -2127,6 +2129,9 @@ fn slider_row<'a>(
             egui::vec2(LABEL_WIDTH, ROW_HEIGHT),
             egui::Layout::left_to_right(egui::Align::Center),
             |ui| {
+                // The allocation above is only an upper bound: without this
+                // the column is as wide as each row's own word.
+                ui.set_min_width(LABEL_WIDTH);
                 ui.label(egui::RichText::new(label).color(pal.muted));
             },
         );
@@ -2463,7 +2468,7 @@ fn main() -> eframe::Result<()> {
             // splitting the window into tabs took roughly a third of its
             // height away, and what is left over on the shorter tabs is dead
             // space nobody asked for.
-            .with_inner_size([470.0, 600.0])
+            .with_inner_size([470.0, 634.0])
             // Resizable, with a floor that keeps the curve readable: the
             // window used to be nailed to one size and left a hand of dead
             // space under the footer at that size.
@@ -2473,7 +2478,7 @@ fn main() -> eframe::Result<()> {
             // wants nearly the whole opening height. Below this something is
             // cut off, and with no scroll area to fall back on, cut off means
             // gone. It has to be raised whenever a card is added to settings.
-            .with_min_inner_size([390.0, 600.0]),
+            .with_min_inner_size([390.0, 634.0]),
         ..Default::default()
     };
     eframe::run_native(
