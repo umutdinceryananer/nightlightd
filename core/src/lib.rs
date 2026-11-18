@@ -13,6 +13,7 @@ pub mod fade;
 pub mod location;
 pub mod mode;
 pub mod paths;
+pub mod sandbox;
 pub mod schedule;
 pub mod solar;
 pub mod theme;
