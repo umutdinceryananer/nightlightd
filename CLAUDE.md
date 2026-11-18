@@ -12,9 +12,9 @@ These are settled. Do not propose alternatives unless something concrete forces 
 
 - **One binary, two modes.** `nightlightd --daemon` runs the daemon. `nightlightd --temp 2800` acts as a client and messages the daemon. A separate `nightlight` client binary may be added later.
 - **Daemon plus thin client**, talking over DBus. The daemon owns all state and all screen access. Clients hold nothing.
-- **DBus name `org.nightlightd.Daemon` is the single-instance lock.** Name taken means another daemon is running; exit cleanly.
+- **The daemon's D-Bus name is the single-instance lock.** `org.nightlightd.Daemon` natively, `io.github.umutdinceryananer.nightlightd.Daemon` inside the Flatpak, because a sandbox may own only names below its app ID. Name taken means another daemon is running; exit cleanly.
 - **A single-threaded event loop** waiting on two sources: the X11 file descriptor and a timer. Never two things at once.
-- **systemd user service** for autostart, enabled in *user* scope, never global.
+- **systemd user service** for autostart natively, enabled in *user* scope, never global. Inside the Flatpak there is no systemd to reach, so start at login goes through the Background portal.
 - **A workspace of small crates.** `core` holds what is neither a screen nor a wire: the logic (colour, solar elevation, the day's schedule, timezone lookup) and the tables two interfaces share (the themes, the world's coastlines, where the config lives). Two rules bind it and neither has moved — **it depends on no external crate**, and **every line of it is testable without a display**. It reads the filesystem where it must, which `zone.tab` always required; it does not write to it, and it knows nothing about windows. `cli` holds the daemon binary, X11, and DBus. Every interface is its own thin-client crate — `tray`, `panel`, `tui` — speaking D-Bus and holding no state, so GUI dependencies never touch the daemon and if a client dies the filter lives. (This replaced the original "two crates" rule when #23 landed; the description of `core` caught up with it in 0.3.)
 
 ---
@@ -64,3 +64,11 @@ Three issues in `docs/ISSUES.md` are marked **Verified** — `#7`, `#19`, `#13`.
 - Missing files, absent hardware, malformed config — degrade quietly and carry on. A night light that panics is worse than no night light.
 - Commit messages: imperative mood, prefixed by area. `core: add temperature interpolation table`.
 - Reference the issue number in the commit body when there is one.
+
+---
+
+## Flathub
+
+- Never write or edit the Flatpak manifest, anything in the Flathub repos, the submission PR or its text, or replies to reviewers. Those are mine, by hand.
+- Flatpak code in this repo (#54 to #59, #63) is fine, and it is disclosed.
+- Every commit in this repo ends with a `Co-Authored-By: Claude …` trailer.
