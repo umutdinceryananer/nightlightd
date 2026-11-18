@@ -272,7 +272,12 @@ pub fn show(ui: &mut egui::Ui, view: View<'_>, held: &mut Option<Handle>) -> Opt
         .or_else(|| response.hover_pos())
         .and_then(handle_at);
     if response.drag_started() {
-        *held = hovered;
+        // What the press went down on, not what the pointer is over by the
+        // time egui calls it a drag a few points later: along a short ramp
+        // those few points are already the plateau, and a sideways pull
+        // from a ramp's foot used to take hold of the night temperature.
+        let origin = ui.input(|input| input.pointer.press_origin());
+        *held = origin.and_then(handle_at).or(hovered);
     }
 
     let mut edit = None;
