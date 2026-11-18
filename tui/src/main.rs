@@ -20,7 +20,7 @@ use nightlightd_core::clock::{LocalOffset, parse_utc_offset};
 use nightlightd_core::color::{UI_TEMPERATURE_RANGE, temperature_to_rgb};
 use nightlightd_core::location::nearest_zone;
 use nightlightd_core::schedule::{Milestone, milestones};
-use nightlightd_core::solar::solar_elevation;
+use nightlightd_core::solar::{solar_elevation, sun_is_rising};
 use nightlightd_core::transition::{Band, Bands, phase, target_temperature};
 use nightlightd_core::tray_icon::{self, TrayIcon};
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -199,7 +199,7 @@ const HELP: [(&str, &[KeyRow]); 4] = [
     (
         "now · today",
         &[
-            ("b", "the transition band"),
+            ("b", "the dawn and dusk bands"),
             ("↑↓", "pick a bound"),
             ("‹›", "move it half a degree"),
             ("d", "back to the default band"),
@@ -226,11 +226,12 @@ const HELP: [(&str, &[KeyRow]); 4] = [
 /// the same reason: a walk to the value you meant crosses a dozen you did
 /// not, and each one would be a write to disk and a lurch on the screen.
 struct BandEdit {
-    /// The band the editor opened with, and what revert goes back to.
-    original: Band,
-    /// The band the arrows have built so far.
-    draft: Band,
-    /// Which bound the arrows move: 0 the day bound, 1 the night bound.
+    /// The bands the editor opened with, and what revert goes back to.
+    original: Bands,
+    /// The bands the arrows have built so far.
+    draft: Bands,
+    /// Which bound the arrows move (#47): 0 and 1 the morning's day and
+    /// night bounds, 2 and 3 the evening's.
     selected: usize,
     /// Set by escaping with an unapplied draft: the panel stops offering
     /// bounds and asks the one question left.
@@ -266,6 +267,22 @@ fn nudged_band(band: Band, day: bool, increase: bool) -> Band {
     next
 }
 
+/// The same press on one of the four bounds the editor lists (#47): the
+/// morning's pair first, then the evening's. The other side comes back
+/// exactly as it went in.
+fn nudged_bands(bands: Bands, selected: usize, increase: bool) -> Bands {
+    let mut next = bands;
+    let side = if selected < 2 {
+        &mut next.dawn
+    } else {
+        &mut next.dusk
+    };
+    // Rows 0 and 2 are the day bounds, 1 and 3 the night bounds.
+    let day = selected == 0 || selected == 2;
+    *side = nudged_band(*side, day, increase);
+    next
+}
+
 fn nudge(value: f64, increase: bool) -> f64 {
     let steps = value / BAND_STEP;
     let next = if increase {
@@ -294,11 +311,12 @@ struct App {
     /// Status unreadable but the daemon's name owned (#42): different
     /// versions, which deserves a different banner than "not running".
     mismatch: bool,
-    /// The transition band (#39) as the daemon last reported it, so every
-    /// curve and schedule drawn here matches what the screen actually does;
-    /// the default when the status cannot be read.
-    band: Band,
-    /// Whether that band came from the daemon or is the drawing fallback.
+    /// The transition bands (#39, #47), the morning's and the evening's, as
+    /// the daemon last reported them, so every curve and schedule drawn here
+    /// matches what the screen actually does; the defaults when the status
+    /// cannot be read.
+    bands: Bands,
+    /// Whether those bands came from the daemon or are the drawing fallback.
     /// The settings rows (#45) show blanks when it is the fallback: with no
     /// status to read there is no daemon listening, and offering arrows that
     /// change nothing is the lie the fade row already refuses.
@@ -407,7 +425,7 @@ fn main() -> io::Result<()> {
         status: None,
         fade: None,
         mismatch: false,
-        band: Band::default(),
+        bands: Bands::default(),
         band_known: false,
         last_poll: None,
         offset: LocalOffset::new(unix_secs(), read_utc_offset()),
@@ -516,12 +534,12 @@ impl App {
                 self.status = self.client.status();
                 self.outputs = self.client.outputs();
                 self.fade = self.status.as_ref().map(|status| status.fade);
-                let reported = self.status.as_ref().map(Status::band);
+                let reported = self.status.as_ref().map(Status::bands);
                 // The schedule still needs a band to draw with, so it falls
                 // back to the default; the settings rows need to know it was
                 // a fallback, or they would offer to edit a band with nobody
                 // there to receive it.
-                self.band = reported.unwrap_or_default();
+                self.bands = reported.unwrap_or_default();
                 self.band_known = reported.is_some();
                 self.mismatch = self.status.is_none() && self.client.daemon_on_bus();
                 self.offset.refresh(unix_secs(), read_utc_offset);
@@ -656,11 +674,12 @@ impl App {
             // no arrows.
             KeyCode::Char('b') if self.band_known && matches!(self.tab, NOW_TAB | TODAY_TAB) => {
                 self.band_edit = Some(BandEdit {
-                    original: self.band,
-                    draft: self.band,
-                    // The night bound first: it is the one people come to
-                    // move, and the one both reviews complained about.
-                    selected: 1,
+                    original: self.bands,
+                    draft: self.bands,
+                    // The evening's night bound first: it is the one people
+                    // come to move, and the one both reviews complained
+                    // about.
+                    selected: 3,
                     confirming: false,
                 });
             }
@@ -802,15 +821,15 @@ impl App {
             return;
         }
         match code {
-            KeyCode::Up => edit.selected = 0,
-            KeyCode::Down => edit.selected = 1,
+            KeyCode::Up => edit.selected = edit.selected.saturating_sub(1),
+            KeyCode::Down => edit.selected = (edit.selected + 1).min(3),
             KeyCode::Left | KeyCode::Right => {
-                edit.draft = nudged_band(edit.draft, edit.selected == 0, code == KeyCode::Right);
+                edit.draft = nudged_bands(edit.draft, edit.selected, code == KeyCode::Right);
             }
             // Back to redshift's band (#48). It fills the draft rather than
             // sending, so it arrives the same way every other change does:
             // drawn first, applied on enter, and escapable.
-            KeyCode::Char('d') => edit.draft = Band::default(),
+            KeyCode::Char('d') => edit.draft = Bands::default(),
             KeyCode::Enter => self.apply_band(),
             KeyCode::Esc | KeyCode::Char('b') | KeyCode::Char('q') => {
                 if edit.touched() {
@@ -829,17 +848,27 @@ impl App {
         let Some(edit) = self.band_edit.take() else {
             return;
         };
-        self.client
-            .set_band(edit.draft.day_elevation, edit.draft.night_elevation);
-        self.band = edit.draft;
+        self.client.set_bands(edit.draft);
+        self.bands = edit.draft;
         self.last_poll = None;
     }
 
-    /// The band every curve and schedule here is drawn with: the editor's
-    /// unapplied draft while it is open, the daemon's band otherwise. One
+    /// The bands every curve and schedule here is drawn with: the editor's
+    /// unapplied draft while it is open, the daemon's bands otherwise. One
     /// place, so the picture can never disagree with itself.
-    fn shown_band(&self) -> Band {
-        self.band_edit.as_ref().map_or(self.band, |edit| edit.draft)
+    fn shown_bands(&self) -> Bands {
+        self.band_edit
+            .as_ref()
+            .map_or(self.bands, |edit| edit.draft)
+    }
+
+    /// Of those, the one the sun is in at the dashboard's "now" (#47): the
+    /// morning's while it climbs, the evening's while it sinks. The phase
+    /// word everywhere comes from this.
+    fn band_now(&self, status: &Status) -> Band {
+        let (midnight, hour) = self.day_context();
+        let rising = sun_is_rising(status.latitude, status.longitude, midnight + hour * 3600.0);
+        self.shown_bands().at(rising)
     }
 
     /// `r` on the no-daemon banner: start a stopped daemon (#43) or restart
@@ -1596,7 +1625,7 @@ impl App {
         let Some(edit) = self.band_edit.as_ref() else {
             return;
         };
-        let (width, height) = (32u16, 7u16);
+        let (width, height) = (32u16, 9u16);
         if area.width < width || area.height < height {
             return;
         }
@@ -1616,7 +1645,7 @@ impl App {
             popup,
         );
 
-        let bound = |label: &str, degrees: f64, picked: bool| {
+        let bound = |side: &str, label: &str, degrees: f64, picked: bool| {
             let reading = format!("{degrees:+.1}°");
             let (open, close) = if picked {
                 ("‹ ", " ›")
@@ -1625,14 +1654,15 @@ impl App {
             };
             let tint = if picked { pal.accent } else { pal.text };
             Line::from(vec![
-                Span::styled(format!(" {label:<12}"), Style::default().fg(pal.muted)),
+                Span::styled(format!(" {side:<5}"), Style::default().fg(pal.accent2)),
+                Span::styled(format!("{label:<12}"), Style::default().fg(pal.muted)),
                 Span::styled(open.to_string(), Style::default().fg(pal.accent)),
                 Span::styled(format!("{reading:>6}"), Style::default().fg(tint)),
                 Span::styled(close.to_string(), Style::default().fg(pal.accent)),
             ])
         };
         let title = Line::from(Span::styled(
-            " transition band",
+            " transition bands",
             Style::default().fg(pal.accent2),
         ));
         let hint = |text: &str| {
@@ -1658,11 +1688,31 @@ impl App {
         } else {
             vec![
                 title,
-                bound("day above", edit.draft.day_elevation, edit.selected == 0),
+                // The morning's pair, then the evening's (#47), each side
+                // named once.
                 bound(
+                    "dawn",
+                    "day above",
+                    edit.draft.dawn.day_elevation,
+                    edit.selected == 0,
+                ),
+                bound(
+                    "",
                     "night below",
-                    edit.draft.night_elevation,
+                    edit.draft.dawn.night_elevation,
                     edit.selected == 1,
+                ),
+                bound(
+                    "dusk",
+                    "day above",
+                    edit.draft.dusk.day_elevation,
+                    edit.selected == 2,
+                ),
+                bound(
+                    "",
+                    "night below",
+                    edit.draft.dusk.night_elevation,
+                    edit.selected == 3,
                 ),
                 // Two hint rows rather than one crowded line: the keys that
                 // move things, then the keys that decide. The draft is drawn
@@ -1818,7 +1868,7 @@ impl App {
                 status.latitude,
                 status.longitude,
                 midnight + offset_days * 86_400.0,
-                Bands::both(self.shown_band()),
+                self.shown_bands(),
                 status.day_temp,
                 status.night_temp,
             )
@@ -2127,7 +2177,7 @@ impl App {
         let width = usize::from(area.width).saturating_sub(4);
         let mut lines: Vec<Line<'_>> = Vec::new();
         if let Some(status) = self.status.as_ref().filter(|s| s.has_location) {
-            let phase = phase(status.elevation, self.shown_band());
+            let phase = phase(status.elevation, self.band_now(status));
             let icon = match phase {
                 "day" => "☀",
                 "night" => "☾",
@@ -2229,7 +2279,7 @@ impl App {
             status.latitude,
             status.longitude,
             midnight,
-            Bands::both(self.shown_band()),
+            self.shown_bands(),
             status.day_temp,
             status.night_temp,
         );
@@ -2355,7 +2405,7 @@ impl App {
         // The demo has no daemon to ask, and the reel should show the
         // default, not a dash.
         self.fade = Some(true);
-        self.band = Band::default();
+        self.bands = Bands::default();
         self.band_known = true;
         // The stand-in always, never the recorder's own daemon. Borrowing
         // whatever bounds happen to be configured makes a reel nobody else
@@ -2426,7 +2476,7 @@ impl App {
                         format!(
                             " sun {:+.1}° ({}) · day {} K / night {} K",
                             status.elevation,
-                            phase(status.elevation, self.shown_band()),
+                            phase(status.elevation, self.band_now(status)),
                             status.day_temp,
                             status.night_temp,
                         ),
@@ -2555,7 +2605,7 @@ impl App {
         ])
         .areas(left);
 
-        let phase = phase(status.elevation, self.shown_band());
+        let phase = phase(status.elevation, self.band_now(status));
         let (daylight_ratio, daylight_short, daylight_label, endpoints) = self.daylight(status);
         // The long label leads with its own icon; give the icon the accent
         // and the words the text tone. Narrow cards get the short wording.
@@ -2672,7 +2722,7 @@ impl App {
             status.latitude,
             status.longitude,
             midnight,
-            Bands::both(self.shown_band()),
+            self.shown_bands(),
             status.day_temp,
             status.night_temp,
         );
@@ -2774,10 +2824,14 @@ impl App {
         let elev_at = |hour: f64| -> f64 {
             solar_elevation(status.latitude, status.longitude, midnight + hour * 3600.0)
         };
+        // The morning's band while the sun climbs, the evening's after (#47).
+        let bands = self.shown_bands();
+        let rising_at =
+            |hour: f64| sun_is_rising(status.latitude, status.longitude, midnight + hour * 3600.0);
         let kelvin_at = |hour: f64| -> f64 {
             f64::from(target_temperature(
                 elev_at(hour),
-                self.shown_band(),
+                bands.at(rising_at(hour)),
                 status.day_temp,
                 status.night_temp,
             ))
@@ -3015,10 +3069,13 @@ impl App {
         let elev_at = |hour: f64| -> f64 {
             solar_elevation(status.latitude, status.longitude, midnight + hour * 3600.0)
         };
+        let bands = self.shown_bands();
+        let rising_at =
+            |hour: f64| sun_is_rising(status.latitude, status.longitude, midnight + hour * 3600.0);
         let tint_at = |hour: f64| -> Color {
             let kelvin = target_temperature(
                 elev_at(hour),
-                self.shown_band(),
+                bands.at(rising_at(hour)),
                 status.day_temp,
                 status.night_temp,
             );
@@ -3486,17 +3543,17 @@ mod tests {
     #[test]
     fn an_untouched_draft_has_nothing_to_confirm() {
         let mut edit = BandEdit {
-            original: Band::default(),
-            draft: Band::default(),
-            selected: 1,
+            original: Bands::default(),
+            draft: Bands::default(),
+            selected: 3,
             confirming: false,
         };
         assert!(!edit.touched());
-        edit.draft = nudged_band(edit.draft, false, false);
+        edit.draft = nudged_bands(edit.draft, 3, false);
         assert!(edit.touched());
         // Walked back onto its own starting value, it is untouched again —
         // the question is about difference, not about history.
-        edit.draft = nudged_band(edit.draft, false, true);
+        edit.draft = nudged_bands(edit.draft, 3, true);
         assert!(!edit.touched());
     }
 
@@ -3511,22 +3568,42 @@ mod tests {
             night_elevation: 2.5,
         };
         let mut edit = BandEdit {
-            original: pinched,
-            draft: pinched,
-            selected: 1,
+            original: Bands::both(pinched),
+            draft: Bands::both(pinched),
+            selected: 3,
             confirming: false,
         };
-        edit.draft = Band::default();
+        edit.draft = Bands::default();
         assert!(edit.touched(), "returning is a change worth confirming");
 
         let mut edit = BandEdit {
-            original: Band::default(),
-            draft: Band::default(),
-            selected: 1,
+            original: Bands::default(),
+            draft: Bands::default(),
+            selected: 3,
             confirming: false,
         };
-        edit.draft = Band::default();
+        edit.draft = Bands::default();
         assert!(!edit.touched(), "already there is not a change");
+    }
+
+    /// #47 in the editor: the four rows are two sides, and walking a bound
+    /// on one side leaves the other side exactly as it was.
+    #[test]
+    fn a_bound_moves_only_its_own_side_of_the_day() {
+        let bands = Bands::default();
+        let evening = nudged_bands(bands, 3, false);
+        assert!(approx(evening.dusk.night_elevation, -6.5));
+        assert_eq!(evening.dawn, bands.dawn);
+        let morning = nudged_bands(bands, 0, false);
+        assert!(approx(morning.dawn.day_elevation, 2.5));
+        assert_eq!(morning.dusk, bands.dusk);
+        // Rows 1 and 2 are the morning's night bound and the evening's day
+        // bound, not the other way round.
+        assert!(approx(
+            nudged_bands(bands, 1, true).dawn.night_elevation,
+            -5.5
+        ));
+        assert!(approx(nudged_bands(bands, 2, true).dusk.day_elevation, 3.5));
     }
 
     /// Pressing one way then the other must return the value it started
