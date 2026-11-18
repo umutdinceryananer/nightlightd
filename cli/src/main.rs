@@ -26,7 +26,7 @@ use tracing_subscriber::EnvFilter;
 /// Screen colour temperature daemon for X11.
 #[derive(Parser)]
 #[command(name = "nightlightd", version, about)]
-#[command(group(ArgGroup::new("action").args(["temp", "toggle", "on", "off", "auto", "gamma", "brightness", "fade", "band", "status"])))]
+#[command(group(ArgGroup::new("action").args(["temp", "toggle", "on", "off", "auto", "gamma", "brightness", "fade", "band", "dawn", "dusk", "status"])))]
 struct Cli {
     /// Run the daemon: follow the sun continuously.
     #[arg(long, conflicts_with = "action")]
@@ -60,9 +60,16 @@ struct Cli {
     #[arg(long, value_name = "ON|OFF")]
     fade: Option<String>,
     /// Set the transition band's solar elevations as DAY:NIGHT degrees,
-    /// like 3:-6; lower NIGHT lands full night deeper into dusk (client).
+    /// like 3:-6, for morning and evening alike; lower NIGHT lands full
+    /// night deeper into dusk (client).
     #[arg(long, value_name = "DAY:NIGHT", allow_hyphen_values = true)]
     band: Option<String>,
+    /// Set the morning's band alone, as DAY:NIGHT degrees (client).
+    #[arg(long, value_name = "DAY:NIGHT", allow_hyphen_values = true)]
+    dawn: Option<String>,
+    /// Set the evening's band alone, as DAY:NIGHT degrees (client).
+    #[arg(long, value_name = "DAY:NIGHT", allow_hyphen_values = true)]
+    dusk: Option<String>,
     /// Print the daemon's status (client).
     #[arg(long)]
     status: bool,
@@ -117,6 +124,22 @@ fn client_request(cli: &Cli) -> Option<client::Request> {
             Some((day, night)) => Some(client::Request::SetBand(day, night)),
             None => {
                 eprintln!("nightlightd: --band wants DAY:NIGHT degrees, like 3:-6 or 1.5:-12");
+                std::process::exit(2);
+            }
+        }
+    } else if let Some(dawn) = cli.dawn.as_deref() {
+        match parse_band(dawn) {
+            Some((day, night)) => Some(client::Request::SetDawn(day, night)),
+            None => {
+                eprintln!("nightlightd: --dawn wants DAY:NIGHT degrees, like 3:-6 or 1:-3");
+                std::process::exit(2);
+            }
+        }
+    } else if let Some(dusk) = cli.dusk.as_deref() {
+        match parse_band(dusk) {
+            Some((day, night)) => Some(client::Request::SetDusk(day, night)),
+            None => {
+                eprintln!("nightlightd: --dusk wants DAY:NIGHT degrees, like 3:-6 or 1.5:-12");
                 std::process::exit(2);
             }
         }
@@ -351,6 +374,12 @@ mod tests {
         assert_eq!(parse_band("nan:-6"), None);
         let cli = Cli::try_parse_from(["nightlightd", "--band", "3:-9"]).unwrap();
         assert_eq!(cli.band.as_deref(), Some("3:-9"));
+        let cli = Cli::try_parse_from(["nightlightd", "--dawn", "1:-3"]).unwrap();
+        assert_eq!(cli.dawn.as_deref(), Some("1:-3"));
+        let cli = Cli::try_parse_from(["nightlightd", "--dusk", "3:-12"]).unwrap();
+        assert_eq!(cli.dusk.as_deref(), Some("3:-12"));
+        // One action at a time, like every other flag.
+        assert!(Cli::try_parse_from(["nightlightd", "--dawn", "1:-3", "--dusk", "3:-12"]).is_err());
     }
 
     #[test]
