@@ -6,6 +6,7 @@
 //! is that if the interface ever changes, the tray breaks; it degrades quietly
 //! when that or a missing daemon happens.
 
+use nightlightd_core::solar::sun_is_rising;
 use nightlightd_core::transition::{Band, Bands, phase};
 use serde::Deserialize;
 use zbus::proxy;
@@ -59,10 +60,16 @@ impl Status {
         .sane()
     }
 
-    /// The evening's band, the one every interface showed before the
-    /// morning could be set apart.
-    pub fn band(&self) -> Band {
-        self.bands().dusk
+    /// The band the sun is in at `now`, unix seconds: the morning's while it
+    /// climbs, the evening's while it sinks (#47). With no location there is
+    /// no sun to ask, and nothing that would use the answer.
+    pub fn band_at(&self, now: f64) -> Band {
+        let bands = self.bands();
+        if self.has_location {
+            bands.at(sun_is_rising(self.latitude, self.longitude, now))
+        } else {
+            bands.dusk
+        }
     }
 
     /// A few lines for the hover tooltip: on/off and the applied temperature,
@@ -239,6 +246,25 @@ mod tests {
             night_elevation: -8.0,
         };
         assert!(dusk.describe(eager).contains("(day)"));
+    }
+
+    /// 2021-06-21 12:00 in Istanbul (+03), as unix time.
+    const NOON: f64 = 1_624_266_000.0;
+
+    /// The phase is named by the side of the day the sun is on (#47): at
+    /// -4 a morning band that ends at -2 says night, an evening band that
+    /// runs to -12 says the light is still going.
+    #[test]
+    fn the_band_in_force_is_the_side_of_the_day_the_sun_is_on() {
+        let mut status = somewhere_at(-4.0);
+        status.dawn_night_elevation = -2.0;
+        status.night_elevation = -12.0;
+        let morning = status.band_at(NOON - 7.0 * 3600.0);
+        let evening = status.band_at(NOON + 7.0 * 3600.0);
+        assert_eq!(morning.night_elevation, -2.0);
+        assert_eq!(evening.night_elevation, -12.0);
+        assert!(status.describe(morning).contains("(night)"));
+        assert!(status.describe(evening).contains("(transition)"));
     }
 
     /// Without a location there is no sun to describe, and no phase word to

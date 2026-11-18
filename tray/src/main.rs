@@ -20,7 +20,7 @@ use ksni::menu::Disposition;
 use ksni::menu::Disposition::{Alert, Informative, Warning};
 use ksni::menu::{CheckmarkItem, StandardItem};
 use ksni::{MenuItem, ToolTip};
-use nightlightd_core::transition::{Band, phase};
+use nightlightd_core::transition::{Band, Bands, phase};
 use nightlightd_core::tray_icon::{self, TrayIcon};
 
 use crate::daemon::{Client, Status};
@@ -46,6 +46,9 @@ struct NightLight {
     /// sun's phase the way the screen behaves rather than the way the
     /// defaults used to.
     band: Band,
+    /// Both bands as the daemon reports them (#47), for the menu's band
+    /// lines; `band` is the one of the two the sun is in.
+    bands: Bands,
     /// The icon chosen in the settings (GitHub #4). Not the daemon's, because
     /// it describes this icon on the panel and nothing about the screen.
     style: TrayIcon,
@@ -56,7 +59,12 @@ impl NightLight {
     fn refresh(&mut self) {
         self.status = self.client.status();
         self.fade = self.status.as_ref().map(|status| status.fade);
-        self.band = self.status.as_ref().map(Status::band).unwrap_or_default();
+        self.bands = self.status.as_ref().map(Status::bands).unwrap_or_default();
+        self.band = self
+            .status
+            .as_ref()
+            .map(|status| status.band_at(unix_now()))
+            .unwrap_or_default();
         self.mismatch = self.status.is_none() && self.client.daemon_on_bus();
         // Read every time, because it is the other windows that change it.
         self.style = tray_icon::remembered();
@@ -227,9 +235,7 @@ impl ksni::Tray for NightLight {
         // pile — and a pile that changes length every time it opens is a menu
         // nobody builds muscle memory for.
         let mut items: Vec<MenuItem<Self>> = vec![self.readout()];
-        if let Some(band) = self.band_line() {
-            items.push(band);
-        }
+        items.extend(self.band_lines());
         items.push(MenuItem::Separator);
 
         // The filter's own controls. Unreachable during a version mismatch
@@ -358,22 +364,36 @@ impl NightLight {
     /// The band under the readout, by the rule the status line uses: the
     /// default earns no ink. Someone who has never touched it never learns
     /// the word; someone who has can check it without opening anything.
-    fn band_line(&self) -> Option<MenuItem<Self>> {
-        if self.status.is_none() || self.band == Band::default() {
-            return None;
+    /// A morning set apart from the evening (#47) earns a line per side.
+    fn band_lines(&self) -> Vec<MenuItem<Self>> {
+        if self.status.is_none() {
+            return Vec::new();
         }
-        Some(
+        let line = |label: String| -> MenuItem<Self> {
             StandardItem {
-                label: format!(
-                    "Band · day above {:+.1}°, night below {:+.1}°",
-                    self.band.day_elevation, self.band.night_elevation
-                ),
+                label,
                 enabled: false,
                 disposition: Informative,
                 ..Default::default()
             }
-            .into(),
-        )
+            .into()
+        };
+        let bounds = |band: Band| {
+            format!(
+                "day above {:+.1}°, night below {:+.1}°",
+                band.day_elevation, band.night_elevation
+            )
+        };
+        if self.bands.split() {
+            vec![
+                line(format!("Dawn · {}", bounds(self.bands.dawn))),
+                line(format!("Dusk · {}", bounds(self.bands.dusk))),
+            ]
+        } else if self.bands.dusk != Band::default() {
+            vec![line(format!("Band · {}", bounds(self.bands.dusk)))]
+        } else {
+            Vec::new()
+        }
     }
 }
 
@@ -439,6 +459,14 @@ fn relaunch_once() {
         .args(args)
         .env("NIGHTLIGHT_RELAUNCHED", "1")
         .exec();
+}
+
+/// Seconds since the Unix epoch, for asking which way the sun is going.
+/// Zero rather than a panic on a clock set before 1970.
+fn unix_now() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0.0, |elapsed| elapsed.as_secs_f64())
 }
 
 /// The first of `dirs` holding a file called `name`.
@@ -548,7 +576,11 @@ fn main() {
 
     let status = client.status();
     let fade = status.as_ref().map(|status| status.fade);
-    let band = status.as_ref().map(Status::band).unwrap_or_default();
+    let bands = status.as_ref().map(Status::bands).unwrap_or_default();
+    let band = status
+        .as_ref()
+        .map(|status| status.band_at(unix_now()))
+        .unwrap_or_default();
     let mismatch = status.is_none() && client.daemon_on_bus();
     if mismatch {
         // Heal a stale process before the icon even registers.
@@ -565,6 +597,7 @@ fn main() {
         fade,
         mismatch,
         band,
+        bands,
         style: tray_icon::remembered(),
     })
     .assume_sni_available(true)
