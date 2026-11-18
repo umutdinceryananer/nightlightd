@@ -20,7 +20,7 @@ use eframe::egui;
 use nightlightd_core::clock::{LocalOffset, parse_utc_offset};
 use nightlightd_core::location::nearest_zone;
 use nightlightd_core::schedule::{Milestone, day_length, hour_of, milestones};
-use nightlightd_core::solar::solar_elevation;
+use nightlightd_core::solar::{solar_elevation, sun_is_rising};
 use nightlightd_core::transition::{Band, Bands, phase, target_temperature};
 use nightlightd_core::tray_icon::{self, TrayIcon};
 use nightlightd_core::world::COASTLINE;
@@ -210,14 +210,14 @@ struct Panel {
     /// Status unreadable but the daemon's name owned (#42): different
     /// versions, which deserves a different notice than silence.
     mismatch: bool,
-    /// The transition band (#39) as the daemon last reported it, so the
-    /// curve matches what the screen actually does; the default when the
-    /// status cannot be read.
-    band: Band,
-    /// A band proposed by dragging the curve's ramp (#45), not yet sent.
-    /// The curve draws this while it exists; Apply sends it, Revert drops
-    /// it and the curve snaps back to the daemon's band.
-    staged_band: Option<Band>,
+    /// The transition bands (#39, #47), the morning's and the evening's, as
+    /// the daemon last reported them, so the curve matches what the screen
+    /// actually does; the defaults when the status cannot be read.
+    bands: Bands,
+    /// Bands proposed by dragging one of the curve's ramps (#45), not yet
+    /// sent. The curve draws these while they exist; Apply sends them,
+    /// Revert drops them and the curve snaps back to the daemon's.
+    staged_bands: Option<Bands>,
     /// Whether a plateau drag has moved the temperature bounds without
     /// sending them. The proposed values live in `day_temp`/`night_temp`
     /// like any slider edit, so the sliders mirror the drag; this only
@@ -299,6 +299,15 @@ impl Panel {
         }
     }
 
+    /// The band the sun is in at the window's "now" (#47): the morning's
+    /// while it climbs, the evening's while it sinks. The window's now, so a
+    /// demo run's compressed day gets the side of the day it is showing.
+    fn band_now(&self, s: &Status) -> Band {
+        let (midnight, hour) = self.day_context();
+        let rising = sun_is_rising(s.latitude, s.longitude, midnight + hour * 3600.0);
+        self.bands.at(rising)
+    }
+
     /// The state card's three pieces: the headline anyone opens the window
     /// for, the mode it is in, and a quieter line of why. The same words and
     /// the same precedence the tray's readout uses — off outranks everything,
@@ -307,7 +316,7 @@ impl Panel {
     fn state_lines(&self) -> (String, String, String, Option<&'static str>) {
         let place = |s: &Status| {
             if s.has_location {
-                phase(s.elevation, self.band).to_string()
+                phase(s.elevation, self.band_now(s)).to_string()
             } else {
                 "no location".to_string()
             }
@@ -332,7 +341,7 @@ impl Panel {
                 // The little sky only appears where the sun is what is
                 // driving the screen; beside "manual" it would be a picture
                 // of something that is not happening.
-                s.has_location.then(|| phase(s.elevation, self.band)),
+                s.has_location.then(|| phase(s.elevation, self.band_now(s))),
             ),
             None if self.mismatch => (
                 "update needed".into(),
@@ -534,7 +543,7 @@ impl Panel {
             status.latitude,
             status.longitude,
             midnight,
-            Bands::both(self.band),
+            self.bands,
             status.day_temp,
             status.night_temp,
         );
@@ -623,7 +632,7 @@ impl Panel {
                 status.latitude,
                 status.longitude,
                 midnight + offset_days * 86_400.0,
-                Bands::both(self.band),
+                self.bands,
                 status.day_temp,
                 status.night_temp,
             )
@@ -762,10 +771,12 @@ impl Panel {
         self.place = Some((DEMO_LAT, DEMO_LON, DEMO_PLACE.to_owned()));
 
         let (midnight, _) = self.day_context();
-        let elevation = solar_elevation(DEMO_LAT, DEMO_LON, midnight + hour * 3600.0);
-        // The band the window is showing, staged drag and all, so the curve
+        let t = midnight + hour * 3600.0;
+        let elevation = solar_elevation(DEMO_LAT, DEMO_LON, t);
+        // The bands the window is showing, staged drag and all, so the curve
         // and the state card agree while the tour is dragging a ramp.
-        let band = self.staged_band.unwrap_or(self.band);
+        let bands = self.staged_bands.unwrap_or(self.bands);
+        let band = bands.at(sun_is_rising(DEMO_LAT, DEMO_LON, t));
         self.status = Some(Status {
             enabled: true,
             temperature: target_temperature(elevation, band, self.day_temp, self.night_temp),
@@ -782,10 +793,10 @@ impl Panel {
             day_brightness: 1.0,
             night_brightness: self.night_dim,
             fade: true,
-            day_elevation: band.day_elevation,
-            night_elevation: band.night_elevation,
-            dawn_day_elevation: band.day_elevation,
-            dawn_night_elevation: band.night_elevation,
+            day_elevation: bands.dusk.day_elevation,
+            night_elevation: bands.dusk.night_elevation,
+            dawn_day_elevation: bands.dawn.day_elevation,
+            dawn_night_elevation: bands.dawn.night_elevation,
         });
     }
 
@@ -808,15 +819,20 @@ impl Panel {
             }
             match action {
                 Act::Tab(index) => self.tab = index,
+                // The evening's ramp, the one the reel is about: full night
+                // landing deeper into dusk.
                 Act::Grab(day, night) => {
-                    self.staged_band = Some(Band {
-                        day_elevation: day,
-                        night_elevation: night,
+                    self.staged_bands = Some(Bands {
+                        dusk: Band {
+                            day_elevation: day,
+                            night_elevation: night,
+                        },
+                        ..self.bands
                     });
                 }
                 // Let go without applying: the reel shows the gesture and the
                 // guard, and leaves the recorder's own settings alone.
-                Act::LetGo => self.staged_band = None,
+                Act::LetGo => self.staged_bands = None,
                 Act::Theme(index) => self.theme_index = index,
             }
             self.demo_cursor += 1;
@@ -1260,12 +1276,12 @@ impl Panel {
         let spare = self.curve_height;
         let (midnight, now_hour) = self.day_context();
         card(ui, pal.surface, |ui| {
-            let shown_band = self.staged_band.unwrap_or(self.band);
+            let shown_bands = self.staged_bands.unwrap_or(self.bands);
             match curve::show(
                 ui,
                 curve::View {
                     status: status.as_ref(),
-                    band: shown_band,
+                    bands: shown_bands,
                     day_temp: self.day_temp,
                     night_temp: self.night_temp,
                     midnight,
@@ -1275,7 +1291,7 @@ impl Panel {
                 },
                 &mut self.curve_held,
             ) {
-                Some(curve::Edit::Band(next)) => self.staged_band = Some(next),
+                Some(curve::Edit::Bands(next)) => self.staged_bands = Some(next),
                 Some(curve::Edit::DayTemp(kelvin)) => {
                     self.day_temp = kelvin;
                     self.staged_temps = true;
@@ -1289,15 +1305,14 @@ impl Panel {
             // The band in numbers (#48), or the decision an unsent drag is
             // waiting on. One row, in the curve's own card, because both are
             // about the shape directly above them.
-            if self.staged_band.is_some() || self.staged_temps {
+            if self.staged_bands.is_some() || self.staged_temps {
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
                     if ui.button("Apply").clicked() {
-                        if let Some(staged) = self.staged_band {
-                            self.client
-                                .set_band(staged.day_elevation, staged.night_elevation);
-                            self.band = staged;
-                            self.staged_band = None;
+                        if let Some(staged) = self.staged_bands {
+                            self.client.set_bands(staged);
+                            self.bands = staged;
+                            self.staged_bands = None;
                         }
                         if self.staged_temps {
                             self.client.set_day_temp(self.day_temp);
@@ -1309,40 +1324,59 @@ impl Panel {
                     // Back to what the daemon holds, not to what the panel
                     // opened with: this undoes the drag, not the session.
                     if ui.button("Revert").clicked() {
-                        self.staged_band = None;
+                        self.staged_bands = None;
                         if self.staged_temps {
                             self.day_temp = self.daemon_day;
                             self.night_temp = self.daemon_night;
                             self.staged_temps = false;
                         }
                     }
-                    let band = self.staged_band.unwrap_or(self.band);
-                    ui.label(
-                        egui::RichText::new(format!(
+                    let bands = self.staged_bands.unwrap_or(self.bands);
+                    let pair = |band: Band| {
+                        format!(
                             "{:+.1}° / {:+.1}°",
                             band.day_elevation, band.night_elevation
-                        ))
-                        .color(pal.muted)
-                        .size(11.0),
-                    );
+                        )
+                    };
+                    let text = if bands.split() {
+                        format!("dawn {} · dusk {}", pair(bands.dawn), pair(bands.dusk))
+                    } else {
+                        pair(bands.dusk)
+                    };
+                    ui.label(egui::RichText::new(text).color(pal.muted).size(11.0));
                 });
-            } else if self.band != Band::default() {
+            } else if self.bands != Bands::default() {
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new(format!(
+                    let bounds = |band: Band| {
+                        format!(
                             "day above {:+.1}°, night below {:+.1}°",
-                            self.band.day_elevation, self.band.night_elevation
-                        ))
-                        .color(pal.muted)
-                        .size(11.0),
-                    );
+                            band.day_elevation, band.night_elevation
+                        )
+                    };
+                    // A line per side once the morning is set apart (#47);
+                    // one line, as before, while the two agree.
+                    ui.vertical(|ui| {
+                        let lines = if self.bands.split() {
+                            vec![
+                                format!("dawn · {}", bounds(self.bands.dawn)),
+                                format!("dusk · {}", bounds(self.bands.dusk)),
+                            ]
+                        } else {
+                            vec![bounds(self.bands.dusk)]
+                        };
+                        for line in lines {
+                            ui.label(egui::RichText::new(line).color(pal.muted).size(11.0));
+                        }
+                    });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        // Both sides back to redshift's pair: the one band
+                        // the window opened with before anyone touched it.
                         if ui.button("Default band").clicked() {
                             let fresh = Band::default();
                             self.client
                                 .set_band(fresh.day_elevation, fresh.night_elevation);
-                            self.band = fresh;
+                            self.bands = Bands::both(fresh);
                             self.last_poll = None;
                         }
                     });
@@ -2192,7 +2226,7 @@ impl eframe::App for Panel {
             self.status = self.client.status();
             self.fade = self.status.as_ref().map(|status| status.fade);
             self.outputs = self.client.outputs();
-            self.band = self.status.as_ref().map(Status::band).unwrap_or_default();
+            self.bands = self.status.as_ref().map(Status::bands).unwrap_or_default();
             match self.status.as_ref().filter(|s| s.has_location) {
                 Some(s) => {
                     let moved = self.place.as_ref().is_none_or(|(lat, lon, _)| {
@@ -2506,8 +2540,8 @@ fn main() -> eframe::Result<()> {
                 status: None,
                 fade: None,
                 mismatch: false,
-                band: Band::default(),
-                staged_band: None,
+                bands: Bands::default(),
+                staged_bands: None,
                 staged_temps: false,
                 curve_held: None,
                 last_poll: None,

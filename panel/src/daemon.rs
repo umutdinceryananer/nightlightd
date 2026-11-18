@@ -58,12 +58,6 @@ impl Status {
         }
         .sane()
     }
-
-    /// The evening's band, the one every interface showed before the
-    /// morning could be set apart.
-    pub fn band(&self) -> Band {
-        self.bands().dusk
-    }
 }
 
 /// The slice of the daemon interface the panel uses. `zbus::proxy` generates
@@ -86,6 +80,13 @@ trait Daemon {
     fn set_location(&self, latitude: f64, longitude: f64) -> zbus::Result<()>;
     fn clear_location(&self) -> zbus::Result<()>;
     fn set_transition_band(&self, day: f64, night: f64) -> zbus::Result<()>;
+    fn set_transition_bands(
+        &self,
+        dawn_day: f64,
+        dawn_night: f64,
+        dusk_day: f64,
+        dusk_night: f64,
+    ) -> zbus::Result<()>;
     fn get_outputs(&self) -> zbus::Result<Vec<(u32, u16)>>;
 }
 
@@ -246,6 +247,17 @@ impl Client {
             return;
         }
         let _ = self.proxy.set_transition_band(day, night);
+    }
+
+    /// Sets the morning's band and the evening's in one request (#47), as a
+    /// dragged ramp proposes them. Ignored on failure, like every write.
+    pub fn set_bands(&self, bands: Bands) {
+        let _ = self.proxy.set_transition_bands(
+            bands.dawn.day_elevation,
+            bands.dawn.night_elevation,
+            bands.dusk.day_elevation,
+            bands.dusk.night_elevation,
+        );
     }
 }
 

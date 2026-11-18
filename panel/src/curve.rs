@@ -6,13 +6,14 @@
 //! A vertical marker shows the current time.
 //!
 //! The whole line is a handle (#45). Its two plateaus are the day and night
-//! temperatures and drag vertically; its two ramps are the transition band's
-//! bounds and drag sideways. Nothing here talks to the daemon: a drag returns
-//! a proposal and the caller stages it behind Apply and Revert.
+//! temperatures and drag vertically; its two ramps are the transition bands'
+//! bounds and drag sideways, the morning ramp moving the morning's band and
+//! the evening ramp the evening's (#47). Nothing here talks to the daemon: a
+//! drag returns a proposal and the caller stages it behind Apply and Revert.
 
 use eframe::egui::{self, Pos2, Stroke};
-use nightlightd_core::solar::solar_elevation;
-use nightlightd_core::transition::{Band, target_temperature};
+use nightlightd_core::solar::{solar_elevation, sun_is_rising};
+use nightlightd_core::transition::{Band, Bands, target_temperature};
 
 use crate::daemon::Status;
 use crate::theme::Palette;
@@ -71,16 +72,17 @@ pub enum Handle {
     DayLevel,
     /// The lower plateau: the night temperature.
     NightLevel,
-    /// A ramp's upper half: the elevation at which full day begins.
-    DayBound,
+    /// A ramp's upper half: the elevation at which full day begins, on the
+    /// morning's ramp (`dawn`) or the evening's.
+    DayBound { dawn: bool },
     /// A ramp's lower half: the elevation at which full night begins.
-    NightBound,
+    NightBound { dawn: bool },
 }
 
 /// What a drag is proposing. One value per gesture; the caller decides when
 /// any of it reaches the daemon.
 pub enum Edit {
-    Band(Band),
+    Bands(Bands),
     DayTemp(u32),
     NightTemp(u32),
 }
@@ -140,13 +142,23 @@ fn held_band(band: Band, elevation: f64, day: bool) -> Band {
     next
 }
 
+/// The same, for the one side of the day the ramp under the hand belongs
+/// to (#47). The other side is returned exactly as it came in: dragging the
+/// evening ramp must not move the morning.
+fn held_bands(bands: Bands, dawn: bool, elevation: f64, day: bool) -> Bands {
+    let mut next = bands;
+    let side = if dawn { &mut next.dawn } else { &mut next.dusk };
+    *side = held_band(*side, elevation, day);
+    next
+}
+
 /// Everything the curve draws itself from. Gathered into one value because
 /// they arrive together and mean nothing apart: the panel's live band and
 /// bounds, so the shape follows a hand before the daemon has been told, and
 /// the palette the whole window is wearing this second.
 pub struct View<'a> {
     pub status: Option<&'a Status>,
-    pub band: Band,
+    pub bands: Bands,
     pub day_temp: u32,
     pub night_temp: u32,
     /// Local midnight as a unix time, and the hour of "now" within that day.
@@ -164,7 +176,7 @@ pub struct View<'a> {
 pub fn show(ui: &mut egui::Ui, view: View<'_>, held: &mut Option<Handle>) -> Option<Edit> {
     let View {
         status,
-        band,
+        bands,
         day_temp,
         night_temp,
         midnight,
@@ -186,11 +198,18 @@ pub fn show(ui: &mut egui::Ui, view: View<'_>, held: &mut Option<Handle>) -> Opt
     let out_of_force = out_of_force(status.enabled, status.following, status.temperature);
     let in_force = out_of_force.is_none();
 
-    // Kelvin at a given local hour today, from the same maths the daemon runs.
+    // Whether the sun is climbing at a given local hour, which decides whose
+    // band a ramp is (#47).
+    let rising_at = |hour: f32| -> bool {
+        let t = midnight + f64::from(hour) * 3600.0;
+        sun_is_rising(status.latitude, status.longitude, t)
+    };
+    // Kelvin at a given local hour today, from the same maths the daemon
+    // runs: the morning's band while the sun climbs, the evening's after.
     let kelvin_at = |hour: f32| -> f32 {
         let t = midnight + f64::from(hour) * 3600.0;
         let elevation = solar_elevation(status.latitude, status.longitude, t);
-        target_temperature(elevation, band, day_temp, night_temp) as f32
+        target_temperature(elevation, bands.at(rising_at(hour)), day_temp, night_temp) as f32
     };
 
     let (response, painter) = ui.allocate_painter(
@@ -236,12 +255,15 @@ pub fn show(ui: &mut egui::Ui, view: View<'_>, held: &mut Option<Handle>) -> Opt
         }
         // Where the curve is decides plateau or ramp; where the hand is
         // decides which bound of a ramp, so grabbing near a corner takes
-        // the bound that corner belongs to.
-        match frac_of(kelvin_at(hour_of_x(p.x))) {
+        // the bound that corner belongs to; and the hour decides whose
+        // ramp it is, the morning's or the evening's.
+        let hour = hour_of_x(p.x);
+        let dawn = rising_at(hour);
+        match frac_of(kelvin_at(hour)) {
             f if f > 0.97 => Some(Handle::DayLevel),
             f if f < 0.03 => Some(Handle::NightLevel),
-            _ if frac_of(to_kelvin(p.y)) >= 0.5 => Some(Handle::DayBound),
-            _ => Some(Handle::NightBound),
+            _ if frac_of(to_kelvin(p.y)) >= 0.5 => Some(Handle::DayBound { dawn }),
+            _ => Some(Handle::NightBound { dawn }),
         }
     };
 
@@ -259,14 +281,17 @@ pub fn show(ui: &mut egui::Ui, view: View<'_>, held: &mut Option<Handle>) -> Opt
             edit = Some(match handle {
                 Handle::DayLevel => Edit::DayTemp(held_day_temp(to_kelvin(p.y), night_temp)),
                 Handle::NightLevel => Edit::NightTemp(held_night_temp(to_kelvin(p.y), day_temp)),
-                Handle::DayBound | Handle::NightBound => {
+                // The side was chosen when the drag began and is kept, so a
+                // hand that wanders past noon does not swap ramps mid-drag.
+                Handle::DayBound { dawn } | Handle::NightBound { dawn } => {
                     let hour = f64::from(hour_of_x(p.x));
                     let elevation = solar_elevation(
                         status.latitude,
                         status.longitude,
                         midnight + hour * 3600.0,
                     );
-                    Edit::Band(held_band(band, elevation, handle == Handle::DayBound))
+                    let day = matches!(handle, Handle::DayBound { .. });
+                    Edit::Bands(held_bands(bands, dawn, elevation, day))
                 }
             });
         }
@@ -337,7 +362,10 @@ pub fn show(ui: &mut egui::Ui, view: View<'_>, held: &mut Option<Handle>) -> Opt
             let belongs = match handle {
                 Handle::DayLevel => frac > 0.98,
                 Handle::NightLevel => frac < 0.02,
-                Handle::DayBound | Handle::NightBound => (0.02..=0.98).contains(&frac),
+                // Only the ramp that would move: one side of the day.
+                Handle::DayBound { dawn } | Handle::NightBound { dawn } => {
+                    (0.02..=0.98).contains(&frac) && rising_at(h) == dawn
+                }
             };
             if belongs {
                 run.push(egui::pos2(to_x(h), to_y(kelvin)));
@@ -356,8 +384,16 @@ pub fn show(ui: &mut egui::Ui, view: View<'_>, held: &mut Option<Handle>) -> Opt
         let caption = match handle {
             Handle::DayLevel => format!("{day_temp} K"),
             Handle::NightLevel => format!("{night_temp} K"),
-            Handle::DayBound => format!("full day above {:+.1}°", band.day_elevation),
-            Handle::NightBound => format!("full night below {:+.1}°", band.night_elevation),
+            Handle::DayBound { dawn } => format!(
+                "{} · full day above {:+.1}°",
+                side_name(dawn),
+                bands.at(dawn).day_elevation
+            ),
+            Handle::NightBound { dawn } => format!(
+                "{} · full night below {:+.1}°",
+                side_name(dawn),
+                bands.at(dawn).night_elevation
+            ),
         };
         painter.text(
             egui::pos2(rect.left() + 6.0, rect.top() + 4.0),
@@ -435,9 +471,27 @@ pub fn show(ui: &mut egui::Ui, view: View<'_>, held: &mut Option<Handle>) -> Opt
     edit
 }
 
+/// What a ramp is called in the caption a grab puts up.
+fn side_name(dawn: bool) -> &'static str {
+    if dawn { "dawn" } else { "dusk" }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #47's "done when", in the function that does it: dragging one ramp
+    /// moves its own side's band and returns the other exactly as it was.
+    #[test]
+    fn a_ramp_drag_moves_only_its_own_side() {
+        let bands = Bands::default();
+        let evening = held_bands(bands, false, -12.0, false);
+        assert_eq!(evening.dusk.night_elevation, -12.0);
+        assert_eq!(evening.dawn, bands.dawn);
+        let morning = held_bands(bands, true, 1.0, true);
+        assert_eq!(morning.dawn.day_elevation, 1.0);
+        assert_eq!(morning.dusk, bands.dusk);
+    }
 
     /// The chart speaks only when the screen is not following what it draws
     /// (#52), and it distinguishes the two ways that happens. The `off` case
