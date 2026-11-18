@@ -5,6 +5,7 @@
 //! reads the status (to keep the slider in step with automatic mode) and sends
 //! a temperature when the user drags.
 
+use nightlightd_core::bus::{self, Service};
 use nightlightd_core::transition::{Band, Bands};
 use serde::Deserialize;
 use zbus::blocking::Connection;
@@ -62,9 +63,12 @@ impl Status {
 
 /// The slice of the daemon interface the panel uses. `zbus::proxy` generates
 /// `DaemonProxyBlocking` from these signatures.
+///
+/// No `default_service`: the daemon's bus name depends on whether this is a
+/// Flatpak (#55), so every proxy is handed it from `core::bus` and none can
+/// fall back to a name written here.
 #[proxy(
     interface = "org.nightlightd.Daemon",
-    default_service = "org.nightlightd.Daemon",
     default_path = "/org/nightlightd/Daemon"
 )]
 trait Daemon {
@@ -110,7 +114,7 @@ impl Client {
     /// per-request and are reported as `None` / swallowed.
     pub fn connect() -> zbus::Result<Self> {
         let connection = Connection::session()?;
-        let proxy = DaemonProxyBlocking::new(&connection)?;
+        let proxy = DaemonProxyBlocking::new(&connection, bus::name(Service::Daemon))?;
         let fdo = zbus::blocking::fdo::DBusProxy::new(&connection)?;
         Ok(Self {
             proxy,
@@ -130,7 +134,7 @@ impl Client {
     /// client and the daemon are different versions, which deserves a
     /// different message than "not running".
     pub fn daemon_on_bus(&self) -> bool {
-        zbus::names::BusName::try_from("org.nightlightd.Daemon")
+        zbus::names::BusName::try_from(bus::name(Service::Daemon))
             .ok()
             .and_then(|name| self.fdo.name_has_owner(name).ok())
             .unwrap_or(false)

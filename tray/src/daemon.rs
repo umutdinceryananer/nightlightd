@@ -6,6 +6,7 @@
 //! is that if the interface ever changes, the tray breaks; it degrades quietly
 //! when that or a missing daemon happens.
 
+use nightlightd_core::bus::{self, Service};
 use nightlightd_core::solar::sun_is_rising;
 use nightlightd_core::transition::{Band, Bands, phase};
 use serde::Deserialize;
@@ -95,9 +96,12 @@ impl Status {
 
 /// The slice of the daemon interface the tray uses. `zbus::proxy` generates
 /// `DaemonProxyBlocking` from these signatures.
+///
+/// No `default_service`: the daemon's bus name depends on whether this is a
+/// Flatpak (#55), so every proxy is handed it from `core::bus` and none can
+/// fall back to a name written here.
 #[proxy(
     interface = "org.nightlightd.Daemon",
-    default_service = "org.nightlightd.Daemon",
     default_path = "/org/nightlightd/Daemon"
 )]
 trait Daemon {
@@ -122,7 +126,7 @@ impl Client {
     /// then fail per-request, which [`status`](Self::status) reports as `None`.
     pub fn connect() -> zbus::Result<Self> {
         let connection = zbus::blocking::Connection::session()?;
-        let proxy = DaemonProxyBlocking::new(&connection)?;
+        let proxy = DaemonProxyBlocking::new(&connection, bus::name(Service::Daemon))?;
         Ok(Self { connection, proxy })
     }
 
@@ -134,7 +138,7 @@ impl Client {
         zbus::blocking::fdo::DBusProxy::new(&self.connection)
             .ok()
             .and_then(|fdo| {
-                let name = zbus::names::BusName::try_from("org.nightlightd.Daemon").ok()?;
+                let name = zbus::names::BusName::try_from(bus::name(Service::Daemon)).ok()?;
                 fdo.name_has_owner(name).ok()
             })
             .unwrap_or(false)
@@ -147,8 +151,9 @@ impl Client {
     /// new login's autostart would add another icon. Returns `false` when
     /// another tray already owns the name, so the caller can exit quietly.
     pub fn claim_tray_name(&self) -> zbus::Result<bool> {
+        let name = bus::name(Service::Tray);
         match self.connection.request_name_with_flags(
-            "org.nightlightd.Tray",
+            name.as_str(),
             zbus::fdo::RequestNameFlags::DoNotQueue.into(),
         ) {
             Ok(zbus::fdo::RequestNameReply::PrimaryOwner) => Ok(true),

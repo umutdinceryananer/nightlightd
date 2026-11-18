@@ -5,12 +5,12 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use nightlightd_core::bus::{self, Service};
 use zbus::blocking::Connection;
 use zbus::blocking::connection::Builder;
 use zbus::fdo::{RequestNameFlags, RequestNameReply};
 use zbus::{interface, proxy};
 
-const NAME: &str = "org.nightlightd.Panel";
 const PATH: &str = "/org/nightlightd/Panel";
 
 /// Serves `Present`: sets a flag the egui loop watches so it raises the window.
@@ -27,9 +27,11 @@ impl Presenter {
 }
 
 /// A blocking proxy for an already-running panel's `Present`.
+///
+/// Handed its bus name rather than holding one, for the reason the daemon's
+/// proxies are (#55).
 #[proxy(
     interface = "org.nightlightd.Panel",
-    default_service = "org.nightlightd.Panel",
     default_path = "/org/nightlightd/Panel"
 )]
 trait Panel {
@@ -48,11 +50,13 @@ pub fn acquire(focus: Arc<AtomicBool>) -> Option<Connection> {
         .ok()?
         .build()
         .ok()?;
-    match connection.request_name_with_flags(NAME, RequestNameFlags::DoNotQueue.into()) {
+    // Below the app ID inside a Flatpak, org.nightlightd natively (#55).
+    let name = bus::name(Service::Panel);
+    match connection.request_name_with_flags(name.as_str(), RequestNameFlags::DoNotQueue.into()) {
         Ok(RequestNameReply::PrimaryOwner) => Some(connection),
         _ => {
             // Another panel owns the name: ask it to come forward, then bow out.
-            if let Ok(proxy) = PanelProxyBlocking::new(&connection) {
+            if let Ok(proxy) = PanelProxyBlocking::new(&connection, name) {
                 let _ = proxy.present();
             }
             None

@@ -10,6 +10,7 @@ use zbus::blocking::connection::Builder;
 use zbus::fdo::{RequestNameFlags, RequestNameReply};
 use zbus::interface;
 
+use nightlightd_core::bus::{self, Service};
 use nightlightd_core::color::{BRIGHTNESS_RANGE, GAMMA_RANGE};
 use nightlightd_core::location::location_from_timezone;
 use nightlightd_core::mode::Mode;
@@ -22,7 +23,6 @@ use crate::waker::Waker;
 use crate::x11::unix_now;
 
 const OBJECT_PATH: &str = "/org/nightlightd/Daemon";
-const WELL_KNOWN_NAME: &str = "org.nightlightd.Daemon";
 
 /// Backs the D-Bus interface: a handle to the shared state and the waker.
 struct Daemon {
@@ -358,7 +358,9 @@ pub fn serve(state: Shared, waker: Waker) -> zbus::Result<Option<Connection>> {
     let connection = Builder::session()?
         .serve_at(OBJECT_PATH, Daemon { state, waker })?
         .build()?;
-    match connection.request_name_with_flags(WELL_KNOWN_NAME, RequestNameFlags::DoNotQueue.into()) {
+    // Below the app ID inside a Flatpak, org.nightlightd natively (#55).
+    let name = bus::name(Service::Daemon);
+    match connection.request_name_with_flags(name.as_str(), RequestNameFlags::DoNotQueue.into()) {
         Ok(RequestNameReply::PrimaryOwner) => Ok(Some(connection)),
         // Another instance already owns the name. With DoNotQueue, zbus reports
         // this either as a non-primary reply or as the NameTaken error.

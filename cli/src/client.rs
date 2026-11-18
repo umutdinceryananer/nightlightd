@@ -4,6 +4,7 @@
 use zbus::blocking::Connection;
 use zbus::proxy;
 
+use nightlightd_core::bus::{self, Service};
 use nightlightd_core::solar::sun_is_rising;
 use nightlightd_core::transition::{Band, Bands, phase};
 
@@ -11,9 +12,12 @@ use crate::status::Status;
 
 /// A blocking proxy for the daemon's interface. The `proxy` macro generates
 /// `DaemonProxyBlocking` from these method signatures.
+///
+/// No `default_service`: the daemon's bus name depends on whether this is a
+/// Flatpak (#55), so every proxy is handed it from `core::bus` and none can
+/// fall back to a name written here.
 #[proxy(
     interface = "org.nightlightd.Daemon",
-    default_service = "org.nightlightd.Daemon",
     default_path = "/org/nightlightd/Daemon"
 )]
 trait Daemon {
@@ -71,7 +75,7 @@ pub fn daemon_on_bus() -> bool {
         .ok()
         .and_then(|connection| zbus::blocking::fdo::DBusProxy::new(&connection).ok())
         .and_then(|fdo| {
-            let name = zbus::names::BusName::try_from("org.nightlightd.Daemon").ok()?;
+            let name = zbus::names::BusName::try_from(bus::name(Service::Daemon)).ok()?;
             fdo.name_has_owner(name).ok()
         })
         .unwrap_or(false)
@@ -80,7 +84,7 @@ pub fn daemon_on_bus() -> bool {
 /// Sends `request` to the running daemon over the session bus.
 pub fn send(request: Request) -> zbus::Result<()> {
     let connection = Connection::session()?;
-    let proxy = DaemonProxyBlocking::new(&connection)?;
+    let proxy = DaemonProxyBlocking::new(&connection, bus::name(Service::Daemon))?;
     match request {
         Request::SetTemperature(kelvin) => proxy.set_temperature(kelvin),
         Request::Toggle => proxy.toggle(),
