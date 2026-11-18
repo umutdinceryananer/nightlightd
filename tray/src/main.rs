@@ -601,6 +601,13 @@ fn main() {
         style: tray_icon::remembered(),
     })
     .assume_sni_available(true)
+    // Inside a Flatpak (#57) the tray registers under its unique bus name
+    // instead of owning `org.kde.StatusNotifierItem-PID-ID`: a sandbox may
+    // own only names below its app ID, and the wildcard `org.kde.*`
+    // permission it would take is one no reviewer should have to grant.
+    // The specification asks for the well-known name, so a native tray
+    // keeps it.
+    .disable_dbus_name(nightlightd_core::sandbox::is_flatpak())
     .spawn()
     {
         Ok(handle) => handle,
