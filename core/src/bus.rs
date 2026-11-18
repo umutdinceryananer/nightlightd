@@ -50,6 +50,23 @@ pub fn name_for(app_id: Option<&str>, service: Service) -> String {
     format!("{}.{}", app_id.unwrap_or(NATIVE), service.suffix())
 }
 
+/// `service`'s name in the other kind of install: the Flatpak's, seen from
+/// a native process, and the native one, seen from inside a Flatpak (#56).
+/// After #55 a native daemon and a Flatpak one no longer meet on one name,
+/// and two daemons write one gamma ramp: the flicker this project exists
+/// to remove. Each looks for the other before it starts.
+pub fn other_install_name(service: Service) -> String {
+    other_name_for(sandbox::is_flatpak(), service)
+}
+
+fn other_name_for(in_flatpak: bool, service: Service) -> String {
+    if in_flatpak {
+        name_for(None, service)
+    } else {
+        name_for(Some(sandbox::APP_ID), service)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -62,6 +79,21 @@ mod tests {
         assert_eq!(name_for(None, Service::Daemon), "org.nightlightd.Daemon");
         assert_eq!(name_for(None, Service::Tray), "org.nightlightd.Tray");
         assert_eq!(name_for(None, Service::Panel), "org.nightlightd.Panel");
+    }
+
+    /// Each kind of install looks for the other one's daemon, never for its
+    /// own: its own name is the single-instance lock, and it already asks
+    /// for that.
+    #[test]
+    fn each_install_looks_for_the_other_ones_daemon() {
+        assert_eq!(
+            other_name_for(false, Service::Daemon),
+            name_for(Some(APP_ID), Service::Daemon)
+        );
+        assert_eq!(
+            other_name_for(true, Service::Daemon),
+            "org.nightlightd.Daemon"
+        );
     }
 
     /// Inside the Flatpak every name sits below the app ID, which is what

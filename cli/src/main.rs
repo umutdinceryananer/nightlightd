@@ -260,9 +260,20 @@ fn run_daemon(no_reset: bool) {
     // Claim the D-Bus name — this is the single-instance lock (#19). Keep the
     // connection alive for the daemon's lifetime; dropping it stops serving.
     let _connection = match dbus::serve(Arc::clone(&shared), waker.clone()) {
-        Ok(Some(connection)) => connection,
-        Ok(None) => {
+        Ok(dbus::Claim::Owned(connection)) => connection,
+        Ok(dbus::Claim::Taken) => {
             tracing::info!("already running");
+            return;
+        }
+        // The other install's daemon (#56): two would write one gamma ramp
+        // and flicker, so this one leaves, and says which one to stop.
+        Ok(dbus::Claim::OtherInstall(name)) => {
+            let which = if name.starts_with("org.nightlightd.") {
+                "the native install's daemon"
+            } else {
+                "the Flatpak's daemon"
+            };
+            tracing::info!("{which} is already running ({name}); stop it to run this one");
             return;
         }
         Err(error) => fail("cannot serve D-Bus", Box::new(error)),

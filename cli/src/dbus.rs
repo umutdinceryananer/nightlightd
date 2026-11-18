@@ -347,26 +347,57 @@ fn describe_source(state: &State) -> String {
     }
 }
 
+/// What claiming the daemon's name came to.
+pub enum Claim {
+    /// This process is the daemon. The connection must be kept alive for the
+    /// daemon's lifetime; dropping it stops serving.
+    Owned(Connection),
+    /// Another daemon of this install already owns the name (#19).
+    Taken,
+    /// A daemon of the other install, native or Flatpak, is running under
+    /// the name given (#56).
+    OtherInstall(String),
+}
+
 /// Serves the interface and claims the well-known name as the single-instance
-/// lock (#19). Returns `Ok(Some(conn))` when this process owns the name — the
-/// connection must be kept alive for the daemon's lifetime — or `Ok(None)` when
-/// another instance already owns it, so the caller can exit cleanly.
+/// lock (#19), unless the other kind of install's daemon is already running
+/// (#56). Either way the caller exits cleanly on anything but `Owned`.
 ///
 /// `DoNotQueue` makes a second instance fail at once instead of waiting in the
 /// bus's queue, and the name is never replaced, so the first daemon keeps it.
-pub fn serve(state: Shared, waker: Waker) -> zbus::Result<Option<Connection>> {
+/// Two installs started in the same instant can both miss each other; the
+/// check is for the everyday case, a .deb's unit still enabled when the
+/// Flatpak arrives, or the reverse.
+pub fn serve(state: Shared, waker: Waker) -> zbus::Result<Claim> {
     let connection = Builder::session()?
         .serve_at(OBJECT_PATH, Daemon { state, waker })?
         .build()?;
+    let other = bus::other_install_name(Service::Daemon);
+    if owned(&connection, &other) {
+        return Ok(Claim::OtherInstall(other));
+    }
     // Below the app ID inside a Flatpak, org.nightlightd natively (#55).
     let name = bus::name(Service::Daemon);
     match connection.request_name_with_flags(name.as_str(), RequestNameFlags::DoNotQueue.into()) {
-        Ok(RequestNameReply::PrimaryOwner) => Ok(Some(connection)),
+        Ok(RequestNameReply::PrimaryOwner) => Ok(Claim::Owned(connection)),
         // Another instance already owns the name. With DoNotQueue, zbus reports
         // this either as a non-primary reply or as the NameTaken error.
-        Ok(_) | Err(zbus::Error::NameTaken) => Ok(None),
+        Ok(_) | Err(zbus::Error::NameTaken) => Ok(Claim::Taken),
         Err(other) => Err(other),
     }
+}
+
+/// Whether anything owns `name` on the bus. A question the bus cannot
+/// answer, such as a sandbox not allowed to see the name, counts as no: the
+/// check is a courtesy, and it must never keep the filter off.
+fn owned(connection: &Connection, name: &str) -> bool {
+    zbus::blocking::fdo::DBusProxy::new(connection)
+        .ok()
+        .and_then(|fdo| {
+            let name = zbus::names::BusName::try_from(name).ok()?;
+            fdo.name_has_owner(name).ok()
+        })
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
