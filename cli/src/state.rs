@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use nightlightd_core::color::{MAX_TEMPERATURE, MIN_TEMPERATURE};
 use nightlightd_core::mode::Mode;
-use nightlightd_core::transition::Band;
+use nightlightd_core::transition::Bands;
 
 /// Holds a temperature to what the blackbody table can actually render, for
 /// every door into this state: the config file at startup and the D-Bus
@@ -89,9 +89,10 @@ pub struct State {
     pub current_gamma: f64,
     /// Whether target changes ease onto the screen (#44).
     pub fade: bool,
-    /// The transition band (#39), carried verbatim from the config; core
-    /// degrades a nonsensical pair to the default where it is spent.
-    pub band: Band,
+    /// The transition bands (#39, #47), the morning's and the evening's,
+    /// carried verbatim from the config; core degrades a nonsensical pair
+    /// to the default where it is spent.
+    pub bands: Bands,
     /// The last successfully resolved location (automatic mode). The poll loop
     /// keeps it warm; `GetStatus` reads it instead of re-parsing zone.tab on
     /// every call, and a transient lookup failure reuses it instead of

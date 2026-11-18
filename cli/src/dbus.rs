@@ -107,14 +107,22 @@ impl Daemon {
     /// re-apply. Values ride verbatim — core degrades a nonsensical pair to
     /// the default where it is spent — but a non-finite number is ignored
     /// rather than trusted, like every other door.
+    ///
+    /// One band, so both ends of the day (#47): this is the method that
+    /// existed before the morning could be set apart, and what it means to
+    /// a caller that knows of only one band is the band, morning and
+    /// evening alike.
     fn set_transition_band(&self, day_elevation: f64, night_elevation: f64) {
         {
             let mut state = lock(&self.state);
-            if day_elevation.is_finite() {
-                state.band.day_elevation = day_elevation;
-            }
-            if night_elevation.is_finite() {
-                state.band.night_elevation = night_elevation;
+            let bands = &mut state.bands;
+            for band in [&mut bands.dawn, &mut bands.dusk] {
+                if day_elevation.is_finite() {
+                    band.day_elevation = day_elevation;
+                }
+                if night_elevation.is_finite() {
+                    band.night_elevation = night_elevation;
+                }
             }
         }
         persist(&self.state);
@@ -245,8 +253,8 @@ impl Daemon {
             day_brightness: state.day_brightness,
             night_brightness: state.night_brightness,
             fade: state.fade,
-            day_elevation: state.band.day_elevation,
-            night_elevation: state.band.night_elevation,
+            day_elevation: state.bands.dusk.day_elevation,
+            night_elevation: state.bands.dusk.night_elevation,
         }
     }
 }
@@ -270,6 +278,8 @@ fn persist(state: &Shared) {
             Mode::ManualLocation { lat, lon } => (Some(lat), Some(lon)),
             _ => (None, None),
         };
+        let (day_elevation, night_elevation, dawn_day_elevation, dawn_night_elevation) =
+            config::band_fields(state.bands);
         Config {
             day_temp: state.day_temp,
             night_temp: state.night_temp,
@@ -277,8 +287,10 @@ fn persist(state: &Shared) {
             day_brightness: state.day_brightness,
             night_brightness: state.night_brightness,
             fade: state.fade,
-            day_elevation: state.band.day_elevation,
-            night_elevation: state.band.night_elevation,
+            day_elevation,
+            night_elevation,
+            dawn_day_elevation,
+            dawn_night_elevation,
             latitude,
             longitude,
         }
@@ -345,7 +357,7 @@ mod tests {
             current_brightness: 1.0,
             current_gamma: 1.0,
             fade: true,
-            band: nightlightd_core::transition::Band::default(),
+            bands: nightlightd_core::transition::Bands::default(),
             location: None,
             outputs: Vec::new(),
         }
@@ -421,8 +433,8 @@ mod tests {
         s.fade = false;
         // Verbatim, even a nonsensical pair: judging it is core's job, at
         // spend time, and the settings have to show what the file says.
-        s.band.day_elevation = -9.0;
-        s.band.night_elevation = 4.0;
+        s.bands.dusk.day_elevation = -9.0;
+        s.bands.dusk.night_elevation = 4.0;
         let status = daemon(s).get_status();
         assert!(!status.fade);
         assert_eq!((status.day_elevation, status.night_elevation), (-9.0, 4.0));
@@ -483,6 +495,26 @@ mod tests {
             assert_eq!(s.mode, pinned, "{lat}, {lon}");
             assert_eq!(s.configured_mode, pinned, "{lat}, {lon}");
         }
+    }
+
+    /// The one-band method sets one band, which since #47 means both: a
+    /// client that knows nothing of a morning band must not leave one
+    /// behind that it cannot see.
+    #[test]
+    fn the_one_band_setter_sets_morning_and_evening_alike() {
+        let mut s = state(true, None, Mode::Automatic);
+        s.config_damaged = true;
+        s.bands.dawn.night_elevation = -2.0;
+        let d = daemon(s);
+        d.set_transition_band(1.5, -12.0);
+        let bands = lock(&d.state).bands;
+        assert!(!bands.split());
+        assert_eq!(bands.dawn.night_elevation, -12.0);
+        // A non-finite half is ignored on both sides, as it always was.
+        d.set_transition_band(f64::NAN, -9.0);
+        let bands = lock(&d.state).bands;
+        assert_eq!(bands.dawn.day_elevation, 1.5);
+        assert_eq!(bands.dusk.night_elevation, -9.0);
     }
 
     #[test]

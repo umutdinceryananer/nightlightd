@@ -20,7 +20,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use nightlightd_core::color::{build_ramp, temperature_to_rgb};
 use nightlightd_core::location::location_from_timezone;
 use nightlightd_core::mode::Mode;
-use nightlightd_core::solar::solar_elevation;
+use nightlightd_core::solar::{solar_elevation, sun_is_rising};
 use nightlightd_core::transition::{target_brightness, target_temperature};
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use x11rb::connection::Connection;
@@ -319,26 +319,29 @@ fn desired_target(state: &mut State) -> Target {
     if !state.enabled {
         return NEUTRAL_TARGET;
     }
-    let elevation = current_elevation(state);
-    let brightness = match elevation {
-        Some(elevation) => target_brightness(
+    let sun = current_sun(state);
+    // The morning's band while the sun climbs, the evening's while it sinks
+    // (#47); one and the same until someone sets them apart.
+    let band = sun.map(|(_, rising)| state.bands.at(rising));
+    let brightness = match (sun, band) {
+        (Some((elevation, _)), Some(band)) => target_brightness(
             elevation,
-            state.band,
+            band,
             state.day_brightness,
             state.night_brightness,
         ),
-        None => state.day_brightness,
+        _ => state.day_brightness,
     };
     let kelvin = if let Some(kelvin) = state.override_temp {
         kelvin
     } else if let Mode::Fixed(kelvin) = state.mode {
         kelvin
     } else {
-        match elevation {
-            Some(elevation) => {
-                target_temperature(elevation, state.band, state.day_temp, state.night_temp)
+        match (sun, band) {
+            (Some((elevation, _)), Some(band)) => {
+                target_temperature(elevation, band, state.day_temp, state.night_temp)
             }
-            None => state.day_temp,
+            _ => state.day_temp,
         }
     };
     Target {
@@ -353,7 +356,7 @@ fn desired_target(state: &mut State) -> Target {
 /// state's cache on success and reused from there on a transient failure, so
 /// a momentary failure never resets the screen. `None` only for a location
 /// that has never resolved (or a fixed mode, which has none to offer).
-fn current_elevation(state: &mut State) -> Option<f64> {
+fn current_sun(state: &mut State) -> Option<(f64, bool)> {
     let (lat, lon) = match state.mode {
         Mode::ManualLocation { lat, lon } => (lat, lon),
         Mode::Fixed(_) => return None,
@@ -364,7 +367,8 @@ fn current_elevation(state: &mut State) -> Option<f64> {
             state.location?
         }
     };
-    Some(solar_elevation(lat, lon, unix_now()))
+    let now = unix_now();
+    Some((solar_elevation(lat, lon, now), sun_is_rising(lat, lon, now)))
 }
 
 /// Seconds since the Unix epoch, as an `f64` for the solar maths. Degrades to

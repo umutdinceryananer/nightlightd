@@ -8,6 +8,7 @@
 use std::path::PathBuf;
 
 use nightlightd_core::mode::Mode;
+use nightlightd_core::transition::{Band, Bands};
 use serde::{Deserialize, Serialize};
 
 /// User settings, all optional. Missing fields take the defaults below.
@@ -34,11 +35,20 @@ pub struct Config {
     pub fade: bool,
     /// Solar elevation (degrees) at or above which it is full daytime
     /// (#39). Kept verbatim; a nonsensical pair degrades to the default
-    /// where it is spent, in core.
+    /// where it is spent, in core. This pair is the evening's, and the
+    /// morning's too unless a `dawn_` value below says otherwise (#47).
     pub day_elevation: f64,
     /// Solar elevation at or below which it is full night. Lowering it
     /// lands full night deeper into dusk — redshift's `elevation-low`.
     pub night_elevation: f64,
+    /// The morning's full-day bound, when it differs from the evening's
+    /// (#47). Absent means the pair above holds at both ends of the day,
+    /// which is what every file written before #47 says.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dawn_day_elevation: Option<f64>,
+    /// The morning's full-night bound, likewise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dawn_night_elevation: Option<f64>,
     /// Manual latitude in degrees; pins the location instead of the timezone.
     /// Omitted from the written file when absent (TOML has no null).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -59,13 +69,44 @@ impl Default for Config {
             fade: true,
             day_elevation: 3.0,
             night_elevation: -6.0,
+            dawn_day_elevation: None,
+            dawn_night_elevation: None,
             latitude: None,
             longitude: None,
         }
     }
 }
 
+/// The four elevation fields as a config writes them: the evening's pair in
+/// full, and a morning value only where it differs, so a file nobody split
+/// stays the two lines it always was. The inverse of [`Config::bands`].
+pub fn band_fields(bands: Bands) -> (f64, f64, Option<f64>, Option<f64>) {
+    let Bands { dawn, dusk } = bands;
+    let apart = |morning: f64, evening: f64| (morning != evening).then_some(morning);
+    (
+        dusk.day_elevation,
+        dusk.night_elevation,
+        apart(dawn.day_elevation, dusk.day_elevation),
+        apart(dawn.night_elevation, dusk.night_elevation),
+    )
+}
+
 impl Config {
+    /// The transition bands the file describes (#47): the evening's pair,
+    /// and the morning's, which is that same pair wherever a `dawn_` value
+    /// does not say otherwise. Verbatim; core repairs what it cannot use.
+    pub fn bands(&self) -> Bands {
+        let dusk = Band {
+            day_elevation: self.day_elevation,
+            night_elevation: self.night_elevation,
+        };
+        let dawn = Band {
+            day_elevation: self.dawn_day_elevation.unwrap_or(dusk.day_elevation),
+            night_elevation: self.dawn_night_elevation.unwrap_or(dusk.night_elevation),
+        };
+        Bands { dawn, dusk }
+    }
+
     /// The operating mode the config implies: a manual location when both
     /// coordinates are given and both are finite numbers, otherwise automatic
     /// (derived from the timezone). TOML can spell `nan` and `inf`, and a
@@ -245,6 +286,59 @@ mod tests {
         assert_eq!(config.gamma, 1.0);
         assert_eq!(config.day_brightness, 1.0);
         assert_eq!(config.night_brightness, 1.0);
+    }
+
+    /// A file written before #47 has one pair, and it must mean what it
+    /// always meant: the same band morning and evening.
+    #[test]
+    fn a_file_with_one_pair_runs_it_at_both_ends_of_the_day() {
+        let config: Config = toml::from_str("night_elevation = -12.0").unwrap();
+        let bands = config.bands();
+        assert!(!bands.split());
+        assert_eq!(bands.dusk.night_elevation, -12.0);
+        assert_eq!(bands.dawn.night_elevation, -12.0);
+    }
+
+    /// A morning value overrides only its own bound; the other comes from
+    /// the evening's pair.
+    #[test]
+    fn a_dawn_value_sets_only_the_morning() {
+        let config: Config =
+            toml::from_str("night_elevation = -12.0\ndawn_night_elevation = -3.0").unwrap();
+        let bands = config.bands();
+        assert_eq!(bands.dawn.night_elevation, -3.0);
+        assert_eq!(bands.dawn.day_elevation, 3.0);
+        assert_eq!(bands.dusk.night_elevation, -12.0);
+    }
+
+    /// Written back, a band nobody split stays two lines, and a split one
+    /// comes back as the same two bands.
+    #[test]
+    fn bands_round_trip_through_the_file() {
+        let write = |bands: Bands| {
+            let (day_elevation, night_elevation, dawn_day_elevation, dawn_night_elevation) =
+                band_fields(bands);
+            Config {
+                day_elevation,
+                night_elevation,
+                dawn_day_elevation,
+                dawn_night_elevation,
+                ..Config::default()
+            }
+        };
+        let together = write(Bands::default());
+        assert!(!toml::to_string(&together).unwrap().contains("dawn"));
+
+        let split = Bands {
+            dawn: Band {
+                day_elevation: 1.0,
+                night_elevation: -2.0,
+            },
+            ..Bands::default()
+        };
+        let text = toml::to_string(&write(split)).unwrap();
+        let back: Config = toml::from_str(&text).unwrap();
+        assert_eq!(back.bands(), split);
     }
 
     /// The band defaults to redshift's pair (#39); a hand-written pair
