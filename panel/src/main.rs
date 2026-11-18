@@ -784,6 +784,8 @@ impl Panel {
             fade: true,
             day_elevation: band.day_elevation,
             night_elevation: band.night_elevation,
+            dawn_day_elevation: band.day_elevation,
+            dawn_night_elevation: band.night_elevation,
         });
     }
 

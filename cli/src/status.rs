@@ -55,6 +55,11 @@ pub struct Status {
     pub day_elevation: f64,
     /// The solar elevation at or below which it is full night, as configured.
     pub night_elevation: f64,
+    /// The morning's full-day bound (#47); the pair above is the evening's.
+    /// The same numbers as the evening's until someone sets them apart.
+    pub dawn_day_elevation: f64,
+    /// The morning's full-night bound, likewise.
+    pub dawn_night_elevation: f64,
 }
 
 #[cfg(test)]
@@ -69,6 +74,6 @@ mod tests {
     /// each client's daemon.rs; change all four together.
     #[test]
     fn wire_signature_is_pinned() {
-        assert_eq!(Status::SIGNATURE.to_string(), "(busdbddbuuddddbdd)");
+        assert_eq!(Status::SIGNATURE.to_string(), "(busdbddbuuddddbdddd)");
     }
 }

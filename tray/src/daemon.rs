@@ -6,7 +6,7 @@
 //! is that if the interface ever changes, the tray breaks; it degrades quietly
 //! when that or a missing daemon happens.
 
-use nightlightd_core::transition::{Band, phase};
+use nightlightd_core::transition::{Band, Bands, phase};
 use serde::Deserialize;
 use zbus::proxy;
 use zbus::zvariant::Type;
@@ -35,17 +35,34 @@ pub struct Status {
     pub fade: bool,
     pub day_elevation: f64,
     pub night_elevation: f64,
+    /// The morning's full-day bound (#47); the pair above is the evening's.
+    /// The same numbers as the evening's until someone sets them apart.
+    pub dawn_day_elevation: f64,
+    /// The morning's full-night bound, likewise.
+    pub dawn_night_elevation: f64,
 }
 
 impl Status {
-    /// The transition band (#39) the daemon runs, `sane()`d so the tooltip
-    /// names the sun's phase by the band actually applied.
-    pub fn band(&self) -> Band {
-        Band {
-            day_elevation: self.day_elevation,
-            night_elevation: self.night_elevation,
+    /// The morning's band and the evening's (#47), each repaired the way
+    /// core repairs one, so what is drawn is what the daemon applies.
+    pub fn bands(&self) -> Bands {
+        Bands {
+            dawn: Band {
+                day_elevation: self.dawn_day_elevation,
+                night_elevation: self.dawn_night_elevation,
+            },
+            dusk: Band {
+                day_elevation: self.day_elevation,
+                night_elevation: self.night_elevation,
+            },
         }
         .sane()
+    }
+
+    /// The evening's band, the one every interface showed before the
+    /// morning could be set apart.
+    pub fn band(&self) -> Band {
+        self.bands().dusk
     }
 
     /// A few lines for the hover tooltip: on/off and the applied temperature,
@@ -178,7 +195,7 @@ mod tests {
     /// work, which reads as "daemon not running" with a working left-click.
     #[test]
     fn wire_signature_is_pinned() {
-        assert_eq!(Status::SIGNATURE.to_string(), "(busdbddbuuddddbdd)");
+        assert_eq!(Status::SIGNATURE.to_string(), "(busdbddbuuddddbdddd)");
     }
 
     fn somewhere_at(elevation: f64) -> Status {
@@ -200,6 +217,8 @@ mod tests {
             fade: true,
             day_elevation: 3.0,
             night_elevation: -6.0,
+            dawn_day_elevation: 3.0,
+            dawn_night_elevation: -6.0,
         }
     }
 

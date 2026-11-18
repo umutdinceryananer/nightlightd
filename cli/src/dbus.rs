@@ -129,6 +129,35 @@ impl Daemon {
         self.waker.wake();
     }
 
+    /// Set the morning's band and the evening's separately (#47), then
+    /// persist and re-apply. Each bound obeys the same rules as
+    /// `SetTransitionBand`'s: verbatim if finite, ignored if not.
+    fn set_transition_bands(
+        &self,
+        dawn_day_elevation: f64,
+        dawn_night_elevation: f64,
+        dusk_day_elevation: f64,
+        dusk_night_elevation: f64,
+    ) {
+        {
+            let mut state = lock(&self.state);
+            let bands = &mut state.bands;
+            for (band, day, night) in [
+                (&mut bands.dawn, dawn_day_elevation, dawn_night_elevation),
+                (&mut bands.dusk, dusk_day_elevation, dusk_night_elevation),
+            ] {
+                if day.is_finite() {
+                    band.day_elevation = day;
+                }
+                if night.is_finite() {
+                    band.night_elevation = night;
+                }
+            }
+        }
+        persist(&self.state);
+        self.waker.wake();
+    }
+
     /// Turn the fade walk (#44) on or off, then persist. Off means the next
     /// target change lands in one write; a walk in flight completes on the
     /// wake this triggers.
@@ -255,6 +284,8 @@ impl Daemon {
             fade: state.fade,
             day_elevation: state.bands.dusk.day_elevation,
             night_elevation: state.bands.dusk.night_elevation,
+            dawn_day_elevation: state.bands.dawn.day_elevation,
+            dawn_night_elevation: state.bands.dawn.night_elevation,
         }
     }
 }
@@ -515,6 +546,30 @@ mod tests {
         let bands = lock(&d.state).bands;
         assert_eq!(bands.dawn.day_elevation, 1.5);
         assert_eq!(bands.dusk.night_elevation, -9.0);
+    }
+
+    /// The morning and the evening go in separately and come out
+    /// separately, in the status every client reads.
+    #[test]
+    fn the_two_bands_are_set_and_reported_apart() {
+        let mut s = state(true, None, Mode::Automatic);
+        s.config_damaged = true;
+        let d = daemon(s);
+        d.set_transition_bands(1.0, -2.0, 3.0, -12.0);
+        let status = d.get_status();
+        assert_eq!(
+            (status.dawn_day_elevation, status.dawn_night_elevation),
+            (1.0, -2.0)
+        );
+        assert_eq!((status.day_elevation, status.night_elevation), (3.0, -12.0));
+        // A non-finite bound leaves its own value alone and nothing else.
+        d.set_transition_bands(f64::NAN, -3.0, 3.0, f64::INFINITY);
+        let status = d.get_status();
+        assert_eq!(
+            (status.dawn_day_elevation, status.dawn_night_elevation),
+            (1.0, -3.0)
+        );
+        assert_eq!(status.night_elevation, -12.0);
     }
 
     #[test]

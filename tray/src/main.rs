@@ -639,6 +639,8 @@ mod tests {
             fade: true,
             day_elevation: 3.0,
             night_elevation: -6.0,
+            dawn_day_elevation: 3.0,
+            dawn_night_elevation: -6.0,
         }
     }
 

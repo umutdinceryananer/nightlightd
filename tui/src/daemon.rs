@@ -4,7 +4,7 @@
 //! `org.nightlightd.Daemon` it uses: the contract is the interface, not a Rust
 //! type. It reads the status and sends the few controls the keybindings need.
 
-use nightlightd_core::transition::Band;
+use nightlightd_core::transition::{Band, Bands};
 use serde::Deserialize;
 use zbus::blocking::Connection;
 use zbus::proxy;
@@ -34,17 +34,34 @@ pub struct Status {
     pub fade: bool,
     pub day_elevation: f64,
     pub night_elevation: f64,
+    /// The morning's full-day bound (#47); the pair above is the evening's.
+    /// The same numbers as the evening's until someone sets them apart.
+    pub dawn_day_elevation: f64,
+    /// The morning's full-night bound, likewise.
+    pub dawn_night_elevation: f64,
 }
 
 impl Status {
-    /// The transition band (#39) the daemon runs, `sane()`d so every chart is
-    /// drawn the way the screen behaves.
-    pub fn band(&self) -> Band {
-        Band {
-            day_elevation: self.day_elevation,
-            night_elevation: self.night_elevation,
+    /// The morning's band and the evening's (#47), each repaired the way
+    /// core repairs one, so what is drawn is what the daemon applies.
+    pub fn bands(&self) -> Bands {
+        Bands {
+            dawn: Band {
+                day_elevation: self.dawn_day_elevation,
+                night_elevation: self.dawn_night_elevation,
+            },
+            dusk: Band {
+                day_elevation: self.day_elevation,
+                night_elevation: self.night_elevation,
+            },
         }
         .sane()
+    }
+
+    /// The evening's band, the one every interface showed before the
+    /// morning could be set apart.
+    pub fn band(&self) -> Band {
+        self.bands().dusk
     }
 }
 
@@ -176,6 +193,6 @@ mod tests {
     /// while writes still work.
     #[test]
     fn wire_signature_is_pinned() {
-        assert_eq!(Status::SIGNATURE.to_string(), "(busdbddbuuddddbdd)");
+        assert_eq!(Status::SIGNATURE.to_string(), "(busdbddbuuddddbdddd)");
     }
 }
