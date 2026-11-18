@@ -21,7 +21,7 @@ use nightlightd_core::color::{UI_TEMPERATURE_RANGE, temperature_to_rgb};
 use nightlightd_core::location::nearest_zone;
 use nightlightd_core::schedule::{Milestone, milestones};
 use nightlightd_core::solar::solar_elevation;
-use nightlightd_core::transition::{Band, phase, target_temperature};
+use nightlightd_core::transition::{Band, Bands, phase, target_temperature};
 use nightlightd_core::tray_icon::{self, TrayIcon};
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Alignment, Constraint, Layout, Position, Rect};
@@ -1816,7 +1816,7 @@ impl App {
                 status.latitude,
                 status.longitude,
                 midnight + offset_days * 86_400.0,
-                self.shown_band(),
+                Bands::both(self.shown_band()),
                 status.day_temp,
                 status.night_temp,
             )
@@ -2227,7 +2227,7 @@ impl App {
             status.latitude,
             status.longitude,
             midnight,
-            self.shown_band(),
+            Bands::both(self.shown_band()),
             status.day_temp,
             status.night_temp,
         );
@@ -2670,7 +2670,7 @@ impl App {
             status.latitude,
             status.longitude,
             midnight,
-            self.shown_band(),
+            Bands::both(self.shown_band()),
             status.day_temp,
             status.night_temp,
         );

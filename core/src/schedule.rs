@@ -8,7 +8,7 @@
 //! display, testable without a screen.
 
 use crate::solar::solar_elevation;
-use crate::transition::{Band, target_temperature};
+use crate::transition::{Bands, target_temperature};
 
 /// One solar event of the day.
 pub struct Milestone {
@@ -28,7 +28,7 @@ impl Milestone {
 
 /// Solar noon's floor: "is there any daylight today" is astronomy, not
 /// configuration, so it stays the default night bound. The crossings
-/// themselves use the configured band (#39), already `sane()`d by the
+/// themselves use the configured bands (#39, #47), already `sane()`d by the
 /// caller so the schedule shows what the daemon actually applies.
 const NIGHT_ELEVATION: f64 = -6.0;
 
@@ -39,7 +39,7 @@ pub fn milestones(
     latitude: f64,
     longitude: f64,
     midnight: f64,
-    band: Band,
+    bands: Bands,
     day_temp: u32,
     night_temp: u32,
 ) -> Vec<Milestone> {
@@ -48,7 +48,11 @@ pub fn milestones(
     let samples: Vec<f64> = (0..=1440)
         .map(|m| elevation_at(f64::from(m) / 60.0))
         .collect();
-    let kelvin_of = |elevation: f64| target_temperature(elevation, band, day_temp, night_temp);
+    // A crossing on the way up is the morning's, on the way down the
+    // evening's (#47).
+    let kelvin_of = |elevation: f64, rising: bool| {
+        target_temperature(elevation, bands.at(rising), day_temp, night_temp)
+    };
 
     let mut events: Vec<Milestone> = Vec::new();
     let mut add_crossing = |name: &'static str, threshold: f64, upward: bool| {
@@ -66,19 +70,19 @@ pub fn milestones(
                 events.push(Milestone {
                     name,
                     hour,
-                    kelvin: kelvin_of(threshold),
+                    kelvin: kelvin_of(threshold, upward),
                 });
                 return;
             }
         }
     };
 
-    add_crossing("night ends", band.night_elevation, true);
+    add_crossing("night ends", bands.dawn.night_elevation, true);
     add_crossing("sunrise", 0.0, true);
-    add_crossing("full day", band.day_elevation, true);
-    add_crossing("fade begins", band.day_elevation, false);
+    add_crossing("full day", bands.dawn.day_elevation, true);
+    add_crossing("fade begins", bands.dusk.day_elevation, false);
     add_crossing("sunset", 0.0, false);
-    add_crossing("full night", band.night_elevation, false);
+    add_crossing("full night", bands.dusk.night_elevation, false);
 
     // Solar noon: the sample with the highest sun.
     if let Some((minute, &elevation)) = samples.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1))
@@ -87,7 +91,8 @@ pub fn milestones(
         events.push(Milestone {
             name: "solar noon",
             hour: minute as f64 / 60.0,
-            kelvin: kelvin_of(elevation),
+            // From noon on the sun sinks, so the evening's band answers.
+            kelvin: kelvin_of(elevation, false),
         });
     }
 
@@ -125,7 +130,7 @@ mod tests {
             ISTANBUL_LAT,
             ISTANBUL_LON,
             SUMMER_MIDNIGHT,
-            Band::default(),
+            Bands::default(),
             6500,
             2800,
         );
@@ -174,7 +179,7 @@ mod tests {
                 ISTANBUL_LAT,
                 ISTANBUL_LON,
                 midnight,
-                Band::default(),
+                Bands::default(),
                 6500,
                 2800,
             ))
@@ -192,9 +197,42 @@ mod tests {
     /// twenty-four.
     #[test]
     fn a_polar_day_has_no_length_to_give() {
-        let events = milestones(78.22, 15.65, SUMMER_MIDNIGHT, Band::default(), 6500, 2800);
+        let events = milestones(78.22, 15.65, SUMMER_MIDNIGHT, Bands::default(), 6500, 2800);
         assert_eq!(day_length(&events), None);
         assert_eq!(hour_of(&events, "sunrise"), None);
+    }
+
+    /// Setting the morning apart (#47) moves the morning's two milestones
+    /// and leaves the evening's exactly where they were.
+    #[test]
+    fn a_morning_band_moves_only_the_morning() {
+        use crate::transition::Band;
+        let schedule = |bands: Bands| {
+            milestones(
+                ISTANBUL_LAT,
+                ISTANBUL_LON,
+                SUMMER_MIDNIGHT,
+                bands,
+                6500,
+                2800,
+            )
+        };
+        let together = schedule(Bands::default());
+        let apart = schedule(Bands {
+            dawn: Band {
+                day_elevation: 1.0,
+                night_elevation: -2.0,
+            },
+            ..Bands::default()
+        });
+        let moved = |name: &str| hour_of(&together, name) != hour_of(&apart, name);
+        assert!(moved("night ends") && moved("full day"));
+        for evening in ["fade begins", "sunset", "full night", "sunrise"] {
+            assert!(!moved(evening), "{evening} should not have moved");
+        }
+        // A tighter morning band starts later and ends sooner.
+        assert!(hour_of(&apart, "night ends") > hour_of(&together, "night ends"));
+        assert!(hour_of(&apart, "full day") < hour_of(&together, "full day"));
     }
 
     #[test]

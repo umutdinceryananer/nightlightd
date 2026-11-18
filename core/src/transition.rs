@@ -49,6 +49,51 @@ impl Band {
     }
 }
 
+/// The morning's band and the evening's (#47). Until someone asks for them
+/// apart they are one pair, which is why a [`Band`] stays the unit every
+/// curve here is written in: this only says which band is in force. The sun
+/// crosses -6 degrees once on the way up and once on the way down, and with
+/// one band both crossings were read off the same pair, so moving the
+/// evening moved the morning too.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Bands {
+    /// Night ending into day, while the sun climbs.
+    pub dawn: Band,
+    /// Day fading into night, while the sun sinks.
+    pub dusk: Band,
+}
+
+impl Bands {
+    /// One band for both ends of the day, which is what every config written
+    /// before #47 says.
+    pub fn both(band: Band) -> Bands {
+        Bands {
+            dawn: band,
+            dusk: band,
+        }
+    }
+
+    /// The band in force while the sun is climbing, or sinking. See
+    /// [`sun_is_rising`](crate::solar::sun_is_rising).
+    pub fn at(self, rising: bool) -> Band {
+        if rising { self.dawn } else { self.dusk }
+    }
+
+    /// Each band repaired the way [`Band::sane`] repairs one. Separately, so
+    /// a typo in the morning's pair costs the morning and not the evening.
+    pub fn sane(self) -> Bands {
+        Bands {
+            dawn: self.dawn.sane(),
+            dusk: self.dusk.sane(),
+        }
+    }
+
+    /// Whether the morning has been set apart from the evening at all.
+    pub fn split(self) -> bool {
+        self.dawn != self.dusk
+    }
+}
+
 /// The target colour temperature for a given solar `elevation` (degrees),
 /// easing between `night_temp` and `day_temp`.
 ///
@@ -289,6 +334,53 @@ mod tests {
             night_elevation: 3.0,
         };
         assert_eq!(phase(0.0, inverted), phase(0.0, Band::default()));
+    }
+
+    /// One pair given for both ends of the day is exactly the band it always
+    /// was, morning and evening alike.
+    #[test]
+    fn one_band_for_both_is_the_old_behaviour() {
+        let deep = Band {
+            day_elevation: 3.0,
+            night_elevation: -12.0,
+        };
+        let bands = Bands::both(deep);
+        assert_eq!(bands.at(true), deep);
+        assert_eq!(bands.at(false), deep);
+        assert!(!bands.split());
+        assert_eq!(Bands::default(), Bands::both(Band::default()));
+    }
+
+    /// The point of #47: the evening can reach deep into dusk while the
+    /// morning snaps back early, and each side is repaired on its own.
+    #[test]
+    fn the_morning_and_the_evening_answer_separately() {
+        let bands = Bands {
+            dawn: Band {
+                day_elevation: 1.0,
+                night_elevation: -2.0,
+            },
+            dusk: Band {
+                day_elevation: 3.0,
+                night_elevation: -12.0,
+            },
+        };
+        assert!(bands.split());
+        // At -6 the climbing sun is already past the morning's night bound...
+        assert_eq!(target_temperature(-6.0, bands.at(true), DAY, NIGHT), NIGHT);
+        // ...while the sinking one is still easing toward the evening's.
+        let evening = target_temperature(-6.0, bands.at(false), DAY, NIGHT);
+        assert!(evening > NIGHT && evening < DAY);
+
+        let typo = Bands {
+            dawn: Band {
+                day_elevation: f64::NAN,
+                night_elevation: -6.0,
+            },
+            ..bands
+        };
+        assert_eq!(typo.sane().dawn, Band::default());
+        assert_eq!(typo.sane().dusk, bands.dusk);
     }
 
     #[test]

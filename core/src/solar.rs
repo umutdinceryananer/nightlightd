@@ -138,6 +138,18 @@ pub fn solar_elevation(lat: f64, lon: f64, unix_time: f64) -> f64 {
     deg(solar_elevation_from_time(jcent_from_jd(jd), lat, lon))
 }
 
+/// Whether the sun is climbing at this moment, which is true from solar
+/// midnight to solar noon. Which transition band is in force (#47) is this
+/// question, answered from the sun's own path rather than from a clock, so
+/// it holds at every longitude and in every season.
+///
+/// Read off two elevations a minute apart rather than off the sign of the
+/// hour angle: the slope is the definition, and it cannot be undone by a
+/// convention about which way the angle runs.
+pub fn sun_is_rising(lat: f64, lon: f64, unix_time: f64) -> bool {
+    solar_elevation(lat, lon, unix_time + 60.0) > solar_elevation(lat, lon, unix_time)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -176,6 +188,27 @@ mod tests {
     fn sun_below_horizon_at_night() {
         let elev = solar_elevation(ANKARA_LAT, ANKARA_LON, JUN_22_MIDNIGHT);
         assert!(elev < 0.0, "got {elev}");
+    }
+
+    /// Morning climbs and evening sinks, at both ends of the year. Hours
+    /// well clear of noon and midnight, where the slope is flat and either
+    /// answer is harmless.
+    #[test]
+    fn the_sun_climbs_in_the_morning_and_sinks_in_the_evening() {
+        for noon in [JUN_21_NOON, DEC_21_NOON] {
+            for hours in [3.0, 5.0, 8.0] {
+                let before = noon - hours * 3600.0;
+                let after = noon + hours * 3600.0;
+                assert!(
+                    sun_is_rising(ANKARA_LAT, ANKARA_LON, before),
+                    "{hours}h before noon"
+                );
+                assert!(
+                    !sun_is_rising(ANKARA_LAT, ANKARA_LON, after),
+                    "{hours}h after noon"
+                );
+            }
+        }
     }
 
     #[test]

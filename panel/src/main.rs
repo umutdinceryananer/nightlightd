@@ -21,7 +21,7 @@ use nightlightd_core::clock::{LocalOffset, parse_utc_offset};
 use nightlightd_core::location::nearest_zone;
 use nightlightd_core::schedule::{Milestone, day_length, hour_of, milestones};
 use nightlightd_core::solar::solar_elevation;
-use nightlightd_core::transition::{Band, phase, target_temperature};
+use nightlightd_core::transition::{Band, Bands, phase, target_temperature};
 use nightlightd_core::tray_icon::{self, TrayIcon};
 use nightlightd_core::world::COASTLINE;
 
@@ -534,7 +534,7 @@ impl Panel {
             status.latitude,
             status.longitude,
             midnight,
-            self.band,
+            Bands::both(self.band),
             status.day_temp,
             status.night_temp,
         );
@@ -623,7 +623,7 @@ impl Panel {
                 status.latitude,
                 status.longitude,
                 midnight + offset_days * 86_400.0,
-                self.band,
+                Bands::both(self.band),
                 status.day_temp,
                 status.night_temp,
             )
