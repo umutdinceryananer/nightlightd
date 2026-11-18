@@ -14,7 +14,7 @@
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
 [![Built With Ratatui](https://ratatui.rs/built-with-ratatui/badge.svg)](https://ratatui.rs/)
 
-> **Version 0.4.0.** The daemon provides timezone based location, a single instance D-Bus lock, gamma ramps over XRandR, eased transitions between targets, a movable transition band, reapplication on resume from suspend, a ramp it checks and repairs when something else clears it, and a `--status` readout. Three clients ship with it, a tray icon, a settings panel, and a terminal dashboard, both windows carrying the same five tabs and the same themes. A [release with `.deb` packages](https://github.com/umutdinceryananer/nightlightd/releases/latest) and an [AUR package](https://aur.archlinux.org/packages/nightlightd) are available. Flatpak is planned. Young software, tested on one machine so far. Report what breaks.
+> **Version 0.4.0.** The daemon provides timezone based location, a single instance D-Bus lock, gamma ramps over XRandR, eased transitions between targets, movable transition bands for dawn and dusk, reapplication on resume from suspend, a ramp it checks and repairs when something else clears it, and a `--status` readout. Three clients ship with it, a tray icon, a settings panel, and a terminal dashboard, both windows carrying the same five tabs and the same themes. A [release with `.deb` packages](https://github.com/umutdinceryananer/nightlightd/releases/latest) and an [AUR package](https://aur.archlinux.org/packages/nightlightd) are available. Flatpak is planned. Young software, tested on one machine so far. Report what breaks.
 
 <p align="center">
   <img src="docs/screenshots/nightlight-tui.gif" alt="the terminal dashboard's demo reel: a compressed day warms the interface through sunset, the transition band is widened over the curve, the day is summarised, and the themes roll past" width="520">
@@ -65,7 +65,7 @@ Everything else (packaging, systemd units, solar elevation scheduling) gammastep
 The daemon runs headless and needs no interface. Three thin clients ship with it. Each is a separate process that holds no state and talks only over D-Bus, so if one crashes the filter keeps running.
 
 - **`nightlight-tray`** puts on/off, automatic/manual and the current temperature in the notification area. Its icon is the theme's plain symbol or, chosen in the panel's or the dashboard's settings, one of three colour designs that follow the screen's temperature.
-- **`nightlight-panel`** is a desktop window with the same five tabs as the dashboard. **now** draws the day/night curve, and the curve is also the control: drag a ramp to move the transition band, a plateau to move a temperature, Apply when the shape looks right. **today** lists the day's milestones with the next one lit, under how much daylight there is and how that compares with yesterday. **location** takes a pin on a world map. **outputs** shows every screen the ramp is reaching. **settings** holds the bounds, gamma, night dim, the switches and the theme.
+- **`nightlight-panel`** is a desktop window with the same five tabs as the dashboard. **now** draws the day/night curve, and the curve is also the control: drag the morning or the evening ramp to move that side's transition band, a plateau to move a temperature, Apply when the shape looks right. **today** lists the day's milestones with the next one lit, under how much daylight there is and how that compares with yesterday. **location** takes a pin on a world map. **outputs** shows every screen the ramp is reaching. **settings** holds the bounds, gamma, night dim, the switches and the theme.
 - **`nightlight-tui`** is a terminal dashboard built with [ratatui](https://ratatui.rs).
 
 The tray's menu is the whole of that client: what the screen is doing this
@@ -102,6 +102,7 @@ night_temp = 4500
 gamma = 0.9            # bend the ramp's curve, constant all day
 night_brightness = 0.9 # dim to 90% at night, easing with the sun
 night_elevation = -12  # hold daylight until the sun is 12 degrees down
+dawn_night_elevation = -3  # but end the night early in the morning
 ```
 
 `day_temp` is not capped at neutral. Past 6500 K the screen goes bluish rather than warm, for people who want a cool day and a warm night rather than a normal day and a warm night. Every control stops at 10000 K; the config file and D-Bus accept as far as the ramp table can draw, 25000 K.
@@ -113,6 +114,8 @@ Every change of target, a toggle, a manual set, the daemon starting at night, ea
 Repairs do not ease, on purpose. Coming back from suspend, plugging a monitor in, or having the ramp cleared out from under you are not changes of target — the screen is simply wrong, and the tint snaps back. Easing there would animate the defect and leave the screen wrong for two seconds longer.
 
 The slow transition is movable too. Full day sits at a sun elevation of +3 degrees and full night at -6, the band redshift uses. `day_elevation` and `night_elevation` move the bounds, and `nightlightd --band 3:-12` does the same from a terminal. Lowering the night bound lands full night deeper into dusk, for eyes that find the default too eager. A nonsense pair quietly behaves like the default.
+
+The morning and the evening can differ, to warm slowly into the evening and snap back quickly at breakfast. That pair is the evening's, and the morning's too unless `dawn_day_elevation` or `dawn_night_elevation` say otherwise. `nightlightd --dawn 1:-3` and `--dusk 3:-12` set one side from a terminal, while `--band` still sets both. In the panel each ramp moves its own side, and in the dashboard `b` lists all four bounds.
 
 ---
 

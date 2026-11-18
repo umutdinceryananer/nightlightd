@@ -873,6 +873,36 @@ and cannot be read back.
 
 ### #47 Dawn and dusk as separate bands
 
+**Done on `main`, waiting for a release.** The config's pair is the
+evening's, and the morning's too unless `dawn_day_elevation` or
+`dawn_night_elevation` say otherwise, so a file written before this
+behaves exactly as it did and one nobody splits is written back as the
+same two lines. The status carries both pairs and `SetTransitionBands`
+sets them apart; `SetTransitionBand` still means the band, both sides.
+`--dawn` and `--dusk` join `--band`, the panel's ramps each move their
+own side, the dashboard's `b` lists four bounds, and the tray and
+`--status` show a line per side once the two differ.
+
+Two departures from the plan below. The direction is read off the
+sun's slope, two elevations a minute apart, rather than the hour
+angle's sign: the slope is the definition and cannot be undone by a
+convention about which way the angle runs. And it did not land with
+#34's wire change: 0.4.0 shipped that alone so the tray's colour icons
+could go out, so this is a second break and the next release is a
+minor.
+
+One consequence to know about. Where the sun barely sets, as in Tallinn
+in June, a split band can leave the screen mid-transition at solar
+midnight, and the switch to the morning's band there is a step. The
+fade eases it; it is the honest picture of two different bands.
+
+Verified against the real daemon in a container: every flag moved its
+own side and the config gained `dawn_` values only while the sides
+differed; the tray's menu showed Dawn and Dusk lines; the dashboard's
+editor moved one bound at a time; and in the panel a drag on the
+evening ramp changed dusk alone, a drag on the morning ramp dawn alone,
+and Default band put both back.
+
 - **What:** Let the morning transition and the evening one be set
   apart from each other, instead of sharing the one band #39 added.
   Four elevations where there are two today.
@@ -899,7 +929,7 @@ and cannot be read back.
   today, and dragging one ramp in the panel leaves the other alone.
 - **Difficulty:** Medium
 - **Depends on:** #39, #45
-- **Target:** v0.3
+- **Target:** the next release
 
 ### #48 The band, readable and undoable
 
