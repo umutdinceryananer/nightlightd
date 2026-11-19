@@ -87,7 +87,10 @@ that cannot be taken back.
       refuses to publish a `nightlightd` that declares a graphics
       library, or any package that needs a newer glibc than Mint 22 has;
       this step is how 0.3.2's panel was caught needing one, and it
-      covers what the workflow cannot see.
+      covers what the workflow cannot see. "Nothing was checked" means
+      apt never reached Ubuntu's servers, not that a package failed:
+      run it again with `UBUNTU_MIRROR=http://<country>.archive.ubuntu.com/ubuntu`
+      in front, as 0.5.0's check had to.
 - [ ] `systemctl --user restart nightlightd` picks the new binary up.
 
 ## Afterwards

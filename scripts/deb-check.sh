@@ -12,10 +12,19 @@
 #   DIR  a directory of .debs built locally, checked before they are uploaded
 #
 # Needs: docker, gh. MINT_IMAGE picks another release of Mint.
+#
+# UBUNTU_MIRROR fetches Ubuntu's half of the packages from a mirror instead of
+# archive.ubuntu.com and security.ubuntu.com, for the day those stop
+# answering. 0.5.0's check sat ten minutes in apt-get update when they did,
+# while the Mint server and the country mirrors answered at once:
+#   UBUNTU_MIRROR=http://tr.archive.ubuntu.com/ubuntu scripts/deb-check.sh
+# The packages are the same either way; only where apt fetches them changes.
 set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 image="${MINT_IMAGE:-linuxmintd/mint22.3-amd64}"
+mirror="${UBUNTU_MIRROR:-}"
+mirror="${mirror%/}"
 target="${1:-$(git -C "$repo" describe --tags --abbrev=0)}"
 
 for tool in docker gh; do
@@ -60,7 +69,25 @@ stop_if_failed() {
 main="$(ls /debs/nightlightd_*_amd64.deb)"
 panel="$(ls /debs/nightlightd-panel_*_amd64.deb)"
 version="$(dpkg-deb -f "$main" Version | cut -d- -f1)"
-apt-get update -qq >/dev/null
+
+# UBUNTU_MIRROR, when the caller set one: Ubuntu's two servers swapped for it
+# in whichever sources file this release of Mint keeps them in.
+if [ -n "${UBUNTU_MIRROR:-}" ]; then
+    for list in /etc/apt/sources.list /etc/apt/sources.list.d/*.list; do
+        [ -f "$list" ] || continue
+        sed -i -e "s|http://archive.ubuntu.com/ubuntu/\?|$UBUNTU_MIRROR/|" \
+            -e "s|http://security.ubuntu.com/ubuntu/\?|$UBUNTU_MIRROR/|" "$list"
+    done
+fi
+# A server that stops answering makes apt wait rather than fail, so it gets
+# three minutes. And an index apt could not fetch is only a warning to it,
+# so --error-on=any: without it a dead server reads as "xvfb-run: not found"
+# three checks later, a failure blamed on the packages.
+if ! timeout 180 apt-get update -qq --error-on=any >/dev/null; then
+    echo "apt-get update failed or timed out. If Ubuntu's servers are down, run" >&2
+    echo "again with UBUNTU_MIRROR=http://<country>.archive.ubuntu.com/ubuntu" >&2
+    exit 3
+fi
 
 echo "nightlightd $version, by itself"
 check "installs" apt-get install -y -q "$main"
@@ -92,12 +119,16 @@ exit "$failed"
 INSIDE
 
 docker pull -q "$image" >/dev/null
-if docker run --rm -v "$debs:/debs:ro" -v "$work/inside.sh:/inside.sh:ro" \
-    "$image" bash /inside.sh; then
-    echo
-    echo "the packages install and run on $image"
-else
-    echo
-    echo "the packages failed on $image; do not call this release finished" >&2
-    exit 1
-fi
+status=0
+docker run --rm -v "$debs:/debs:ro" -v "$work/inside.sh:/inside.sh:ro" \
+    -e UBUNTU_MIRROR="$mirror" "$image" bash /inside.sh || status=$?
+echo
+case "$status" in
+    0) echo "the packages install and run on $image${mirror:+, Ubuntu packages from $mirror}" ;;
+    # inside.sh's own code for an apt that never reached its servers: not a
+    # verdict on the packages, which were never installed.
+    3) echo "nothing was checked: apt could not reach its servers on $image" >&2
+       exit 1 ;;
+    *) echo "the packages failed on $image; do not call this release finished" >&2
+       exit 1 ;;
+esac
