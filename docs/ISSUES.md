@@ -384,6 +384,11 @@ own draggable ramp (#45) and as the band the dashboard edits (#39).
 
 ### #27 Flatpak and Flathub
 
+**Dropped.** Before the manifest was written, Flathub was asked in its
+Matrix room in November 2026 whether it would take this, and the answer
+was no. The sandbox code written for it stays on the `flatpak` branch,
+unmerged. The `.deb`s, the AUR and the tarball are the channels.
+
 - **What:** Write the Flatpak manifest, submit to Flathub.
 - **Why:** **This is the real storefront.** It appears directly inside Mint's Software Manager. No maintainer has to approve you. It is the only genuine discovery channel.
 - **Detail:** The sandbox will need X11 and session-bus access (`--socket=x11`, `--socket=session-bus`). A systemd unit cannot be installed from inside a sandbox — this is a real problem, research it early. You may end up falling back on `.desktop` autostart, which is ironic.
@@ -873,7 +878,7 @@ and cannot be read back.
 
 ### #47 Dawn and dusk as separate bands
 
-**Done on `main`, waiting for a release.** The config's pair is the
+**Done.** Shipped in v0.5.0. The config's pair is the
 evening's, and the morning's too unless `dawn_day_elevation` or
 `dawn_night_elevation` say otherwise, so a file written before this
 behaves exactly as it did and one nobody splits is written back as the
