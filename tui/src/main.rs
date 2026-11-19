@@ -99,11 +99,12 @@ const DEMO_SCRIPT: &[(f64, KeyCode, &str)] = &[
     //
     // Then the band (#39, #45): open it, take the night bound down three
     // degrees a half at a time, and watch the ramp stretch on the same frame
-    // as the press. It leaves by escape rather than enter, which shows the
-    // unsaved-work guard and — the reason it matters here — applies nothing,
-    // so recording the reel never writes to the recorder's own daemon.
+    // as the press. The editor opens on the evening's night bound, so only
+    // the evening's ramp stretches and the morning's stays put (#47). It
+    // leaves by escape rather than enter, which shows the unsaved-work guard
+    // and — the reason it matters here — applies nothing, so recording the
+    // reel never writes to the recorder's own daemon.
     (12.5, KeyCode::Char('b'), "b"),
-    (13.0, KeyCode::Down, "↓"),
     (13.4, KeyCode::Left, "←"),
     (13.8, KeyCode::Left, "←"),
     (14.2, KeyCode::Left, "←"),
